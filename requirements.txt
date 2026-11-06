@@ -1,0 +1,7 @@
+# UYAP Dosya Maskeleme (YPro) Gereksinimleri
+# Bu uygulama sıfır dış bağımlılık prensibiyle Python standart kütüphaneleri 
+# kullanılarak geliştirilmiştir. Ekstra bir 'pip install' gerekmez.
+#
+# Sistem Gereksinimleri:
+# - Python 3.9 veya üzeri (macOS Apple Silicon / Intel)
+# - Tkinter (macOS / Anaconda / Homebrew Python ile birlikte gelir)
