@@ -22,6 +22,16 @@ build/
 *.md.bak
 *.log
 
+# UYAP & Dava Verisi Güvenlik Kalkanı (Asla Git'e Eklenemez)
+*.udf
+*.pdf
+*.tif
+*.tiff
+*.eyp
+*_kaynak/
+* (Maskelenmis AI)/
+*(Maskelenmis AI)/
+
 # IDE
 .idea/
 .vscode/

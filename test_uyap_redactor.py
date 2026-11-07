@@ -22,18 +22,18 @@ class TestUyapRedactor(unittest.TestCase):
     def test_phone_variations(self):
         """1. Cep telefonu numaralarının tüm varyasyonlarının maskelenmesi."""
         test_cases = [
-            ("Müvekkil tel: 05362603399", "Müvekkil tel: [TELEFON_GİZLENDİ]"),
-            ("İletişim: 5362603399", "İletişim: [TELEFON_GİZLENDİ]"),
-            ("GSM: +90 536 260 33 99", "GSM: [TELEFON_GİZLENDİ]"),
-            ("Telefon: 0 (536) 260 33 99", "Telefon: [TELEFON_GİZLENDİ]"),
-            ("Tel: (536) 260 33 99", "Tel: [TELEFON_GİZLENDİ]"),
-            ("0536-260-33-99", "[TELEFON_GİZLENDİ]"),
-            ("0536.260.33.99", "[TELEFON_GİZLENDİ]"),
-            ("0 536 260 33 99", "[TELEFON_GİZLENDİ]"),
-            ("+905362603399", "[TELEFON_GİZLENDİ]"),
-            ("0536 260 3399", "[TELEFON_GİZLENDİ]"),
-            ("0536 2603399", "[TELEFON_GİZLENDİ]"),
-            ("(0536) 260 33 99", "[TELEFON_GİZLENDİ]"),
+            ("Müvekkil tel: 05321112233", "Müvekkil tel: [TELEFON_GİZLENDİ]"),
+            ("İletişim: 5321112233", "İletişim: [TELEFON_GİZLENDİ]"),
+            ("GSM: +90 532 111 22 33", "GSM: [TELEFON_GİZLENDİ]"),
+            ("Telefon: 0 (532) 111 22 33", "Telefon: [TELEFON_GİZLENDİ]"),
+            ("Tel: (532) 111 22 33", "Tel: [TELEFON_GİZLENDİ]"),
+            ("0532-111-22-33", "[TELEFON_GİZLENDİ]"),
+            ("0532.111.22.33", "[TELEFON_GİZLENDİ]"),
+            ("0 532 111 22 33", "[TELEFON_GİZLENDİ]"),
+            ("+905321112233", "[TELEFON_GİZLENDİ]"),
+            ("0532 111 2233", "[TELEFON_GİZLENDİ]"),
+            ("0532 1112233", "[TELEFON_GİZLENDİ]"),
+            ("(0532) 111 22 33", "[TELEFON_GİZLENDİ]"),
             # Şartnamede belirtilen ekstra varyasyonlar
             ("05321234567", "[TELEFON_GİZLENDİ]"),
             ("5321234567", "[TELEFON_GİZLENDİ]"),
@@ -228,8 +228,8 @@ class TestUyapRedactor(unittest.TestCase):
             with open(md_path, "w", encoding="utf-8") as f:
                 f.write(
                     "# Duruşma Tutanağı\n\n"
-                    "Davacı Vekili Av. Mert, Davacı TCKN: 12345678901, "
-                    "İletişim Tel: 05362603399, Seri No: A12B34567, "
+                    "Davacı Vekili Av. Örnek, Davacı TCKN: 12345678901, "
+                    "İletişim Tel: 05321112233, Seri No: A12B34567, "
                     "IBAN: TR330006100511123456789012, "
                     "Sicil No: 123456, Adres: Atatürk Mah. Gül Sok. No:5 Burdur\n"
                 )
@@ -274,7 +274,7 @@ class TestUyapRedactor(unittest.TestCase):
 
             self.assertNotIn("12345678901", dest_md_content)
             self.assertIn("[TCKN_GİZLENDİ]", dest_md_content)
-            self.assertNotIn("05362603399", dest_md_content)
+            self.assertNotIn("05321112233", dest_md_content)
             self.assertIn("[TELEFON_GİZLENDİ]", dest_md_content)
             self.assertNotIn("A12B34567", dest_md_content)
             self.assertIn("[SERİ_NO_GİZLENDİ]", dest_md_content)

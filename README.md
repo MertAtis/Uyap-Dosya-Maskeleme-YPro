@@ -79,7 +79,7 @@ chmod +x build_app.sh
 Derleme tamamlandığında `dist/UYAP Maskeleme.app` dosyası hazır hale gelir. Masaüstündeki uygulamayı güncellemek için:
 
 ```bash
-./build_app.sh /Users/avmertatis/Desktop
+./build_app.sh "$HOME/Desktop"
 ```
 
 ---
