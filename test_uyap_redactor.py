@@ -106,6 +106,8 @@ class TestUyapRedactor(unittest.TestCase):
             ("T.C. No: 12345678901", "T.C. No: [TCKN_GİZLENDİ]"),
             ("TCKN 123456789", "TCKN [TCKN_GİZLENDİ]"),
             ("1234567890 TC", "[TCKN_GİZLENDİ] TC"),
+            ("**T.C. Kimlik No:** 1234567890", "**T.C. Kimlik No:** [TCKN_GİZLENDİ]"),
+            ("**TCKN:** 1234567890", "**TCKN:** [TCKN_GİZLENDİ]"),
         ]
         for inp, expected in test_cases:
             redacted, count = UyapRedactor.redact_tckn(inp)

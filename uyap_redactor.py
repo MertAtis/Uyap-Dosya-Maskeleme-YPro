@@ -204,7 +204,7 @@ class UyapRedactor:
 
         # 1. Açık Etiketli TCKN (9-11 hane, OCR l/I/O bozulmaları dahil)
         p_labeled = re.compile(
-            r'(?i)(?P<label>\b(?:T\.?\s*C\.?(?:\s*(?:KN|Kimlik(?:\s*No(?:su|\.lu|marası)?)?|No(?:su|\.lu|marası)?))?|TCKN|KİMLİK\s+(?:NO(?:SU)?|NUMARASI))\s*[:\t\.\-]?\s*)(?P<num>[0-9lIO]{9,11})(?!\d)'
+            r'(?i)(?P<label>\b(?:T\.?\s*C\.?(?:\s*(?:KN|Kimlik(?:\s*No(?:su|\.lu|marası)?)?|No(?:su|\.lu|marası)?))?|TCKN|KİMLİK\s+(?:NO(?:SU)?|NUMARASI))[\s\*\_]*[:\t\.\-]?[\s\*\_]*)(?P<num>[0-9lIO]{9,11})(?!\d)'
         )
 
         def repl_labeled(m: re.Match) -> str:
