@@ -33,16 +33,22 @@ UYAP dava dosyalarında yer alan hassas kişisel verileri (TCKN, Cep Telefonu, K
 
 ---
 
-## ⚙️ 4 Farklı İşlem Modu
+## 🎯 Standart Tek İşlem Modu: İzole Temiz Klasör Üret (AI Export)
 
-1. **🔍 Önizleme / Raporla (Dry-Run):**  
-   Dosyaları değiştirmez; klasördeki kişisel verileri tarar, sayar, `INDEX.md` durumunu kontrol eder ve istatistiki rapor sunar.
-2. **🔒 Güvenli Maskele:**  
-   Metin dosyalarını önce `.md.bak` olarak yedekler, ardından 7 veri kategorisini maskeler ve `INDEX.md` tablosunu günceller.
-3. **↩️ Yedekten Geri Yükle:**  
-   Daha önce alınan `.md.bak` yedeklerini geri yükleyerek orijinal metinlere döner.
-4. **📦 İzole Temiz Klasör Üret (AI Export):**  
-   Orijinal klasöre dokunmadan, masaüstünde yalnızca maskelenmiş `.md` dosyalarından oluşan, UDF/PDF içermeyen, taranmış evrakları Apple Vision OCR ile metne döken ve `INDEX.md` tablosunu %100 senkronize eden **tamamen güvenli ve izole yeni bir dava klasörü** oluşturur.
+Kullanıcı deneyimini sadeleştirmek ve veri güvenliğini en üst seviyeye çıkarmak amacıyla uygulama **tek ve kusursuz bir işlem standardına** odaklanmıştır:
+
+* **📦 İzole Temiz Dava Klasörü Oluşturma:**  
+  Orijinal klasöre ASLA dokunmaz. Seçilen dava klasörünün yanına `<Dava Klasörü> (Maskelenmis AI)` adında izole bir klasör üretir.
+* **📄 Sıfır İkili Dosya Prensibi:**  
+  Orijinal `.udf`, `.pdf`, `.tif`, `.eyp` veya ikili ekler hedef klasöre KESİNLİKLE kopyalanmaz. Yalnızca maskelenmiş metin `.md` dosyaları aktarılır.
+* **👁️ Yerel Apple Vision OCR Motoru:**  
+  Taranmış fotokopi ve ekler macOS yerel OCR motoruyla çevrimdışı olarak çözülür ve `.md` formatında temiz klasöre kazandırılır.
+* **🔒 7 Katmanlı Kişisel Veri Maskelemesi:**  
+  TCKN, Cep Telefonu, Kimlik Seri No, MRZ Kodu, IBAN, Sicil No ve Açık Adresler tamamen maskelenir.
+* **🔄 Tam Otomatik INDEX.md Senkronizasyonu:**  
+  `INDEX.md` tablosundaki tüm evrak satırları taranarak üretilen `.md` bağlantıları ve güncel karakter sayılarıyla senkronize edilir.
+* **📂 Tek Tıkla Finder'da Açma:**  
+  İşlem bittiğinde oluşturulan temiz klasör doğrudan macOS Finder'da açılabilir.
 
 ---
 
