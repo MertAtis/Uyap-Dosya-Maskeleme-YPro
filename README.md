@@ -54,9 +54,18 @@ Kullanıcı deneyimini sadeleştirmek ve veri güvenliğini en üst seviyeye ç�
 
 ## 🚀 Kurulum ve Çalıştırma
 
-### 1. Terminal / Python ile Çalıştırma
-Herhangi bir üçüncü parti kütüphane (`pip install`) gerektirmez; Python standart kütüphaneleriyle çalışır:
+### 1. Avukatlar ve Son Kullanıcılar İçin (Önerilen: Tek Tıkla Kurulum)
+Kullanıcıların bilgisayarında Python veya herhangi bir geliştirici aracı bulunmasına gerek yoktur:
+1. GitHub **[Releases](https://github.com/MertAtis/Uyap-Dosya-Maskeleme-YPro/releases)** sayfasından son sürüm **`UYAP-Maskeleme.dmg`** dosyasını indirin.
+2. DMG dosyasını çift tıklayarak açın ve **`UYAP Maskeleme`** simgesini **`Applications`** (Uygulamalar) klasörüne sürükleyin.
+3. Uygulamayı ilk kez çalıştırırken simgeye **Sağ Tık (İki Parmak) -> Aç** deyin ve onaylayın.
 
+---
+
+### 2. Geliştiriciler İçin: Kaynak Koddan Çalıştırma ve Derleme
+
+#### A. Terminalden Doğrudan Çalıştırma
+Herhangi bir üçüncü parti kütüphane (`pip install`) gerektirmez; Python standart kütüphaneleriyle çalışır:
 ```bash
 # Grafik arayüzü başlatmak için:
 python3 gui.py
@@ -68,18 +77,11 @@ python3 uyap_redactor.py "/dosya/yolu/Dava Klasoru"
 python3 uyap_redactor.py "/dosya/yolu/Dava Klasoru" --sync-index
 ```
 
-### 2. macOS `.app` Olarak Derleme
-Uygulamayı çift tıklanabilir yerel macOS uygulaması olarak derlemek için:
-
+#### B. %100 Bağımsız `.app` ve Kurulum `.dmg`'si Derleme (Standalone)
+Python çalışma zamanını ve kütüphaneleri uygulamanın içine paketleyip dağıtılabilir DMG üretmek için:
 ```bash
-chmod +x build_app.sh
-./build_app.sh
-```
-
-Derleme tamamlandığında `dist/UYAP Maskeleme.app` dosyası hazır hale gelir. Masaüstündeki uygulamayı güncellemek için:
-
-```bash
-./build_app.sh "$HOME/Desktop"
+chmod +x build_dmg.sh
+./build_dmg.sh "$HOME/Desktop"
 ```
 
 ---
@@ -90,8 +92,11 @@ Derleme tamamlandığında `dist/UYAP Maskeleme.app` dosyası hazır hale gelir.
 uyap-dosya-maskeleme-ypro/
 ├── gui.py                  # macOS Tkinter modern grafik arayüzü (2x4 İstatistik Paneli)
 ├── uyap_redactor.py        # 7 Katmanlı maskeleme ve INDEX.md senkronizasyon motoru
-├── test_uyap_redactor.py   # Kapsamlı otomatik birim test paketi
-├── build_app.sh            # macOS .app derleme betiği
+├── test_uyap_redactor.py   # Çekirdek motor test paketi
+├── test_gui_automation.py  # 34 Testlik GUI ve UI/UX otomasyon paketi
+├── build_dmg.sh            # %100 Bağımsız standalone .app ve .dmg derleme betiği
+├── build_app.sh            # Hızlı yerel .app derleme betiği
+├── UYAP Maskeleme.spec     # PyInstaller bağımsız derleme spesifikasyonu
 ├── requirements.txt        # Sistem gereksinimleri (Zero-Dependency)
 ├── bundle/                 # macOS uygulama kaynakları
 │   ├── Info.plist          # Paket meta verileri
