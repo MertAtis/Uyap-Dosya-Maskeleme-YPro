@@ -37,11 +37,11 @@ except ImportError:
 class ModernCard(tk.Frame):
     """Modern macOS tarzı istatistik kartı."""
     def __init__(self, parent, title, value="0", color="#007AFF", bg="#F2F2F7", **kwargs):
-        super().__init__(parent, bg=bg, highlightbackground="#D1D1D6", highlightthickness=1, padx=12, pady=8, **kwargs)
-        self.lbl_title = tk.Label(self, text=title, font=("SF Pro Text", 10, "bold"), fg="#6C6C70", bg=bg)
+        super().__init__(parent, bg=bg, highlightbackground="#D1D1D6", highlightthickness=1, padx=10, pady=6, **kwargs)
+        self.lbl_title = tk.Label(self, text=title, font=("SF Pro Text", 9, "bold"), fg="#6C6C70", bg=bg)
         self.lbl_title.pack(anchor="w")
-        self.lbl_val = tk.Label(self, text=value, font=("SF Pro Display", 18, "bold"), fg=color, bg=bg)
-        self.lbl_val.pack(anchor="w", pady=(2, 0))
+        self.lbl_val = tk.Label(self, text=value, font=("SF Pro Display", 16, "bold"), fg=color, bg=bg)
+        self.lbl_val.pack(anchor="w", pady=(1, 0))
 
     def update_value(self, val):
         self.lbl_val.config(text=str(val))
@@ -50,9 +50,9 @@ class ModernCard(tk.Frame):
 class UyapRedactorApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("UYAP Kişisel Veri Maskeleme (Offline)")
-        self.geometry("780x640")
-        self.minsize(700, 560)
+        self.title("UYAP Kişisel Veri Maskeleme ve İndeks Senkronizasyon (Offline)")
+        self.geometry("820x720")
+        self.minsize(760, 640)
         self.configure(bg="#F8F8FA")
 
         self.msg_queue = queue.Queue()
@@ -63,12 +63,12 @@ class UyapRedactorApp(tk.Tk):
 
     def _create_widgets(self):
         # ÜST BAŞLIK BÖLÜMÜ
-        header_frame = tk.Frame(self, bg="#FFFFFF", padx=20, pady=16, highlightbackground="#E5E5EA", highlightthickness=1)
+        header_frame = tk.Frame(self, bg="#FFFFFF", padx=20, pady=14, highlightbackground="#E5E5EA", highlightthickness=1)
         header_frame.pack(fill="x")
 
         title_lbl = tk.Label(
             header_frame,
-            text="🛡️ UYAP Kişisel Veri Maskeleme Aracı",
+            text="🛡️ UYAP Kişisel Veri Maskeleme & OCR Senkronizasyon",
             font=("SF Pro Display", 16, "bold"),
             fg="#1C1C1E",
             bg="#FFFFFF"
@@ -85,12 +85,12 @@ class UyapRedactorApp(tk.Tk):
         sub_lbl.pack(anchor="w", pady=(3, 0))
 
         # ANA İÇERİK
-        main_frame = tk.Frame(self, bg="#F8F8FA", padx=20, pady=12)
+        main_frame = tk.Frame(self, bg="#F8F8FA", padx=20, pady=10)
         main_frame.pack(fill="both", expand=True)
 
         # 1. KLASÖR SEÇİMİ
-        folder_card = tk.LabelFrame(main_frame, text=" 📂 Dava Klasörü ", font=("SF Pro Text", 11, "bold"), bg="#F8F8FA", padx=12, pady=10)
-        folder_card.pack(fill="x", pady=(0, 10))
+        folder_card = tk.LabelFrame(main_frame, text=" 📂 Dava Klasörü ", font=("SF Pro Text", 11, "bold"), bg="#F8F8FA", padx=12, pady=8)
+        folder_card.pack(fill="x", pady=(0, 8))
 
         self.folder_var = tk.StringVar(value="")
         entry_folder = tk.Entry(folder_card, textvariable=self.folder_var, font=("SF Pro Text", 11), bg="#FFFFFF", relief="solid", bd=1)
@@ -111,11 +111,11 @@ class UyapRedactorApp(tk.Tk):
         btn_browse.pack(side="right")
 
         # 2. İŞLEM MODU SEÇİMİ
-        mode_card = tk.LabelFrame(main_frame, text=" ⚙️ İşlem Modu ", font=("SF Pro Text", 11, "bold"), bg="#F8F8FA", padx=12, pady=8)
-        mode_card.pack(fill="x", pady=(0, 10))
+        mode_card = tk.LabelFrame(main_frame, text=" ⚙️ İşlem Modu ", font=("SF Pro Text", 11, "bold"), bg="#F8F8FA", padx=12, pady=6)
+        mode_card.pack(fill="x", pady=(0, 8))
 
         self.mode_var = tk.StringVar(value="mask")
-        
+
         rb1 = tk.Radiobutton(
             mode_card,
             text="🔍 Önizleme / Raporla (Dry-Run): Dosyaları değiştirmez, kişisel verileri listeler.",
@@ -125,11 +125,11 @@ class UyapRedactorApp(tk.Tk):
             bg="#F8F8FA",
             activebackground="#F8F8FA"
         )
-        rb1.pack(anchor="w", pady=2)
+        rb1.pack(anchor="w", pady=1)
 
         rb2 = tk.Radiobutton(
             mode_card,
-            text="🔒 Güvenli Maskele (.md dosyalarını yedekler (.bak) ve TCKN/IBAN/Adres/Sicil gizler)",
+            text="🔒 Güvenli Maskele (.md dosyalarını yedekler (.bak) ve TCKN/Tel/Kimlik/IBAN/Adres/Sicil gizler)",
             variable=self.mode_var,
             value="mask",
             font=("SF Pro Text", 10, "bold"),
@@ -137,7 +137,7 @@ class UyapRedactorApp(tk.Tk):
             bg="#F8F8FA",
             activebackground="#F8F8FA"
         )
-        rb2.pack(anchor="w", pady=2)
+        rb2.pack(anchor="w", pady=1)
 
         rb3 = tk.Radiobutton(
             mode_card,
@@ -149,11 +149,11 @@ class UyapRedactorApp(tk.Tk):
             bg="#F8F8FA",
             activebackground="#F8F8FA"
         )
-        rb3.pack(anchor="w", pady=2)
+        rb3.pack(anchor="w", pady=1)
 
         rb4 = tk.Radiobutton(
             mode_card,
-            text="📦 İzole Temiz Klasör Üret (SADECE maskeli .md'leri yeni bir klasöre kopyalar; UDF/PDF içermez)",
+            text="📦 İzole Temiz Klasör Üret (SADECE maskeli .md'leri yeni klasöre kopyalar, OCR uygular ve INDEX.md senkronize eder)",
             variable=self.mode_var,
             value="export",
             font=("SF Pro Text", 10, "bold"),
@@ -161,30 +161,42 @@ class UyapRedactorApp(tk.Tk):
             bg="#F8F8FA",
             activebackground="#F8F8FA"
         )
-        rb4.pack(anchor="w", pady=2)
+        rb4.pack(anchor="w", pady=1)
 
-        # 3. İSTATİSTİK KARTLARI
-        stats_frame = tk.Frame(main_frame, bg="#F8F8FA")
-        stats_frame.pack(fill="x", pady=(0, 10))
+        # 3. İSTATİSTİK KARTLARI (2 Satır x 4 Kart)
+        stats_frame_row1 = tk.Frame(main_frame, bg="#F8F8FA")
+        stats_frame_row1.pack(fill="x", pady=(0, 4))
 
-        self.card_tckn = ModernCard(stats_frame, "🆔 TCKN Gizlenen", "0", color="#FF3B30")
+        self.card_tckn = ModernCard(stats_frame_row1, "🆔 TCKN Gizlenen", "0", color="#FF3B30")
         self.card_tckn.pack(side="left", fill="x", expand=True, padx=(0, 4))
 
-        self.card_iban = ModernCard(stats_frame, "💳 IBAN Gizlenen", "0", color="#FF9500")
+        self.card_telefon = ModernCard(stats_frame_row1, "📱 Telefon Gizlenen", "0", color="#007AFF")
+        self.card_telefon.pack(side="left", fill="x", expand=True, padx=4)
+
+        self.card_iban = ModernCard(stats_frame_row1, "💳 IBAN Gizlenen", "0", color="#FF9500")
         self.card_iban.pack(side="left", fill="x", expand=True, padx=4)
 
-        self.card_sicil = ModernCard(stats_frame, "⚖️ Sicil No Gizlenen", "0", color="#5856D6")
+        self.card_files = ModernCard(stats_frame_row1, "📄 Dosyalar", "0", color="#1C1C1E")
+        self.card_files.pack(side="left", fill="x", expand=True, padx=(4, 0))
+
+        stats_frame_row2 = tk.Frame(main_frame, bg="#F8F8FA")
+        stats_frame_row2.pack(fill="x", pady=(0, 8))
+
+        self.card_seri_no = ModernCard(stats_frame_row2, "🪪 Kimlik Seri No", "0", color="#AF52DE")
+        self.card_seri_no.pack(side="left", fill="x", expand=True, padx=(0, 4))
+
+        self.card_mrz = ModernCard(stats_frame_row2, "📑 Kimlik MRZ Kodu", "0", color="#FF2D55")
+        self.card_mrz.pack(side="left", fill="x", expand=True, padx=4)
+
+        self.card_sicil = ModernCard(stats_frame_row2, "⚖️ Sicil No Gizlenen", "0", color="#5856D6")
         self.card_sicil.pack(side="left", fill="x", expand=True, padx=4)
 
-        self.card_adres = ModernCard(stats_frame, "📍 Adres Gizlenen", "0", color="#34C759")
-        self.card_adres.pack(side="left", fill="x", expand=True, padx=4)
-
-        self.card_files = ModernCard(stats_frame, "📄 Dosyalar", "0", color="#1C1C1E")
-        self.card_files.pack(side="left", fill="x", expand=True, padx=(4, 0))
+        self.card_adres = ModernCard(stats_frame_row2, "📍 Adres Gizlenen", "0", color="#34C759")
+        self.card_adres.pack(side="left", fill="x", expand=True, padx=(4, 0))
 
         # 4. İŞLEM BUTONU VE İLERLEME ÇUBUĞU
         action_frame = tk.Frame(main_frame, bg="#F8F8FA")
-        action_frame.pack(fill="x", pady=(0, 10))
+        action_frame.pack(fill="x", pady=(0, 8))
 
         self.btn_run = tk.Button(
             action_frame,
@@ -204,7 +216,7 @@ class UyapRedactorApp(tk.Tk):
         self.lbl_status.pack(side="left", fill="x", expand=True)
 
         self.progress = ttk.Progressbar(main_frame, orient="horizontal", mode="determinate")
-        self.progress.pack(fill="x", pady=(0, 10))
+        self.progress.pack(fill="x", pady=(0, 8))
 
         # 5. DETAYLI GÜNLÜK (LOG) ALANI
         log_frame = tk.LabelFrame(main_frame, text=" 📜 İşlem Kayıtları ", font=("SF Pro Text", 10, "bold"), bg="#F8F8FA", padx=6, pady=6)
@@ -250,6 +262,9 @@ class UyapRedactorApp(tk.Tk):
                     self.progress["value"] = cur
                 elif msg_type == "stats":
                     self.card_tckn.update_value(payload.get("tckn", 0))
+                    self.card_telefon.update_value(payload.get("telefon", 0))
+                    self.card_seri_no.update_value(payload.get("seri_no", 0))
+                    self.card_mrz.update_value(payload.get("mrz", 0))
                     self.card_iban.update_value(payload.get("iban", 0))
                     self.card_sicil.update_value(payload.get("sicil", 0))
                     self.card_adres.update_value(payload.get("adres", 0))
@@ -279,6 +294,9 @@ class UyapRedactorApp(tk.Tk):
 
         # İstatistikleri sıfırla
         self.card_tckn.update_value("0")
+        self.card_telefon.update_value("0")
+        self.card_seri_no.update_value("0")
+        self.card_mrz.update_value("0")
         self.card_iban.update_value("0")
         self.card_sicil.update_value("0")
         self.card_adres.update_value("0")
@@ -317,9 +335,12 @@ class UyapRedactorApp(tk.Tk):
             return
 
         self.msg_queue.put(("log", f"Toplam {total_files} adet markdown (.md) dosyası bulundu.\n"))
-        
+
         grand_stats = {
             "tckn": 0,
+            "telefon": 0,
+            "seri_no": 0,
+            "mrz": 0,
             "iban": 0,
             "sicil": 0,
             "adres": 0,
@@ -341,13 +362,21 @@ class UyapRedactorApp(tk.Tk):
 
                 if stats["total"] > 0:
                     grand_stats["tckn"] += stats["tckn"]
+                    grand_stats["telefon"] += stats["telefon"]
+                    grand_stats["seri_no"] += stats["seri_no"]
+                    grand_stats["mrz"] += stats["mrz"]
                     grand_stats["iban"] += stats["iban"]
                     grand_stats["sicil"] += stats["sicil"]
                     grand_stats["adres"] += stats["adres"]
                     grand_stats["total"] += stats["total"]
                     grand_stats["modified_files"] += 1
 
-                    self.msg_queue.put(("log", f"[BULUNDU] {rel_path} -> TCKN:{stats['tckn']}, IBAN:{stats['iban']}, Sicil:{stats['sicil']}, Adres:{stats['adres']}\n"))
+                    self.msg_queue.put((
+                        "log",
+                        f"[BULUNDU] {rel_path} -> TCKN:{stats['tckn']}, Tel:{stats['telefon']}, "
+                        f"Seri:{stats['seri_no']}, MRZ:{stats['mrz']}, IBAN:{stats['iban']}, "
+                        f"Sicil:{stats['sicil']}, Adres:{stats['adres']}\n"
+                    ))
 
                     if mode == "mask":
                         # Güvenli yedekleme (.md.bak oluştur)
@@ -365,16 +394,26 @@ class UyapRedactorApp(tk.Tk):
             if idx % 10 == 0 or idx == total_files:
                 self.msg_queue.put(("stats", grand_stats))
 
+        # Otomatik INDEX.md Senkronizasyonu
+        self.msg_queue.put(("status", "INDEX.md dosyaları senkronize ediliyor..."))
+        sync_cnt = UyapRedactor.sync_index_md(folder)
+        if sync_cnt > 0:
+            self.msg_queue.put(("log", f"🔄 [İNDEKS SENKRON] INDEX.md tablosu güncellendi: {sync_cnt} kayıt senkronize edildi.\n"))
+
         elapsed = time.time() - start_time
         summary_msg = (
             f"İşlem Tamamlandı! ({elapsed:.1f} saniye)\n\n"
             f"Taranan Dosya: {total_files}\n"
             f"Kişisel Veri Bulunan Dosya: {grand_stats['modified_files']}\n"
             f"Gizlenen TCKN: {grand_stats['tckn']}\n"
+            f"Gizlenen Cep Telefonu: {grand_stats['telefon']}\n"
+            f"Gizlenen Kimlik Seri No: {grand_stats['seri_no']}\n"
+            f"Gizlenen Kimlik MRZ: {grand_stats['mrz']}\n"
             f"Gizlenen IBAN: {grand_stats['iban']}\n"
             f"Gizlenen Sicil: {grand_stats['sicil']}\n"
             f"Gizlenen Adres: {grand_stats['adres']}\n"
-            f"Toplam Gizlenen: {grand_stats['total']}"
+            f"Toplam Gizlenen: {grand_stats['total']}\n"
+            f"İndeks Senkron: {sync_cnt} kayıt"
         )
         self.msg_queue.put(("log", f"\n{'='*55}\n{summary_msg}\n{'='*55}\n"))
         self.msg_queue.put(("status", "İşlem başarıyla tamamlandı."))
@@ -422,7 +461,7 @@ class UyapRedactorApp(tk.Tk):
         start_time = time.time()
         dest_folder = folder.rstrip(os.sep) + " (Maskelenmis AI)"
         self.msg_queue.put(("status", "İzole kopya oluşturuluyor..."))
-        self.msg_queue.put(("log", f"\n{'='*55}\nİZOLE KOPYA OLUŞTURULUYOR (SADECE MASKE Lİ .MD)\nHedef: {dest_folder}\n{'='*55}\n"))
+        self.msg_queue.put(("log", f"\n{'='*55}\nİZOLE KOPYA OLUŞTURULUYOR (SADECE MASKELİ .MD)\nHedef: {dest_folder}\n{'='*55}\n"))
 
         md_files = []
         for root, dirs, files in os.walk(folder):
@@ -438,8 +477,16 @@ class UyapRedactorApp(tk.Tk):
             return
 
         grand_stats = {
-            "tckn": 0, "iban": 0, "sicil": 0, "adres": 0, "total": 0,
-            "modified_files": 0, "total_files": total_files
+            "tckn": 0,
+            "telefon": 0,
+            "seri_no": 0,
+            "mrz": 0,
+            "iban": 0,
+            "sicil": 0,
+            "adres": 0,
+            "total": 0,
+            "modified_files": 0,
+            "total_files": total_files
         }
 
         os.makedirs(dest_folder, exist_ok=True)
@@ -459,6 +506,9 @@ class UyapRedactorApp(tk.Tk):
                 redacted_text, stats = UyapRedactor.redact_text(content)
                 if stats["total"] > 0:
                     grand_stats["tckn"] += stats["tckn"]
+                    grand_stats["telefon"] += stats["telefon"]
+                    grand_stats["seri_no"] += stats["seri_no"]
+                    grand_stats["mrz"] += stats["mrz"]
                     grand_stats["iban"] += stats["iban"]
                     grand_stats["sicil"] += stats["sicil"]
                     grand_stats["adres"] += stats["adres"]
@@ -502,6 +552,9 @@ class UyapRedactorApp(tk.Tk):
                             wf.write(red_text)
                         ocr_converted.append(rel_path)
                         grand_stats["tckn"] += p_stats["tckn"]
+                        grand_stats["telefon"] += p_stats["telefon"]
+                        grand_stats["seri_no"] += p_stats["seri_no"]
+                        grand_stats["mrz"] += p_stats["mrz"]
                         grand_stats["iban"] += p_stats["iban"]
                         grand_stats["sicil"] += p_stats["sicil"]
                         grand_stats["adres"] += p_stats["adres"]
@@ -517,6 +570,16 @@ class UyapRedactorApp(tk.Tk):
         if os.path.exists(proj_json):
             shutil.copy2(proj_json, os.path.join(dest_folder, "uyap-project.json"))
 
+        # INDEX.md Senkronizasyonu (Hem hedef hem kaynak klasörde)
+        self.msg_queue.put(("status", "INDEX.md dosyaları senkronize ediliyor..."))
+        synced_dest = UyapRedactor.sync_index_md(dest_folder)
+        if synced_dest > 0:
+            self.msg_queue.put(("log", f"🔄 [İNDEKS SENKRON] Temiz klasördeki INDEX.md senkronize edildi: {synced_dest} evrak güncellendi.\n"))
+
+        synced_src = UyapRedactor.sync_index_md(folder)
+        if synced_src > 0:
+            self.msg_queue.put(("log", f"🔄 [İNDEKS SENKRON] Orijinal klasördeki INDEX.md senkronize edildi: {synced_src} evrak güncellendi.\n"))
+
         # DAVA_DONUSUM_RAPORU.md yaz
         report_path = os.path.join(dest_folder, "DAVA_DÖNÜŞÜM_VE_GÜVENLİK_RAPORU.md")
         with open(report_path, "w", encoding="utf-8") as rf:
@@ -525,12 +588,20 @@ class UyapRedactorApp(tk.Tk):
             rf.write(f"**Oluşturulma Tarihi:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             rf.write(f"**Toplam Aktarılan Markdown Belgesi:** {grand_stats['total_files']} adet\n")
             rf.write(f"**Yerel OCR ile Metne Dökülen Taranmış Ekler:** {len(ocr_converted)} adet\n")
-            rf.write(f"**Gizlenen Toplam Kişisel Veri:** {grand_stats['total']} adet\n\n")
+            rf.write(f"**Gizlenen Toplam Kişisel Veri:** {grand_stats['total']} adet\n")
+            rf.write(f"  - TCKN: {grand_stats['tckn']}\n")
+            rf.write(f"  - Cep Telefonu: {grand_stats['telefon']}\n")
+            rf.write(f"  - Kimlik Seri No: {grand_stats['seri_no']}\n")
+            rf.write(f"  - Kimlik MRZ Kodu: {grand_stats['mrz']}\n")
+            rf.write(f"  - IBAN: {grand_stats['iban']}\n")
+            rf.write(f"  - Sicil No: {grand_stats['sicil']}\n")
+            rf.write(f"  - Açık Adres: {grand_stats['adres']}\n\n")
             rf.write("---\n\n")
             rf.write("## 🔒 Güvenlik & Gizlilik Durumu\n\n")
             rf.write("- ✅ Bu klasörde tek bir orijinal UDF, PDF, TIFF veya ikili dosya **BULUNMAMAKTADIR**.\n")
-            rf.write("- ✅ TCKN, IBAN, Sicil No ve Açık Adres bilgileri tamamen maskelenmiştir.\n")
+            rf.write("- ✅ TCKN, Cep Telefonu, Kimlik Seri No, MRZ Kodu, IBAN, Sicil No ve Açık Adres bilgileri tamamen maskelenmiştir.\n")
             rf.write("- ✅ Taranmış evraklar Apple Vision OCR ile yerelde çözülmüş ve metne dökülmüştür.\n")
+            rf.write("- ✅ INDEX.md tablosundaki okunmuş tüm metinler güncel karakter sayılarıyla senkronize edilmiştir.\n")
             rf.write("- ✅ Yapay zekâ bu klasörün tamamını %100 eksiksiz ve sıfır veri sızıntısıyla okuyabilir.\n")
 
         elapsed = time.time() - start_time
@@ -539,7 +610,15 @@ class UyapRedactorApp(tk.Tk):
             f"Klasör: {os.path.basename(dest_folder)}\n"
             f"Toplam Maskelenmiş .md Belgesi: {grand_stats['total_files']}\n"
             f"Yerel OCR ile Kurtarılan Fotokopi/Ek: {len(ocr_converted)}\n"
-            f"Toplam Gizlenen Kişisel Veri: {grand_stats['total']}\n\n"
+            f"Toplam Gizlenen Kişisel Veri: {grand_stats['total']}\n"
+            f"  • TCKN: {grand_stats['tckn']}\n"
+            f"  • Cep Telefonu: {grand_stats['telefon']}\n"
+            f"  • Kimlik Seri No: {grand_stats['seri_no']}\n"
+            f"  • Kimlik MRZ Kodu: {grand_stats['mrz']}\n"
+            f"  • IBAN: {grand_stats['iban']}\n"
+            f"  • Sicil No: {grand_stats['sicil']}\n"
+            f"  • Açık Adres: {grand_stats['adres']}\n\n"
+            f"İndeks Senkron: {synced_dest} kayıt\n"
             f"🔒 Orijinal UDF/PDF dosyaları bu klasöre ALINMADI.\n"
             f"🎯 Yapay zekâya doğrudan bu temiz klasörü verebilirsiniz."
         )

@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-UYAP Çevrimdışı Kişisel Veri Maskeleme Aracı (uyap_redactor.py)
---------------------------------------------------------------
+UYAP Çevrimdışı Kişisel Veri Maskeleme ve İndeks Senkronizasyon Aracı (uyap_redactor.py)
+---------------------------------------------------------------------------------------
 Sıfır Veri Değişikliği Prensibi (Non-Destructive):
-UYAP dosyalarını salt-okunur (read-only) modda bellekte okur ve yalnızca
-belirlenen 4 kişisel veri kategorisini maskeler. Olay örgüsü, tarihler,
-para tutarları, mahkeme/esas numaraları, kanun maddeleri ve taraf ad-soyadları
-kesinlikle korunur.
+UYAP dosyalarını salt-okunur (read-only) modda bellekte okur ve belirlenen kişisel
+veri kategorilerini maskeler. Olay örgüsü, tarihler, para tutarları, mahkeme/esas
+numaraları, kanun maddeleri, anne/baba adları ve taraf ad-soyadları kesinlikle korunur.
 
-Hedef 4 Veri Kategorisi:
-1. T.C. Kimlik No / YKN -> [TCKN_GİZLENDİ]
-2. IBAN -> [IBAN_GİZLENDİ]
-3. Açık Adres -> [ADRES_GİZLENDİ]
-4. Hâkim / Savcı / Kâtip Sicil No -> [SİCİL_GİZLENDİ]
+Hedef Kişisel Veri Kategorileri:
+1. T.C. Kimlik No / YKN (10 hane yazım hatalı TCKN dahil) -> [TCKN_GİZLENDİ]
+2. Türkiye Cep Telefonu Numaraları (05xx, +90 5xx vb.)   -> [TELEFON_GİZLENDİ]
+3. Kimlik Kartı Seri Numaraları (Yeni/Eski)             -> [SERİ_NO_GİZLENDİ]
+4. Kimlik Kartı ve Pasaport ICAO/MRZ Şeritleri          -> [KİMLİK_MRZ_KODU_GİZLENDİ]
+5. IBAN Numarası                                        -> [IBAN_GİZLENDİ]
+6. Açık Adres                                           -> [ADRES_GİZLENDİ]
+7. Hâkim / Savcı / Kâtip Sicil No                       -> [SİCİL_GİZLENDİ]
+
+İndeks Senkronizasyon Motoru:
+Dava klasöründeki INDEX.md dosyalarını tarayarak OCR tamamlandıktan sonra oluşan
+güncel .md bağlantılarını ve karakter sayılarını otomatik olarak tabloya işler.
 """
 
 import os
@@ -26,6 +32,9 @@ class UyapRedactor:
     """UYAP metinleri için çevrimdışı, kural tabanlı kişisel veri maskeleme sınıfı."""
 
     MASK_TCKN = "[TCKN_GİZLENDİ]"
+    MASK_TELEFON = "[TELEFON_GİZLENDİ]"
+    MASK_SERI_NO = "[SERİ_NO_GİZLENDİ]"
+    MASK_MRZ = "[KİMLİK_MRZ_KODU_GİZLENDİ]"
     MASK_IBAN = "[IBAN_GİZLENDİ]"
     MASK_ADRES = "[ADRES_GİZLENDİ]"
     MASK_SICIL = "[SİCİL_GİZLENDİ]"
@@ -83,9 +92,45 @@ class UyapRedactor:
         return True
 
     @classmethod
+    def redact_mrz(cls, text: str) -> Tuple[str, int]:
+        """
+        Katman 1: Kimlik kartları ve pasaportların altındaki ICAO/MRZ kodlarını maskeler.
+        - Kimlik kartı 3 satırlı TD1 MRZ şeridi (I<TUR..., 6301101M..., SOYAD<<AD...)
+        - Pasaport 2 satırlı TD3 MRZ şeridi (P<TUR...)
+        - Bağımsız veya parçalanmış tekil MRZ satırları (Fallback)
+        """
+        count = 0
+
+        # 1. 3 Satırlı TD1 Kimlik Kartı MRZ bloğu
+        p_block_3 = re.compile(
+            r'(?m)^[ \t]*(?:I[<D][A-Z0-9< ]{10,}|P<[A-Z0-9< ]{10,})[ \t]*\r?\n[ \t]*[\d<]{6,}[A-Z0-9< ]{10,}[ \t]*\r?\n[ \t]*[A-Z0-9< ]+<+[A-Z0-9< ]+[ \t]*$'
+        )
+
+        def repl_block(m: re.Match) -> str:
+            nonlocal count
+            count += 1
+            return cls.MASK_MRZ
+
+        text = p_block_3.sub(repl_block, text)
+
+        # 2. 2 Satırlı TD3 Pasaport MRZ bloğu
+        p_block_2 = re.compile(
+            r'(?m)^[ \t]*P<[A-Z0-9< ]{15,}[ \t]*\r?\n[ \t]*[A-Z0-9< ]{20,}[ \t]*$'
+        )
+        text = p_block_2.sub(repl_block, text)
+
+        # 3. Bağımsız / Parçalanmış tekil MRZ satırları (Fallback)
+        p_single_mrz = re.compile(
+            r'(?m)^[ \t]*(?:(?:I<TUR|IDTUR|P<TUR|P<)[A-Z0-9< ]{10,}|[0-9]{6,7}[MFmf<][0-9< ]{6,}[A-Z<]{3}[A-Z0-9< ]*|[A-Z0-9< ]+<{2,}[A-Z0-9< ]{8,})[ \t]*$'
+        )
+        text = p_single_mrz.sub(repl_block, text)
+
+        return text, count
+
+    @classmethod
     def redact_iban(cls, text: str) -> Tuple[str, int]:
         """
-        Katman 1: TR ile başlayan IBAN numaralarını maskeler.
+        Katman 2: TR ile başlayan IBAN numaralarını maskeler.
         Boşluklu, bitişik veya OCR kaynaklı (l/I/O/^) bozulmalı 24 haneli IBAN'ları yakalar.
         """
         count = 0
@@ -96,7 +141,6 @@ class UyapRedactor:
         def repl(m: re.Match) -> str:
             nonlocal count
             raw = m.group(0)
-            # Gerçek rakam sayısı en az 15 olmalı (normal Türkçe kelimeleri korumak için)
             digit_count = sum(c.isdigit() for c in raw)
             if digit_count >= 15:
                 count += 1
@@ -107,25 +151,65 @@ class UyapRedactor:
         return redacted, count
 
     @classmethod
-    def redact_tckn(cls, text: str) -> Tuple[str, int]:
-        """
-        Katman 2: TCKN ve YKN numaralarını maskeler.
-        1) Açık etiketli (TC Kimlik No:, TCKN:, T.C.123...) ifadeleri (OCR bozulmaları dahil)
-        2) Harfe bitişik olsa dahi (?<!\\d)[1-9]\\d{10}(?!\\d) kalıbında algoritmik doğrulamadan geçenleri
-        maskeler.
-        Telefon numaraları (0 ile başlayan), tarihler ve PTT barkodları (13 hane) korunur.
+    def redact_seri_no(cls, text: str) -> Tuple[str, int]:
+        r"""
+        Katman 3: Kimlik kartı seri numaralarını maskeler.
+        - Yeni çipli kimlik kartı seri no: [A-Z]\d{2}[A-Z]\d{5} veya [A-Z]\d{2}[\s-]?[A-Z]\d{5} (Örn: A12B34567, A12 B34567)
+        - Eski nüfus cüzdanı seri no: [A-Z]\d{2}[\s-]?[0-9]{6} (Örn: A01 123456, A01123456, A01-123456)
+        - Açık etiketli seri no kalıpları (Seri No: ..., Belge No: ..., Cüzdan No: ...)
+        - 'Seri: A01 No: 123456' formatındaki bölünmüş eski nüfus cüzdanı kalıpları
+        Plakalar (34 ABC 123) ve dosya esas numaraları (2024/623) korunur.
         """
         count = 0
 
-        # 1. Açık Etiketli TCKN (OCR l/I/O ve 'TC:23236----50' gibi kısmi/bozuk formatlar dahil)
+        # Bölünmüş eski nüfus cüzdanı ("Seri: A01 No: 123456")
+        p_split_old = re.compile(
+            r'(?i)\bSeri[\s\*:]+([A-Z]\d{2})[\s\*]+No[\s\*:]+(\d{6})\b'
+        )
+
+        def repl_split_old(m: re.Match) -> str:
+            nonlocal count
+            count += 1
+            return f"Seri No: {cls.MASK_SERI_NO}"
+
+        text = p_split_old.sub(repl_split_old, text)
+
+        # Yeni çipli ve standart eski seri no kalıbı
+        p = re.compile(
+            r'(?i)(?P<label>\b(?:Seri\s*(?:No|Numaras[ıi])?|Belge\s*No|Cüzdan\s*(?:Seri)?\s*No)[\s\*:]+)?'
+            r'(?P<val>(?<![A-Za-z0-9])(?:[A-Z]\d{2}[\s-]?[A-Z]\d{5}|[A-Z]\d{2}[\s-]?[0-9]{6})(?![A-Za-z0-9]))'
+        )
+
+        def repl(m: re.Match) -> str:
+            nonlocal count
+            count += 1
+            label = m.group('label') or ""
+            return f"{label}{cls.MASK_SERI_NO}"
+
+        text = p.sub(repl, text)
+        return text, count
+
+    @classmethod
+    def redact_tckn(cls, text: str) -> Tuple[str, int]:
+        """
+        Katman 4: TCKN ve YKN numaralarını maskeler.
+        1) Açık etiketli (TC Kimlik No:, TCKN:, T.C., Kimlik No vb.) ön ekli 9-11 haneli sayılar
+           (Dilekçelerdeki yazım hatalı 10 haneli TCKN'ler dahil).
+        2) Sayı önce, etiket sonra gelen durumlar ("12345678901 TC'nolu", "1234567890 TC").
+        3) Standart 11 haneli bağımsız sayılar (Mod-10/11 algoritmik doğrulamadan geçenler).
+
+        Anne/Baba adı ve PTT tebliğ mazbatalarındaki yıldızlı/kısmi TCKN'ler (123*****890 vb.) korunur.
+        """
+        count = 0
+
+        # 1. Açık Etiketli TCKN (9-11 hane, OCR l/I/O bozulmaları dahil)
         p_labeled = re.compile(
-            r'(?i)(?P<label>\b(?:T\.?\s*C\.?(?:\s*Kimlik)?(?:\s*No(?:su|\.lu|marası)?)?|TCKN|KİMLİK\s+NUMARASI)\s*[:\t\.]?\s*)(?P<num>[0-9lIO\-\^]{11,15})(?!\d)'
+            r'(?i)(?P<label>\b(?:T\.?\s*C\.?(?:\s*(?:KN|Kimlik(?:\s*No(?:su|\.lu|marası)?)?|No(?:su|\.lu|marası)?))?|TCKN|KİMLİK\s+(?:NO(?:SU)?|NUMARASI))\s*[:\t\.\-]?\s*)(?P<num>[0-9lIO]{9,11})(?!\d)'
         )
 
         def repl_labeled(m: re.Match) -> str:
             nonlocal count
             raw_num = m.group('num')
-            #En az 5 rakam içermeli (tarih vb. olmasın)
             if sum(c.isdigit() for c in raw_num) >= 5:
                 count += 1
                 return f"{m.group('label')}{cls.MASK_TCKN}"
@@ -135,7 +219,7 @@ class UyapRedactor:
 
         # 1b. Sayı önce, etiket sonra gelen durumlar (örn: "13886414592 T.C'nolu", "12345678901 TC")
         p_num_first = re.compile(
-            r'(?i)(?P<num>\b[0-9]{11}\b)(?P<mid>\s*(?:[,\'\-]\s*)?)(?P<label>T\.?\s*C\.?(?:\'?n[uo]l[uo]|\'?de|\'?ye|\.nolu)?|TCKN)',
+            r'(?i)(?P<num>\b[0-9]{9,11}\b)(?P<mid>\s*(?:[,\'\-]\s*)?)(?P<label>T\.?\s*C\.?(?:\'?n[uo]l[uo]|\'?de|\'?ye|\.nolu)?|TCKN)',
         )
 
         def repl_num_first(m: re.Match) -> str:
@@ -160,9 +244,32 @@ class UyapRedactor:
         return text, count
 
     @classmethod
+    def redact_phone(cls, text: str) -> Tuple[str, int]:
+        r"""
+        Katman 5: Türkiye cep telefonu numaralarının tüm varyasyonlarını maskeler:
+        - Başında 0 olan / olmayan (0536..., 536...)
+        - Uluslararası alan kodlu (+90, 90)
+        - Boşluklu, tireli, noktalı, parantezli varyasyonlar
+          (0536 260 33 99, 0 (536) 260-33-99, +90 536 260 33 99, (0536) 260 33 99, (536) 260 3399 vb.)
+        Tarihler (05.06.2024), kanun maddeleri (5237), para tutarları (500.000 TL) ve dosya esas numaraları korunur.
+        """
+        count = 0
+        pattern = re.compile(
+            r'(?<!\d)(?:(?:\+?90[\s.-]?)?(?:\(0\)|0)[\s.-]?|\+?90[\s.-]?)?(?:\(?5\d{2}\)?|\(05\d{2}\))[\s.-]?\d{3}[\s.-]?(?:\d{2}[\s.-]?\d{2}|\d{4})(?!\d)'
+        )
+
+        def repl(m: re.Match) -> str:
+            nonlocal count
+            count += 1
+            return cls.MASK_TELEFON
+
+        redacted = pattern.sub(repl, text)
+        return redacted, count
+
+    @classmethod
     def redact_sicil(cls, text: str) -> Tuple[str, int]:
         """
-        Katman 3: Hâkim, Savcı, Kâtip ve Müdür sicil numaralarını maskeler.
+        Katman 6: Hâkim, Savcı, Kâtip ve Müdür sicil numaralarını maskeler.
         Unvan bitişikleri, tutanak başlıkları, imza tabloları, iddianame savcı bloğu
         ve Adli Sicil düzenleyen kişi satırlarındaki 5–6 haneli sicil kodlarını hedefler.
         Para tutarları (örn. 200.000 TL), tarihler ve dosya esas numaraları korunur.
@@ -239,7 +346,7 @@ class UyapRedactor:
     @classmethod
     def redact_address(cls, text: str) -> Tuple[str, int]:
         """
-        Katman 4: Açık Adres bilgilerini maskeler.
+        Katman 7: Açık Adres bilgilerini maskeler.
         UYAP standart şablonundaki (Mah./Mh., Cad./Sk., No:, İç Kapı No:, İlçe/İl)
         açık ikametgah, işyeri ve tebligat adreslerini hedefler.
         Nüfus kayıt yerleri (cilt/aile sıra no), doğum yerleri ve taraf ad-soyadları korunur.
@@ -265,9 +372,6 @@ class UyapRedactor:
         text = p1.sub(repl1, text)
 
         # 2. Önceden sınırlandırılmış UYAP adres cümleleri
-        # Örn: "... doğumlu ve halen <Mah. Sk. No ...> adresinde oturur."
-        # Örn: "... nüfusa kayıtlı <Mah. Sk. No ...> ikamet eder."
-        # Örn: "... belirtilen <Mah. Sk. No ...> adresine gidildiğinde"
         p2 = re.compile(
             r'(?P<prefix>(?:doğumlu\s+ve\s+halen|ve\s+halen|doğumlu[\.,]|nüfus(?:a|unda)\s+kayıtlı(?:dır)?[\.,]?|kayıtlı\s+olup\s+halen|belirtilen|E-Tebligat\s+Adresidir\.)\s+)'
             r'(?P<addr>(?:[A-ZÇĞİÖŞÜa-zçğıöşü0-9\.\-\/]+\s+){0,5}?(?:Mah\.|Mh\.|Mahallesi\b)[^\r\n\|]+?)'
@@ -283,9 +387,7 @@ class UyapRedactor:
 
         text = p2.sub(repl2, text)
 
-        # 3. Genel Yapısal Açık Adres Kalıbı (Tebligat zarfı, Nüfus Kayıt Örneği, Talimat, BTK tablosu vb.):
-        # A) (Mah./Mh./Mahallesi) + (Sk./Sok./Cad./Cd./Bulv./Apt.) + (No / İç Kapı No / Kat / Daire)
-        # B) (Cad./Cd./Cadde/Sk./Sok./Sokak/Bulv./Blv.) + (No / Daire / Kat) + (İlçe/İl veya adres ibaresi)
+        # 3. Genel Yapısal Açık Adres Kalıbı
         p3 = re.compile(
             r'(?i)(?P<lead>(?:^|(?<=[\s\|\#\:;\,\.\^\(])))'
             r'(?P<addr>'
@@ -307,10 +409,9 @@ class UyapRedactor:
 
         text = p3.sub(repl3, text)
 
-        # 4. Kapalı Tebligat çok satırlı devam eden İlçe/İl kuyruk temizliği:
-        # "## [ADRES_GİZLENDİ]\n\n## Burdur Merkez/ BURDUR" gibi bölünmüş tebligat adres başlıkları
+        # 4. Kapalı Tebligat çok satırlı devam eden İlçe/İl kuyruk temizliği
         p4 = re.compile(
-            r'(?P<masked>\[ADRES_GİZLENDİ\])(?P<Ws>\s*\r?\n(?:\s*\r?\n)?[\s\#\*]*)(?P<city>[A-ZÇĞİÖŞÜa-zçğıöşü\s]{2,30}/\s*[A-ZÇĞİÖŞÜa-zçğıöşü]{2,20})(?=\s*\r?\n|$)'
+            r'(?P<masked>\[ADRES_GİZLENDİ\])(?P<ws>\s*\r?\n(?:\s*\r?\n)?[\s\#\*]*)(?P<city>[A-ZÇĞİÖŞÜa-zçğıöşü\s]{2,30}/\s*[A-ZÇĞİÖŞÜa-zçğıöşü]{2,20})(?=\s*\r?\n|$)'
         )
         text = p4.sub(r'\g<masked>', text)
 
@@ -323,27 +424,47 @@ class UyapRedactor:
         Dönüş: (maskelenmiş_metin, istatistik_sözlüğü)
         """
         stats = {
-            "iban": 0,
             "tckn": 0,
+            "telefon": 0,
+            "seri_no": 0,
+            "mrz": 0,
+            "iban": 0,
             "sicil": 0,
             "adres": 0,
             "total": 0,
         }
 
-        # Katman 1: IBAN
-        t1, stats["iban"] = cls.redact_iban(text)
+        # Katman 1: Kimlik MRZ (Önce çalışır, blok halinde temizler)
+        t, stats["mrz"] = cls.redact_mrz(text)
 
-        # Katman 2: TCKN
-        t2, stats["tckn"] = cls.redact_tckn(t1)
+        # Katman 2: IBAN
+        t, stats["iban"] = cls.redact_iban(t)
 
-        # Katman 3: Sicil
-        t3, stats["sicil"] = cls.redact_sicil(t2)
+        # Katman 3: Kimlik Seri No
+        t, stats["seri_no"] = cls.redact_seri_no(t)
 
-        # Katman 4: Açık Adres
-        t4, stats["adres"] = cls.redact_address(t3)
+        # Katman 4: TCKN (Etiketli 9-11 hane ve algoritmik 11 hane)
+        t, stats["tckn"] = cls.redact_tckn(t)
 
-        stats["total"] = stats["iban"] + stats["tckn"] + stats["sicil"] + stats["adres"]
-        return t4, stats
+        # Katman 5: Cep Telefonu
+        t, stats["telefon"] = cls.redact_phone(t)
+
+        # Katman 6: Sicil
+        t, stats["sicil"] = cls.redact_sicil(t)
+
+        # Katman 7: Açık Adres
+        t, stats["adres"] = cls.redact_address(t)
+
+        stats["total"] = (
+            stats["tckn"]
+            + stats["telefon"]
+            + stats["seri_no"]
+            + stats["mrz"]
+            + stats["iban"]
+            + stats["sicil"]
+            + stats["adres"]
+        )
+        return t, stats
 
     @classmethod
     def redact_file_to_memory(cls, file_path: str, encoding: str = "utf-8") -> Tuple[str, Dict[str, int]]:
@@ -351,7 +472,7 @@ class UyapRedactor:
         Dosyayı salt-okunur (read-only) modda belleğe okur ve maskeler.
         Orijinal dosyaya KESİNLİKLE yazma işlemi yapmaz.
         """
-        with open(file_path, "r", encoding=encoding) as f:
+        with open(file_path, "r", encoding=encoding, errors="replace") as f:
             content = f.read()
         return cls.redact_text(content)
 
@@ -364,10 +485,11 @@ class UyapRedactor:
         3. Metni UyapRedactor filtrelerinden geçirerek maskeler.
         """
         import tempfile
+        empty_stats = {"tckn": 0, "telefon": 0, "seri_no": 0, "mrz": 0, "iban": 0, "sicil": 0, "adres": 0, "total": 0}
         try:
             import fitz
         except ImportError:
-            return "", {"iban": 0, "tckn": 0, "sicil": 0, "adres": 0, "total": 0}
+            return "", empty_stats
 
         try:
             import Vision
@@ -379,7 +501,7 @@ class UyapRedactor:
         try:
             doc = fitz.open(pdf_path)
         except Exception:
-            return "", {"iban": 0, "tckn": 0, "sicil": 0, "adres": 0, "total": 0}
+            return "", empty_stats
 
         page_count = min(len(doc), max_pages)
         pages_content = []
@@ -412,13 +534,124 @@ class UyapRedactor:
         full_raw = f"# {os.path.basename(pdf_path)}\n\n" + "\n\n---\n\n".join(pages_content)
         return cls.redact_text(full_raw)
 
+    @classmethod
+    def sync_index_file(cls, index_path: str) -> int:
+        """
+        Belirtilen tek bir INDEX.md dosyasını tarayarak 'Metin' sütununu diskteki
+        güncel .md dosyaları ve karakter sayılarıyla senkronize eder.
+        Dönüş: Güncellenen satır sayısı.
+        """
+        if not os.path.isfile(index_path):
+            return 0
+
+        index_dir = os.path.dirname(index_path)
+        try:
+            with open(index_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except Exception:
+            return 0
+
+        lines = content.splitlines(keepends=True)
+        new_lines = []
+        updated_rows = 0
+        in_table = False
+
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("| Tarih |") and "Dosya" in stripped and "Metin" in stripped:
+                in_table = True
+                new_lines.append(line)
+                continue
+            if in_table and stripped.startswith("|---"):
+                new_lines.append(line)
+                continue
+            if in_table and stripped.startswith("|") and stripped.endswith("|"):
+                parts = [p.strip() for p in line.split("|")]
+                if len(parts) >= 8:
+                    dosya_col = parts[6]
+                    metin_col = parts[7]
+
+                    m_dosya = re.search(r"\[↗\]\((?:<([^>]+)>|([^\)]+))\)", dosya_col)
+                    if m_dosya:
+                        raw_dosya_path = m_dosya.group(1) or m_dosya.group(2)
+                        candidates = []
+
+                        # 1) _kaynak/ önekini kaldırarak .md adayı
+                        clean_path = raw_dosya_path
+                        if clean_path.startswith("_kaynak/"):
+                            clean_path = clean_path[len("_kaynak/"):]
+                        base_no_ext, _ = os.path.splitext(clean_path)
+                        candidates.append(base_no_ext + ".md")
+
+                        # 2) _kaynak/ önekini kaldırmadan .md adayı
+                        base_orig, _ = os.path.splitext(raw_dosya_path)
+                        candidates.append(base_orig + ".md")
+
+                        found_md_rel = None
+                        found_md_abs = None
+                        for cand in candidates:
+                            cand_abs = os.path.join(index_dir, cand)
+                            if os.path.isfile(cand_abs):
+                                found_md_rel = cand
+                                found_md_abs = cand_abs
+                                break
+
+                        if found_md_abs and os.path.isfile(found_md_abs):
+                            try:
+                                with open(found_md_abs, "r", encoding="utf-8", errors="replace") as mf:
+                                    char_cnt = len(mf.read())
+                                formatted_cnt = f"{char_cnt:,}".replace(",", ".")
+                                new_metin = f"[↗](<{found_md_rel}>) ({formatted_cnt} karakter)"
+
+                                if metin_col != new_metin:
+                                    parts[7] = new_metin
+                                    line = "| " + " | ".join(parts[1:-1]) + " |\n"
+                                    updated_rows += 1
+                            except Exception:
+                                pass
+                new_lines.append(line)
+            else:
+                if in_table and stripped.startswith("#"):
+                    in_table = False
+                new_lines.append(line)
+
+        if updated_rows > 0:
+            try:
+                with open(index_path, "w", encoding="utf-8") as f:
+                    f.writelines(new_lines)
+            except Exception:
+                pass
+
+        return updated_rows
+
+    @classmethod
+    def sync_index_md(cls, folder: str) -> int:
+        """
+        Verilen dava klasörü altındaki tüm INDEX.md dosyalarını bularak
+        otomatik olarak diskteki .md türevleri ve karakter sayılarıyla senkronize eder.
+        Dönüş: Toplam güncellenen satır sayısı.
+        """
+        if not os.path.isdir(folder):
+            return 0
+
+        total_updated = 0
+        for root, dirs, files in os.walk(folder):
+            if "_kaynak" in root or ".git" in root:
+                continue
+            for f in files:
+                if f == "INDEX.md":
+                    full_index_path = os.path.join(root, f)
+                    total_updated += cls.sync_index_file(full_index_path)
+
+        return total_updated
+
 
 def main():
     """CLI giriş noktası (Salt-okunur doğrulama / Dry-run ve izole çıktı)."""
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="UYAP Kişisel Veri Maskeleme Aracı (Pure Python, Varsayılan Salt-Okunur)"
+        description="UYAP Kişisel Veri Maskeleme ve İndeks Senkronizasyon Aracı (Pure Python, Varsayılan Salt-Okunur)"
     )
     parser.add_argument("path", help="Hedef dosya veya UYAP dava klasörü yolu")
     parser.add_argument("--out", help="Maskelenmiş dosyaların yazılacağı izole hedef klasör", default=None)
@@ -429,12 +662,20 @@ def main():
         help="Belirtilirse .md dosyalarını yerinde (in-place) maskeler (varsayılan: Kapalı / Salt-Okunur)",
     )
     parser.add_argument("--dry-run", action="store_true", default=True, help="Disk yazımı yapmadan istatistik gösterir (Varsayılan)")
+    parser.add_argument("--sync-index", action="store_true", default=False, help="INDEX.md dosyalarını diskteki .md evraklarıyla senkronize eder")
 
     args = parser.parse_args()
 
     if not os.path.exists(args.path):
         print(f"Hata: Yol bulunamadı: {args.path}", file=sys.stderr)
         sys.exit(1)
+
+    # Yalnızca indeks senkronizasyonu istendiyse
+    if args.sync_index and not args.in_place and not args.out:
+        target_dir = args.path if os.path.isdir(args.path) else os.path.dirname(args.path)
+        updated = UyapRedactor.sync_index_md(target_dir)
+        print(f"İndeks Senkronizasyonu Tamamlandı: {updated} adet evrak satırı güncellendi.")
+        return
 
     files_to_process = []
     if os.path.isfile(args.path):
@@ -447,7 +688,16 @@ def main():
                 if file.endswith((".md", ".txt")):
                     files_to_process.append(os.path.join(root, file))
 
-    total_stats = {"iban": 0, "tckn": 0, "sicil": 0, "adres": 0, "total": 0}
+    total_stats = {
+        "tckn": 0,
+        "telefon": 0,
+        "seri_no": 0,
+        "mrz": 0,
+        "iban": 0,
+        "sicil": 0,
+        "adres": 0,
+        "total": 0,
+    }
     print(f"Toplam {len(files_to_process)} dosya taranıyor...")
 
     for fp in files_to_process:
@@ -457,7 +707,11 @@ def main():
 
         if stats["total"] > 0:
             rel = os.path.basename(fp)
-            print(f"[{rel}] IBAN: {stats['iban']}, TCKN: {stats['tckn']}, Sicil: {stats['sicil']}, Adres: {stats['adres']}")
+            print(
+                f"[{rel}] TCKN: {stats['tckn']}, Tel: {stats['telefon']}, "
+                f"Seri: {stats['seri_no']}, MRZ: {stats['mrz']}, "
+                f"IBAN: {stats['iban']}, Sicil: {stats['sicil']}, Adres: {stats['adres']}"
+            )
 
         if args.out:
             rel_path = os.path.relpath(fp, args.path if os.path.isdir(args.path) else os.path.dirname(args.path))
@@ -470,11 +724,21 @@ def main():
                 f.write(redacted)
 
     print("\n--- ÖZET İSTATİSTİK ---")
-    print(f"Maskelenen IBAN      : {total_stats['iban']}")
-    print(f"Maskelenen TCKN      : {total_stats['tckn']}")
-    print(f"Maskelenen Sicil     : {total_stats['sicil']}")
-    print(f"Maskelenen Adres     : {total_stats['adres']}")
-    print(f"Toplam Maskeleme     : {total_stats['total']}")
+    print(f"Maskelenen TCKN          : {total_stats['tckn']}")
+    print(f"Maskelenen Cep Telefonu  : {total_stats['telefon']}")
+    print(f"Maskelenen Kimlik Seri No: {total_stats['seri_no']}")
+    print(f"Maskelenen Kimlik MRZ    : {total_stats['mrz']}")
+    print(f"Maskelenen IBAN          : {total_stats['iban']}")
+    print(f"Maskelenen Sicil         : {total_stats['sicil']}")
+    print(f"Maskelenen Adres         : {total_stats['adres']}")
+    print(f"Toplam Maskeleme         : {total_stats['total']}")
+
+    # Otomatik INDEX.md Senkronizasyonu
+    sync_target = args.out if args.out else (args.path if os.path.isdir(args.path) else os.path.dirname(args.path))
+    if sync_target and os.path.isdir(sync_target):
+        synced = UyapRedactor.sync_index_md(sync_target)
+        if synced > 0:
+            print(f"\n[İNDEKS SENKRON] INDEX.md dosyaları senkronize edildi ({synced} kayıt güncellendi).")
 
 
 if __name__ == "__main__":
