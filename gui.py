@@ -342,6 +342,7 @@ class GlassStatusPill(tk.Frame):
         )
         self.pulse_index = 0
         self.is_pulsing = False
+        self._pulse_job = None
 
         # Parlayan durum noktası
         self.lbl_dot = tk.Label(
@@ -390,15 +391,33 @@ class GlassStatusPill(tk.Frame):
 
     def stop_pulse(self, color="#10B981"):
         self.is_pulsing = False
-        self.lbl_dot.config(fg=color)
+        if self._pulse_job:
+            try:
+                self.after_cancel(self._pulse_job)
+            except Exception:
+                pass
+            self._pulse_job = None
+        try:
+            self.lbl_dot.config(fg=color)
+        except tk.TclError:
+            pass
 
     def _pulse_loop(self):
-        if not self.is_pulsing:
+        try:
+            if not self.winfo_exists() or not self.is_pulsing:
+                self.is_pulsing = False
+                return
+        except Exception:
+            self.is_pulsing = False
             return
         colors = ["#0071E3", "#38BDF8", "#818CF8", "#0071E3"]
         self.pulse_index = (self.pulse_index + 1) % len(colors)
-        self.lbl_dot.config(fg=colors[self.pulse_index])
-        self.after(380, self._pulse_loop)
+        try:
+            self.lbl_dot.config(fg=colors[self.pulse_index])
+            self._pulse_job = self.after(380, self._pulse_loop)
+        except (tk.TclError, Exception):
+            self.is_pulsing = False
+            self._pulse_job = None
 
 
 class GlassProgressBar(tk.Canvas):
@@ -438,6 +457,11 @@ class GlassProgressBar(tk.Canvas):
     def _redraw(self):
         self.delete("all")
         w = self.winfo_width()
+        if w <= 1:
+            try:
+                w = int(self.cget("width"))
+            except (ValueError, tk.TclError):
+                w = self.winfo_reqwidth()
         h = self.bar_height
         if w < 10:
             return
@@ -476,19 +500,22 @@ class UyapRedactorApp(tk.Tk):
         self.msg_queue = queue.Queue()
         self.is_running = False
         self.last_dest_folder = None
+        self._queue_job = None
 
         self._create_widgets()
         self._setup_shortcuts()
         self._check_queue()
 
     def _setup_shortcuts(self):
-        """macOS Klavye Kısayolları (⌘O, ⌘R, ⌘K)."""
+        """macOS Klavye Kısayolları (⌘O, ⌘R, ⌘K, ⌘Q, ⌘W)."""
         self.bind("<Command-o>", lambda e: self._select_folder())
         self.bind("<Control-o>", lambda e: self._select_folder())
         self.bind("<Command-r>", lambda e: self._start_process() if not self.is_running else None)
         self.bind("<Control-r>", lambda e: self._start_process() if not self.is_running else None)
         self.bind("<Command-k>", lambda e: self._clear_logs())
         self.bind("<Control-k>", lambda e: self._clear_logs())
+        self.bind("<Command-q>", lambda e: self.destroy())
+        self.bind("<Command-w>", lambda e: self.destroy())
 
     def _create_widgets(self):
         # ----------------------------------------------------------------------
@@ -781,15 +808,16 @@ class UyapRedactorApp(tk.Tk):
             d = tk.Label(dots_frame, text="●", font=Theme.font_text(7, "bold"), fg=dot_color, bg=Theme.TERM_BAR)
             d.pack(side="left", padx=(0, 4))
 
-        tk.Label(
+        self.lbl_console_title = tk.Label(
             log_header,
             text="Console Output  •  Canlı İşlem Günlüğü",
             font=Theme.font_mono(9, "bold"),
             fg=Theme.TEXT_MUTED,
             bg=Theme.TERM_BAR
-        ).pack(side="left", padx=(6, 0))
+        )
+        self.lbl_console_title.pack(side="left", padx=(6, 0))
 
-        btn_clear = GlassButton(
+        self.btn_clear = GlassButton(
             log_header,
             text="Kayıtları Temizle",
             variant="subtle",
@@ -797,7 +825,7 @@ class UyapRedactorApp(tk.Tk):
             padx=10,
             pady=3
         )
-        btn_clear.pack(side="right")
+        self.btn_clear.pack(side="right")
 
         # Monospace Terminal Metin Alanı
         self.log_text = ScrolledText(
@@ -897,6 +925,20 @@ class UyapRedactorApp(tk.Tk):
 
     def _check_queue(self):
         try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+
+        # Bekleyen önceki döngü varsa temizle
+        if hasattr(self, "_queue_job") and self._queue_job:
+            try:
+                self.after_cancel(self._queue_job)
+            except Exception:
+                pass
+            self._queue_job = None
+
+        try:
             while True:
                 msg_type, payload = self.msg_queue.get_nowait()
                 if msg_type == "log":
@@ -935,7 +977,26 @@ class UyapRedactorApp(tk.Tk):
                     messagebox.showerror("Hata Oluştu", payload)
         except queue.Empty:
             pass
-        self.after(100, self._check_queue)
+        except (tk.TclError, Exception):
+            return
+
+        try:
+            if self.winfo_exists():
+                self._queue_job = self.after(100, self._check_queue)
+        except (tk.TclError, Exception):
+            self._queue_job = None
+
+    def destroy(self):
+        """Uygulama kapatılırken bekleyen timer ve pulse işlerini temizle."""
+        if hasattr(self, "_queue_job") and self._queue_job:
+            try:
+                self.after_cancel(self._queue_job)
+            except Exception:
+                pass
+            self._queue_job = None
+        if hasattr(self, "lbl_status") and hasattr(self.lbl_status, "stop_pulse"):
+            self.lbl_status.stop_pulse()
+        super().destroy()
 
     def _start_process(self):
         folder = self.folder_var.get().strip()

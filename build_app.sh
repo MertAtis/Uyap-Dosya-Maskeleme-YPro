@@ -21,10 +21,15 @@ cp "$DIR/bundle/Info.plist" "$OUTPUT_DIR/$APP_NAME/Contents/"
 cp "$DIR/bundle/app.icns" "$OUTPUT_DIR/$APP_NAME/Contents/Resources/"
 cp "$DIR/bundle/launcher.sh" "$OUTPUT_DIR/$APP_NAME/Contents/MacOS/UYAP Maskeleme"
 
-echo "🔐 [4/4] İzinler ayarlanıyor..."
+echo "🔐 [4/4] İzinler ve Ad-Hoc Kod İmzası ayarlanıyor..."
 chmod +x "$OUTPUT_DIR/$APP_NAME/Contents/MacOS/UYAP Maskeleme"
 chmod +x "$OUTPUT_DIR/$APP_NAME/Contents/Resources/gui.py"
 chmod +x "$OUTPUT_DIR/$APP_NAME/Contents/Resources/uyap_redactor.py"
+
+if command -v codesign >/dev/null 2>&1; then
+    codesign --force --deep --sign - "$OUTPUT_DIR/$APP_NAME" >/dev/null 2>&1 || true
+    echo "🔏 macOS Ad-Hoc kod imzası başarıyla uygulandı."
+fi
 
 echo "✅ Başarılı! '$OUTPUT_DIR/$APP_NAME' hazır."
 echo "💡 Çalıştırmak için: open '$OUTPUT_DIR/$APP_NAME'"
