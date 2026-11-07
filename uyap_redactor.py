@@ -138,7 +138,7 @@ class UyapRedactor:
         """
         count = 0
         pattern = re.compile(
-            r'(?i)(?:^|(?<=[\s\*\_\(\[\"\'\:\-\^]))TR[\s\^]*(?:[0-9lIOo][\s\^]*){24}(?![0-9a-zA-ZçğıöşüÇĞİÖŞÜ])'
+            r'(?i)(?:^|(?<=[\s\*\_\(\[\"\'\:\-\^]))TR[\s\^\.\-]*(?:[0-9lIOo][\s\^\.\-]*){24}(?![0-9a-zA-ZçğıöşüÇĞİÖŞÜ])'
         )
 
         def repl(m: re.Match) -> str:
@@ -367,7 +367,7 @@ class UyapRedactor:
             nonlocal count
             addr_val = m.group('addr').strip()
             # "E-Tebligat Adresidir" gibi cümle sonu ibarelerini yanlışlıkla etiket sanma
-            if not addr_val or len(addr_val) < 5:
+            if not addr_val or len(addr_val) < 5 or cls.MASK_ADRES in addr_val:
                 return m.group(0)
             count += 1
             return f"{m.group('label')}{cls.MASK_ADRES}"
@@ -767,7 +767,7 @@ class UyapRedactor:
         # 1. Mevcut Markdown ve Metin Belgelerini Topla
         md_files = []
         for root, dirs, files in os.walk(src_folder):
-            if "_kaynak" in root or ".git" in root or "node_modules" in root or dest_folder in root:
+            if "_kaynak" in root or ".git" in root or "node_modules" in root or (dest_folder != src_folder and dest_folder in root):
                 continue
             for f in files:
                 if f.endswith((".md", ".txt")) and not f.endswith(".bak"):
@@ -805,7 +805,7 @@ class UyapRedactor:
         # 2. Taranmış Evrakları (PDF ve TIFF) Tara ve Gerekirse Apple Vision OCR ile Çöz
         scanned_files = []
         for root, dirs, files in os.walk(src_folder):
-            if ".git" in root or "node_modules" in root or dest_folder in root:
+            if ".git" in root or "node_modules" in root or (dest_folder != src_folder and dest_folder in root):
                 continue
             for f in files:
                 ext = os.path.splitext(f)[1].lower()
@@ -862,8 +862,9 @@ class UyapRedactor:
         # 3. Yargı PRO Manifest ve Meta Dosyalarını Aktar
         for meta_name in ["uyap-project.json", "uyap-evrak-listesi.json", "AGENTS.md"]:
             meta_src = os.path.join(src_folder, meta_name)
-            if os.path.exists(meta_src):
-                shutil.copy2(meta_src, os.path.join(dest_folder, meta_name))
+            meta_dest = os.path.join(dest_folder, meta_name)
+            if os.path.exists(meta_src) and os.path.abspath(meta_src) != os.path.abspath(meta_dest):
+                shutil.copy2(meta_src, meta_dest)
 
         # 4. Kök Seviyedeki Dava Özeti ve Safahat Dosyalarını Maskele
         for summary_name in ["dosya-bilgileri.md", "safahat.md", "dava-analiz.md"]:
@@ -881,8 +882,12 @@ class UyapRedactor:
                 except Exception:
                     pass
 
-        # 5. Sıfır İkili Dosya Denetimi (Hedef klasördeki olası ikili kalıntıları temizle)
-        for root, dirs, files in os.walk(dest_folder):
+        # 5. Sıfır İkili Dosya Denetimi (Hedef klasördeki olası ikili kalıntıları ve _kaynak dizinini temizle)
+        clean_kaynak = os.path.join(dest_folder, "_kaynak")
+        if os.path.isdir(clean_kaynak):
+            shutil.rmtree(clean_kaynak, ignore_errors=True)
+
+        for root, dirs, files in os.walk(dest_folder, topdown=False):
             for f in files:
                 ext = os.path.splitext(f)[1].lower()
                 if ext in (".udf", ".pdf", ".tif", ".tiff", ".eyp", ".zip", ".bak"):
@@ -890,6 +895,14 @@ class UyapRedactor:
                         os.remove(os.path.join(root, f))
                     except Exception:
                         pass
+            # Boş kalan alt dizinleri temizle
+            for d in dirs:
+                dir_path = os.path.join(root, d)
+                try:
+                    if os.path.isdir(dir_path) and not os.listdir(dir_path):
+                        os.rmdir(dir_path)
+                except Exception:
+                    pass
 
         # 6. INDEX.md Senkronizasyonu (Hem hedef hem kaynak klasör)
         synced_dest = cls.sync_index_md(dest_folder)
