@@ -667,6 +667,75 @@ class TestUyapRedactorApp(unittest.TestCase):
             err_msg = [m[1] for m in messages if m[0] == "error"][0]
             self.assertIn("Disk dolu!", err_msg)
 
+    def test_update_queue_messages(self):
+        """Otomatik güncelleme kuyruk mesajlarının (update_available, update_up_to_date) işlenmesi."""
+        fake_info = {
+            "version": "2.0.0",
+            "tag_name": "v2.0.0",
+            "download_url": "https://github.com/MertAtis/Uyap-Dosya-Maskeleme-YPro/releases/download/v2.0.0/UYAP-Maskeleme.dmg",
+            "size": 25000000,
+            "release_notes": "Yeni kurallar eklendi.",
+            "html_url": "https://github.com/MertAtis/Uyap-Dosya-Maskeleme-YPro/releases/tag/v2.0.0",
+        }
+        self.app.msg_queue.put(("update_available", (fake_info, False)))
+        self.app._check_queue()
+        self.assertEqual(self.app.pending_update_info, fake_info)
+        self.assertIn("v2.0.0", self.app.btn_update["text"])
+        self.mock_yesno.assert_called_once()
+
+
+class TestAutoUpdater(unittest.TestCase):
+    """AutoUpdater sürüm karşılaştırma, GitHub API ayrıştırma ve yerinde güncelleme betiği testleri."""
+
+    def test_version_parsing_and_comparison(self):
+        self.assertEqual(gui.AutoUpdater.parse_version("v1.1.0"), (1, 1, 0))
+        self.assertEqual(gui.AutoUpdater.parse_version("1.2.3-beta1"), (1, 2, 3))
+        self.assertTrue(gui.AutoUpdater.is_newer_version("v1.2.0", "1.1.0"))
+        self.assertTrue(gui.AutoUpdater.is_newer_version("v2.0.0", "1.9.9"))
+        self.assertFalse(gui.AutoUpdater.is_newer_version("v1.1.0", "1.1.0"))
+        self.assertFalse(gui.AutoUpdater.is_newer_version("v1.0.0", "1.1.0"))
+
+    def test_check_for_updates_when_newer(self):
+        fake_json = (
+            '{"tag_name": "v1.2.0", "body": "Yeni sürüm notları", '
+            '"html_url": "https://github.com/example", '
+            '"assets": [{"name": "UYAP-Maskeleme.dmg", "size": 26000000, '
+            '"browser_download_url": "https://example.com/UYAP-Maskeleme.dmg"}]}'
+        ).encode("utf-8")
+
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = fake_json
+        mock_resp.__enter__.return_value = mock_resp
+        mock_resp.__exit__.return_value = False
+
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            res = gui.AutoUpdater.check_for_updates(current_version="1.1.0")
+            self.assertIsNotNone(res)
+            self.assertEqual(res["version"], "1.2.0")
+            self.assertEqual(res["download_url"], "https://example.com/UYAP-Maskeleme.dmg")
+
+    def test_check_for_updates_when_up_to_date(self):
+        fake_json = '{"tag_name": "v1.1.0", "assets": []}'.encode("utf-8")
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = fake_json
+        mock_resp.__enter__.return_value = mock_resp
+        mock_resp.__exit__.return_value = False
+
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            res = gui.AutoUpdater.check_for_updates(current_version="1.1.0")
+            self.assertIsNone(res)
+
+    def test_build_updater_script(self):
+        script = gui.AutoUpdater.build_updater_script(
+            "/Applications/UYAP Maskeleme.app",
+            "/tmp/mnt/UYAP Maskeleme.app",
+            "/tmp/mnt",
+            "/tmp/uyap_update_123",
+        )
+        self.assertIn("ditto \"$SRC_APP\" \"$TARGET_APP\"", script)
+        self.assertIn("hdiutil detach \"$MNT_DIR\"", script)
+        self.assertIn("open -n \"$TARGET_APP\"", script)
+
 
 def run_tests():
     """Testleri çalıştır ve detaylı sonuç döndür."""

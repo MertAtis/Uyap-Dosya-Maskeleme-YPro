@@ -16,15 +16,207 @@ Orijinal UDF/PDF/TIFF dosyalarına ASLA dokunmaz.
 """
 
 import os
+import re
 import sys
+import json
+import ssl
+import tempfile
+import urllib.request
+import urllib.error
 import threading
 import queue
 import time
 import subprocess
 from datetime import datetime
+from typing import Optional, Dict, Tuple, Callable
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
+
+# Uygulama Sürümü ve Otomatik Güncelleme Kaynağı
+APP_VERSION = "1.1.0"
+GITHUB_REPO = "MertAtis/Uyap-Dosya-Maskeleme-YPro"
+GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+
+
+class AutoUpdater:
+    """
+    GitHub Releases üzerinden tek tıkla (baştan kurulum gerektirmeyen)
+    otomatik DMG indirme, bağlama ve .app paketini yerinde yenileme motoru.
+    Çevrimdışı (offline) kullanımda sessizce devre dışı kalır, asla hata vermez.
+    """
+
+    @staticmethod
+    def parse_version(v_str: str) -> Tuple[int, ...]:
+        """'v1.2.3' veya '1.2.3-beta' gibi sürüm dizgesini (1, 2, 3) demetine çevirir."""
+        if not v_str:
+            return (0, 0, 0)
+        clean = str(v_str).strip().lstrip("vV").split("-")[0]
+        nums = [int(x) for x in re.findall(r"\d+", clean)]
+        return tuple(nums) if nums else (0, 0, 0)
+
+    @classmethod
+    def is_newer_version(cls, remote_tag: str, local_version: str = APP_VERSION) -> bool:
+        """Uzak sürümün mevcut yerel sürümden daha yeni olup olmadığını döndürür."""
+        return cls.parse_version(remote_tag) > cls.parse_version(local_version)
+
+    @staticmethod
+    def _create_ssl_context() -> ssl.SSLContext:
+        """macOS PyInstaller paketlerinde sistem kök sertifikalarını (/etc/ssl/cert.pem) kullanan güvenli SSL bağlamı."""
+        if os.path.exists("/etc/ssl/cert.pem"):
+            try:
+                return ssl.create_default_context(cafile="/etc/ssl/cert.pem")
+            except Exception:
+                pass
+        return ssl.create_default_context()
+
+    @classmethod
+    def check_for_updates(cls, current_version: str = APP_VERSION, timeout: float = 5.0) -> Optional[Dict]:
+        """
+        GitHub Releases API'sini sorgular.
+        Daha yeni bir sürüm varsa {'version', 'tag_name', 'download_url', 'release_notes', 'html_url', 'size'}
+        sözlüğünü döndürür. Güncelse None döndürür. Bağlantı hatasında exception fırlatır.
+        """
+        req = urllib.request.Request(
+            GITHUB_API_LATEST,
+            headers={
+                "User-Agent": f"UYAP-Maskeleme-macOS/{current_version}",
+                "Accept": "application/vnd.github.v3+json",
+            },
+        )
+        ctx = cls._create_ssl_context()
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+
+        tag_name = data.get("tag_name", "")
+        if not tag_name or not cls.is_newer_version(tag_name, current_version):
+            return None
+
+        # Release içindeki .dmg dosyasını bul
+        assets = data.get("assets", []) or []
+        dmg_asset = None
+        for asset in assets:
+            name = asset.get("name", "")
+            if name.lower().endswith(".dmg"):
+                dmg_asset = asset
+                if "uyap" in name.lower():
+                    break
+
+        if not dmg_asset or not dmg_asset.get("browser_download_url"):
+            return None
+
+        return {
+            "version": tag_name.lstrip("vV"),
+            "tag_name": tag_name,
+            "download_url": dmg_asset["browser_download_url"],
+            "size": int(dmg_asset.get("size", 0) or 0),
+            "release_notes": (data.get("body") or "").strip() or "Yeni kişisel veri yakalama kuralları ve performans iyileştirmeleri.",
+            "html_url": data.get("html_url", f"https://github.com/{GITHUB_REPO}/releases/latest"),
+        }
+
+    @staticmethod
+    def get_target_app_path() -> str:
+        """Güncellemenin yazılacağı hedef .app paket yolunu belirler."""
+        exe_path = os.path.abspath(sys.executable)
+        if ".app/Contents/MacOS" in exe_path:
+            app_root = exe_path.split(".app/Contents/MacOS")[0] + ".app"
+            # Eğer kullanıcı salt-okunur DMG içinden çalıştırdıysa /Applications'a kur
+            if not app_root.startswith("/Volumes/"):
+                return app_root
+        return "/Applications/UYAP Maskeleme.app"
+
+    @classmethod
+    def build_updater_script(cls, target_app: str, src_app: str, mnt_dir: str, tmp_dir: str) -> str:
+        """Uygulama kapandıktan hemen sonra eski .app'i yenisiyle değiştirip yeniden başlatan kabuk betiği."""
+        return (
+            "#!/bin/sh\n"
+            "sleep 1.2\n"
+            'TARGET_APP="$1"\n'
+            'SRC_APP="$2"\n'
+            'MNT_DIR="$3"\n'
+            'TMP_DIR="$4"\n'
+            'rm -rf "$TARGET_APP"\n'
+            'ditto "$SRC_APP" "$TARGET_APP"\n'
+            'xattr -cr "$TARGET_APP" 2>/dev/null || true\n'
+            'codesign --force --deep --sign - "$TARGET_APP" 2>/dev/null || true\n'
+            'hdiutil detach "$MNT_DIR" -force >/dev/null 2>&1 || true\n'
+            'open -n "$TARGET_APP"\n'
+            'rm -rf "$TMP_DIR" 2>/dev/null || true\n'
+        )
+
+    @classmethod
+    def download_and_install(
+        cls,
+        download_url: str,
+        progress_cb: Optional[Callable[[int, int], None]] = None,
+    ) -> str:
+        """
+        DMG'yi geçici klasöre indirir, bağlar, güncelleme betiğini arka planda başlatır
+        ve güncellenecek hedef .app yolunu döndürür.
+        """
+        tmp_dir = tempfile.mkdtemp(prefix="uyap_update_")
+        dmg_path = os.path.join(tmp_dir, "UYAP-Maskeleme.dmg")
+        mnt_dir = os.path.join(tmp_dir, "mnt")
+        os.makedirs(mnt_dir, exist_ok=True)
+
+        req = urllib.request.Request(
+            download_url,
+            headers={"User-Agent": f"UYAP-Maskeleme-macOS/{APP_VERSION}"},
+        )
+        ctx = cls._create_ssl_context()
+
+        with urllib.request.urlopen(req, timeout=30.0, context=ctx) as resp:
+            total_size = int(resp.headers.get("Content-Length", 0) or 0)
+            downloaded = 0
+            chunk_size = 65536
+            with open(dmg_path, "wb") as f:
+                while True:
+                    chunk = resp.read(chunk_size)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if progress_cb:
+                        progress_cb(downloaded, total_size)
+
+        if not os.path.exists(dmg_path) or os.path.getsize(dmg_path) < 100_000:
+            raise RuntimeError("İndirilen güncelleme paketi eksik veya bozuk görünüyor.")
+
+        # DMG'yi sessizce bağla
+        attach_res = subprocess.run(
+            ["hdiutil", "attach", dmg_path, "-nobrowse", "-readonly", "-mountpoint", mnt_dir],
+            capture_output=True,
+            text=True,
+        )
+        if attach_res.returncode != 0:
+            raise RuntimeError(f"DMG bağlanamadı: {attach_res.stderr.strip()}")
+
+        # Bağlanan diskteki .app paketini bul
+        src_app = os.path.join(mnt_dir, "UYAP Maskeleme.app")
+        if not os.path.exists(src_app):
+            found_apps = [
+                os.path.join(mnt_dir, item)
+                for item in os.listdir(mnt_dir)
+                if item.endswith(".app")
+            ]
+            if not found_apps:
+                subprocess.run(["hdiutil", "detach", mnt_dir, "-force"], capture_output=True)
+                raise RuntimeError("Güncelleme paketinin içinde .app uygulaması bulunamadı.")
+            src_app = found_apps[0]
+
+        target_app = cls.get_target_app_path()
+        updater_sh = os.path.join(tmp_dir, "apply_update.sh")
+        with open(updater_sh, "w", encoding="utf-8") as sh_file:
+            sh_file.write(cls.build_updater_script(target_app, src_app, mnt_dir, tmp_dir))
+        os.chmod(updater_sh, 0o755)
+
+        subprocess.Popen(
+            ["/bin/sh", updater_sh, target_app, src_app, mnt_dir, tmp_dir],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return target_app
 
 # Kaynak dizinindeki redactor modülünü içeri aktar
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -501,10 +693,14 @@ class UyapRedactorApp(tk.Tk):
         self.is_running = False
         self.last_dest_folder = None
         self._queue_job = None
+        self._update_check_job = None
+        self.pending_update_info = None
 
         self._create_widgets()
         self._setup_shortcuts()
         self._check_queue()
+        # Açılışta arka planda sessiz güncelleme kontrolü (çevrimdışıysa sessizce geçer)
+        self._update_check_job = self.after(1500, lambda: self._check_updates(manual=False))
 
     def _setup_shortcuts(self):
         """macOS Klavye Kısayolları (⌘O, ⌘R, ⌘K, ⌘Q, ⌘W)."""
@@ -573,7 +769,17 @@ class UyapRedactorApp(tk.Tk):
             bg="#F5F3FF",
             border="#EDE9FE",
             fg="#6D28D9"
-        ).pack(side="left")
+        ).pack(side="left", padx=(0, 6))
+
+        self.btn_update = GlassButton(
+            badge_container,
+            text=f"🔄 v{APP_VERSION} • Güncelleme Denetle",
+            variant="secondary",
+            command=self._on_update_button_click,
+            padx=10,
+            pady=4
+        )
+        self.btn_update.pack(side="left")
 
         # Alt Satır: Açıklama
         sub_lbl = tk.Label(
@@ -975,6 +1181,54 @@ class UyapRedactorApp(tk.Tk):
                     self.is_running = False
                     self.btn_run.config(state="normal", text="🚀  İzole Temiz Klasör Üret")
                     messagebox.showerror("Hata Oluştu", payload)
+                elif msg_type == "update_available":
+                    info, manual = payload
+                    self.pending_update_info = info
+                    new_ver = info.get("version", "")
+                    self.btn_update.config(
+                        state="normal",
+                        text=f"✨ Yeni Sürüm İndir (v{new_ver})"
+                    )
+                    self._log(
+                        f"✨ [GÜNCELLEME] Yeni sürüm yayınlandı: v{new_ver} "
+                        f"(Mevcut: v{APP_VERSION}) — Tek tıkla güncellemeye hazır.\n"
+                    )
+                    self._prompt_and_install_update(info)
+                elif msg_type == "update_up_to_date":
+                    manual = payload
+                    self.btn_update.config(
+                        state="normal",
+                        text=f"✅ v{APP_VERSION} • Güncel"
+                    )
+                    if manual:
+                        messagebox.showinfo(
+                            "Sürüm Güncel",
+                            f"UYAP Maskeleme uygulamasının en güncel sürümünü (v{APP_VERSION}) kullanıyorsunuz."
+                        )
+                elif msg_type == "update_check_error":
+                    err_str, manual = payload
+                    self.btn_update.config(
+                        state="normal",
+                        text=f"🔄 v{APP_VERSION} • Güncelleme Denetle"
+                    )
+                    if manual:
+                        messagebox.showwarning(
+                            "Güncelleme Sunucusuna Ulaşılamadı",
+                            "Güncelleme kontrolü için internet bağlantısı kurulamadı.\n\n"
+                            "Not: UYAP Maskeleme motoru %100 çevrimdışı (offline) olarak tam kapasiteyle çalışmaya devam etmektedir."
+                        )
+                elif msg_type == "update_ready_restart":
+                    target_app = payload
+                    self.lbl_status.config(text="Güncelleme tamamlandı, yeni sürüm başlatılıyor...")
+                    self.after(250, self.destroy)
+                elif msg_type == "update_install_error":
+                    self.is_running = False
+                    self.btn_run.config(state="normal", text="🚀  İzole Temiz Klasör Üret")
+                    self.btn_update.config(state="normal")
+                    messagebox.showerror(
+                        "Güncelleme Hatası",
+                        f"Otomatik güncelleme sırasında bir sorun oluştu:\n{payload}"
+                    )
         except queue.Empty:
             pass
         except (tk.TclError, Exception):
@@ -988,6 +1242,12 @@ class UyapRedactorApp(tk.Tk):
 
     def destroy(self):
         """Uygulama kapatılırken bekleyen timer ve pulse işlerini temizle."""
+        if hasattr(self, "_update_check_job") and self._update_check_job:
+            try:
+                self.after_cancel(self._update_check_job)
+            except Exception:
+                pass
+            self._update_check_job = None
         if hasattr(self, "_queue_job") and self._queue_job:
             try:
                 self.after_cancel(self._queue_job)
@@ -997,6 +1257,91 @@ class UyapRedactorApp(tk.Tk):
         if hasattr(self, "lbl_status") and hasattr(self.lbl_status, "stop_pulse"):
             self.lbl_status.stop_pulse()
         super().destroy()
+
+    def _on_update_button_click(self):
+        """Üst bardaki güncelleme butonuna tıklandığında çalışır."""
+        if self.is_running:
+            return
+        if self.pending_update_info:
+            self._prompt_and_install_update(self.pending_update_info)
+        else:
+            self._check_updates(manual=True)
+
+    def _check_updates(self, manual: bool = False):
+        """GitHub Releases üzerinden yeni sürüm kontrolünü arka planda çalıştırır."""
+        if self.is_running:
+            return
+        if manual:
+            self.btn_update.config(state="disabled", text="⏳ Denetleniyor...")
+
+        def _check_worker():
+            try:
+                info = AutoUpdater.check_for_updates(APP_VERSION)
+                if info:
+                    self.msg_queue.put(("update_available", (info, manual)))
+                else:
+                    self.msg_queue.put(("update_up_to_date", manual))
+            except Exception as e:
+                self.msg_queue.put(("update_check_error", (str(e), manual)))
+
+        threading.Thread(target=_check_worker, daemon=True).start()
+
+    def _prompt_and_install_update(self, info: Dict):
+        """Kullanıcıya yeni sürüm onay penceresi gösterir ve onaylanırsa tek tıkla günceller."""
+        if self.is_running:
+            return
+        new_ver = info.get("version", "")
+        notes = (info.get("release_notes") or "").strip()
+        if len(notes) > 420:
+            notes = notes[:420].rstrip() + "..."
+
+        ask = messagebox.askyesno(
+            "Yeni Güncelleme Mevcut",
+            f"UYAP Maskeleme uygulamasının yeni bir sürümü yayınlandı!\n\n"
+            f"• Mevcut Sürüm: v{APP_VERSION}\n"
+            f"• Yeni Sürüm: v{new_ver}\n\n"
+            f"Yenilikler:\n{notes}\n\n"
+            f"Baştan kurulum yapmadan tek tıkla otomatik güncellensin ve yeniden başlatılsın mı?"
+        )
+        if not ask:
+            return
+
+        self.is_running = True
+        self.btn_run.config(state="disabled", text="Güncelleniyor...")
+        self.btn_update.config(state="disabled", text="⬇️ İndiriliyor...")
+        self.progress["value"] = 0
+        self.lbl_status.config(text=f"v{new_ver} güncellemesi indiriliyor...")
+        self._log(f"\n⬇️ [GÜNCELLEME] v{new_ver} paketi indiriliyor ve yerinde kuruluyor...\n")
+
+        threading.Thread(target=self._install_update_worker, args=(info,), daemon=True).start()
+
+    def _install_update_worker(self, info: Dict):
+        """DMG indirme, bağlama ve yerinde yenileme işlemini arka planda yürütür."""
+        download_url = info["download_url"]
+        fallback_total = info.get("size", 0) or 26_000_000
+
+        def on_progress(downloaded: int, total: int):
+            tot = total if total > 0 else fallback_total
+            pct = min(100, int((downloaded / max(tot, 1)) * 100))
+            mb_done = downloaded / (1024 * 1024)
+            mb_tot = tot / (1024 * 1024)
+            self.msg_queue.put(("progress", (pct, 100)))
+            self.msg_queue.put((
+                "status",
+                f"⬇️ Güncelleme indiriliyor: %{pct} ({mb_done:.1f} MB / {mb_tot:.1f} MB)"
+            ))
+
+        try:
+            target_app = AutoUpdater.download_and_install(download_url, progress_cb=on_progress)
+            self.msg_queue.put(("progress", (100, 100)))
+            self.msg_queue.put((
+                "log",
+                f"✅ [GÜNCELLEME] Yeni sürüm hazır ({target_app}). Uygulama yeniden başlatılıyor...\n"
+            ))
+            self.msg_queue.put(("update_ready_restart", target_app))
+        except Exception as e:
+            self.msg_queue.put(("log", f"❌ [HATA] Güncelleme başarısız: {e}\n"))
+            self.msg_queue.put(("update_install_error", str(e)))
 
     def _start_process(self):
         folder = self.folder_var.get().strip()

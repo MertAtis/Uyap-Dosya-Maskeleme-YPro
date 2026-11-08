@@ -6,7 +6,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[('uyap_redactor.py', '.')],
-    hiddenimports=['tkinter', 'tkinter.ttk', 'tkinter.filedialog', 'tkinter.messagebox', 'tkinter.scrolledtext', 'Vision', 'Cocoa', 'fitz', 'PIL'],
+    hiddenimports=['tkinter', 'tkinter.ttk', 'tkinter.filedialog', 'tkinter.messagebox', 'tkinter.scrolledtext', 'urllib.request', 'urllib.error', 'json', 'ssl', 'Vision', 'Cocoa', 'fitz', 'PIL'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -56,8 +56,8 @@ app = BUNDLE(
     info_plist={
         'CFBundleDisplayName': 'UYAP Maskeleme',
         'CFBundleName': 'UYAP Maskeleme',
-        'CFBundleShortVersionString': '1.0.0',
-        'CFBundleVersion': '1',
+        'CFBundleShortVersionString': '1.1.0',
+        'CFBundleVersion': '2',
         'LSMinimumSystemVersion': '11.0',
         'NSHighResolutionCapable': True,
     }
