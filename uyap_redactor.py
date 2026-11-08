@@ -28,7 +28,7 @@ import re
 import shutil
 import sys
 from datetime import datetime
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Dict, Optional, Set, Tuple
 
 
 class UyapRedactor:
@@ -39,26 +39,47 @@ class UyapRedactor:
     MASK_SERI_NO = "[SERİ_NO_GİZLENDİ]"
     MASK_MRZ = "[KİMLİK_MRZ_KODU_GİZLENDİ]"
     MASK_IBAN = "[IBAN_GİZLENDİ]"
+    MASK_KART = "[KART_NO_GİZLENDİ]"
     MASK_ADRES = "[ADRES_GİZLENDİ]"
     MASK_SICIL = "[SİCİL_GİZLENDİ]"
 
-    # Adli/İdari Unvan listesi (Hâkim, Savcı, Kâtip, Müdür varyasyonları)
+    # Adli/İdari Unvan listesi (Hâkim, Savcı, Kâtip, Mübaşir, Müdür ve OCR varyasyonları)
     TITLES_REGEX = (
-        r'(?:Başkan|Üye|H[aâ]kim|'
+        r'(?:Başkan|Üye|H[aâ]k[ıi]m|Mak[ıi][nml]|'
         r'(?:(?:Cumhuriyet|Soruşturma|Nöbetçi|Bilişim\s+Suçlar[ıi])\s+)?(?:Baş)?savc[ıi](?:s[ıi])?(?:\s+Vekili)?|'
-        r'C\.\s*Savc[ıi]s[ıi]|K[aâ]tip|Z\.?\s*K[aâ]tibi|Zab[ıi]t\s+K[aâ]tibi|'
-        r'Yaz[ıi]\s+İşleri\s+Müdürü)'
+        r'C\.\s*Savc[ıi]s[ıi]|K[aâ]t[ıi]p|Kal[ıi]p|Z\.?\s*K[aâ]t[ıi]bi|Zab[ıi]t\s+K[aâ]t[ıi]bi|'
+        r'Mübaş[ıi]r|Müb\.?|Yaz[ıi]\s+İşleri\s+Müdürü)(?!\w)'
     )
 
     @staticmethod
     def _normalize_ocr_digits(val: str) -> str:
-        """OCR kaynaklı l/I -> 1, O/o -> 0 dönüşümünü yapar."""
+        """OCR kaynaklı l/I/| -> 1, O/o -> 0, J -> 3 dönüşümünü yapar."""
         return (
             val.replace('l', '1')
             .replace('I', '1')
+            .replace('|', '1')
             .replace('O', '0')
             .replace('o', '0')
+            .replace('J', '3')
         )
+
+    @staticmethod
+    def is_valid_luhn(card_no: str) -> bool:
+        """16 haneli banka/kredi kartı numaraları için Luhn algoritması doğrulaması."""
+        digits_str = re.sub(r'[\s\-]', '', card_no)
+        if len(digits_str) != 16 or not digits_str.isdigit():
+            return False
+        if len(set(digits_str)) == 1:
+            return False
+        digits = [int(d) for d in digits_str]
+        total = 0
+        for i, d in enumerate(reversed(digits)):
+            if i % 2 == 1:
+                d *= 2
+                if d > 9:
+                    d -= 9
+            total += d
+        return total % 10 == 0
 
     @staticmethod
     def is_valid_tckn(tckn: str) -> bool:
@@ -133,12 +154,17 @@ class UyapRedactor:
     @classmethod
     def redact_iban(cls, text: str) -> Tuple[str, int]:
         """
-        Katman 2: TR ile başlayan IBAN numaralarını maskeler.
-        Boşluklu, bitişik veya OCR kaynaklı (l/I/O/^) bozulmalı 24 haneli IBAN'ları yakalar.
+        Katman 2: TR ile başlayan IBAN numaralarını ve 16 haneli banka/kredi kartı
+        numaralarını maskeler.
+        - Boşluklu, bitişik, OCR kaynaklı (l/I/O/^) bozulmalı veya sonuna tekil OCR
+          harfi ([A-Za-z]?) yapışmış 24 haneli IBAN'ları yakalar.
+        - Etiketli kart numaralarını (KART NO: ..., KREDİ KARTI NO: ...) ve
+          bağımsız 16 haneli Luhn algoritmasından geçen Visa/Mastercard ([45]\\d{15})
+          numaralarını yakalar.
         """
         count = 0
         pattern = re.compile(
-            r'(?i)(?:^|(?<=[\s\*\_\(\[\"\'\:\-\^]))TR[\s\^\.\-]*(?:[0-9lIOo][\s\^\.\-]*){24}(?![0-9a-zA-ZçğıöşüÇĞİÖŞÜ])'
+            r'(?i)(?:^|(?<=[\s\*\_\(\[\"\'\:\-\^]))TR[\s\^\.\-]*(?:[0-9lIOo][\s\^\.\-]*){24}[A-Za-z]?(?![0-9])'
         )
 
         def repl(m: re.Match) -> str:
@@ -151,6 +177,31 @@ class UyapRedactor:
             return raw
 
         redacted = pattern.sub(repl, text)
+
+        # 2B-1. Etiketli 16 haneli Kredi / ATM Kartı Numarası
+        p_card_labeled = re.compile(
+            r'(?i)(?P<label>\b(?:KART\s*NO|KRED[İI]\s*KART[Iİ]\s*NO)[\s\*:]+)(?P<card>(?:\d{4}[\s\-]?){3}\d{4}|\d{16})\b'
+        )
+
+        def repl_card_labeled(m: re.Match) -> str:
+            nonlocal count
+            count += 1
+            return f"{m.group('label')}{cls.MASK_KART}"
+
+        redacted = p_card_labeled.sub(repl_card_labeled, redacted)
+
+        # 2B-2. Bağımsız 16 haneli Luhn algoritmasından geçen Visa/Mastercard numaraları
+        p_card_luhn = re.compile(r'(?<![0-9A-Za-z])(?P<card>[45]\d{15})(?![0-9A-Za-z])')
+
+        def repl_card_luhn(m: re.Match) -> str:
+            nonlocal count
+            val = m.group('card')
+            if cls.is_valid_luhn(val):
+                count += 1
+                return cls.MASK_KART
+            return val
+
+        redacted = p_card_luhn.sub(repl_card_luhn, redacted)
         return redacted, count
 
     @classmethod
@@ -161,6 +212,7 @@ class UyapRedactor:
         - Eski nüfus cüzdanı seri no: [A-Z]\d{2}[\s-]?[0-9]{6} (Örn: A01 123456, A01123456, A01-123456)
         - Açık etiketli seri no kalıpları (Seri No: ..., Belge No: ..., Cüzdan No: ...)
         - 'Seri: A01 No: 123456' formatındaki bölünmüş eski nüfus cüzdanı kalıpları
+        - Noter vekaletnamelerindeki ters sıralı 'A10 seri ve 123456 numaralı' kalıpları
         Plakalar (34 ABC 123) ve dosya esas numaraları (2024/623) korunur.
         """
         count = 0
@@ -176,6 +228,18 @@ class UyapRedactor:
             return f"Seri No: {cls.MASK_SERI_NO}"
 
         text = p_split_old.sub(repl_split_old, text)
+
+        # Noter vekaletnamesi ters sıralı seri ve no ("A10 seri ve 123456 numaralı", OCR "A1D seri ve 123456 numaralı")
+        p_noter_old = re.compile(
+            r'(?i)\b([A-Z][0-9OIlD]{2})\s+seri\s+ve\s+(\d{5,6})\s+(?:numaral[ıi]|no\.?lu)'
+        )
+
+        def repl_noter_old(m: re.Match) -> str:
+            nonlocal count
+            count += 1
+            return f"{cls.MASK_SERI_NO} seri ve numaralı"
+
+        text = p_noter_old.sub(repl_noter_old, text)
 
         # Yeni çipli ve standart eski seri no kalıbı
         p = re.compile(
@@ -193,21 +257,92 @@ class UyapRedactor:
         return text, count
 
     @classmethod
-    def redact_tckn(cls, text: str) -> Tuple[str, int]:
+    def collect_known_tckns_from_text(cls, text: str) -> Set[str]:
+        """Metin içindeki geçerli (Mod-10) veya açık etiketli 11 haneli TCKN'leri toplar."""
+        known: Set[str] = set()
+
+        # 1. Geçerli (Mod-10/11) 11 haneli TCKN'ler
+        for m in re.finditer(r'(?<![A-Za-z0-9\./])[1-9]\d{10}(?![A-Za-z0-9\./])', text):
+            val = m.group(0)
+            if cls.is_valid_tckn(val):
+                known.add(val)
+
+        # 2. Açık etiketli TCKN'ler
+        p_lab = re.compile(
+            r'(?i)(?:\b(?:T\.?\s*C\.?(?:\s*(?:KN|Kimlik(?:\s*No(?:su|\.lu|marası)?)?|No(?:su|\.lu|marası)?))?|TCKN|YKN|K[İIÍ]ML[İIÍ]K\s*(?:NO(?:SU)?|NUMARASI))|IT\.?@?N[ºo°])[\s\*\_]*[:\t\.\-]?[\s\*\_]*(?P<num>[0-9lIOJ|/]{9,13})(?!\d)'
+        )
+        for m in p_lab.finditer(text):
+            norm = re.sub(r'\D', '', cls._normalize_ocr_digits(m.group('num')))
+            if len(norm) == 11 and norm[0] != '0':
+                known.add(norm)
+            elif len(norm) == 12 and norm[1] != '0':
+                known.add(norm[:11])
+                known.add(norm[1:12])
+
+        # 3. Sayı önce, etiket sonra gelenler (OCR bozulmalı TCKN + te nolu / T.C. ndu dahil)
+        p_nf = re.compile(
+            r'(?i)(?P<num>(?<!\d)[1-9][0-9lIOoJ|/ ]{8,12}[0-9lIOo]\b)[ \t]*(?:[,\'\-][ \t]*)?(?:T\.?\s*C\.?(?:\'?n[uo]l[uo]|\'?de|\'?ye|\.?nolu|\s*ndu)?|TCKN|te\s+nolu\b)'
+        )
+        for m in p_nf.finditer(text):
+            norm = re.sub(r'\D', '', cls._normalize_ocr_digits(m.group('num')))
+            if len(norm) == 11 and norm[0] != '0':
+                known.add(norm)
+
+        return known
+
+    @classmethod
+    def collect_known_tckns_from_folder(cls, folder: str) -> Set[str]:
+        """
+        Klasördeki tüm metin dosyalarını tarayarak bilinen TCKN setini (known_tckns) çıkarır.
+        Eğer hedef klasör '(Maskelenmis AI)' uzantılıysa ve aynı dizinde kaynak klasörü varsa,
+        kök TCKN hafızasını zenginleştirmek için kaynak klasördeki .md dosyalarını da salt-okunur tarar.
+        """
+        known: Set[str] = set()
+        folders_to_scan = [folder]
+
+        norm_folder = os.path.abspath(folder)
+        if norm_folder.endswith("(Maskelenmis AI)"):
+            orig_cand = re.sub(r'\s*\(Maskelenmis AI\)\s*$', '', norm_folder)
+            if os.path.isdir(orig_cand) and orig_cand not in folders_to_scan:
+                folders_to_scan.append(orig_cand)
+
+        for scan_dir in folders_to_scan:
+            if not os.path.isdir(scan_dir):
+                continue
+            for root, _, files in os.walk(scan_dir):
+                if "_kaynak" in root or ".git" in root or "node_modules" in root:
+                    continue
+                for f in files:
+                    if f.endswith((".md", ".txt")) and not f.endswith(".bak"):
+                        fp = os.path.join(root, f)
+                        try:
+                            with open(fp, "r", encoding="utf-8", errors="replace") as rf:
+                                known.update(cls.collect_known_tckns_from_text(rf.read()))
+                        except Exception:
+                            pass
+        return known
+
+    @classmethod
+    def redact_tckn(cls, text: str, known_tckns: Optional[Set[str]] = None) -> Tuple[str, int]:
         """
         Katman 4: TCKN ve YKN numaralarını maskeler.
-        1) Açık etiketli (TC Kimlik No:, TCKN:, T.C., Kimlik No vb., Markdown kalın/italik dahil)
-           ön ekli 9-11 haneli sayılar (Dilekçelerdeki yazım hatalı 10 haneli TCKN'ler dahil).
-        2) Sayı önce, etiket sonra gelen durumlar ("12345678901 TC'nolu", "1234567890 TC").
-        3) Standart 11 haneli bağımsız sayılar (Mod-10/11 algoritmik doğrulamadan geçenler).
-
-        Anne/Baba adı ve PTT tebliğ mazbatalarındaki yıldızlı/kısmi TCKN'ler (123*****890 vb.) korunur.
+        1A) Açık etiketli (TC Kimlik No:, TCKN:, T.C., Kimlik No vb., Markdown kalın/italik dahil)
+            ön ekli veya son ekli 9-13 haneli sayılar (10 ve 12 haneli yazım hataları dahil).
+        1B) İki Aşamalı Bilinen TCKN Kök Eşleştirmesi (Known TCKN Fuzzy Match):
+            - Standart 11 haneli Mod-10/11 doğrulamasından geçen TCKN'ler.
+            - Bilinen bir TCKN ile Hamming mesafesi <= 2 olan 11 haneli OCR bozulmalı sayılar.
+            - Bilinen bir TCKN'nin ilk 5 hanesi (prefix5) veya son 4 hanesi (suffix4) ile eşleşen
+              10-14 karakterlik OCR gürültülü diziler.
+            - Banka dekontu OCR'larında boşluk veya |// ile bölünmüş 11 haneli TCKN'ler.
+        1C) Tebligatlardaki yıldızlı/tireli kısmi TCKN'ler (TC:123*****890 vb.).
         """
         count = 0
+        local_known: Set[str] = set(known_tckns) if known_tckns else set()
+        local_known.update(cls.collect_known_tckns_from_text(text))
 
-        # 1. Açık Etiketli TCKN (9-11 hane, OCR l/I/O bozulmaları ve markdown ** bold desteği dahil)
+        # 1A-1. Açık Etiketli TCKN (9-13 hane, OCR l/I/O/J/|// bozulmaları ve markdown ** bold desteği dahil)
         p_labeled = re.compile(
-            r'(?i)(?P<label>\b(?:T\.?\s*C\.?(?:\s*(?:KN|Kimlik(?:\s*No(?:su|\.lu|marası)?)?|No(?:su|\.lu|marası)?))?|TCKN|KİMLİK\s+(?:NO(?:SU)?|NUMARASI))[\s\*\_]*[:\t\.\-]?[\s\*\_]*)(?P<num>[0-9lIO]{9,11})(?!\d)'
+            r'(?i)(?P<label>(?:\b(?:T\.?\s*C\.?(?:\s*(?:KN|Kimlik(?:\s*No(?:su|\.lu|marası)?)?|No(?:su|\.lu|marası)?))?|TCKN|YKN|K[İIÍ]ML[İIÍ]K\s*(?:NO(?:SU)?|NUMARASI))|IT\.?@?N[ºo°])[\s\*\_]*[:\t\.\-]?[\s\*\_]*)(?P<num>[0-9lIOoJ|/]{9,13})(?!\d)'
         )
 
         def repl_labeled(m: re.Match) -> str:
@@ -220,30 +355,112 @@ class UyapRedactor:
 
         text = p_labeled.sub(repl_labeled, text)
 
-        # 1b. Sayı önce, etiket sonra gelen durumlar (örn: "13886414592 T.C'nolu", "12345678901 TC")
+        # 1A-2. Sayı önce, etiket sonra gelen durumlar (9-13 hane; örn: "12345678901 T.C'nolu")
         p_num_first = re.compile(
-            r'(?i)(?P<num>\b[0-9]{9,11}\b)(?P<mid>\s*(?:[,\'\-]\s*)?)(?P<label>T\.?\s*C\.?(?:\'?n[uo]l[uo]|\'?de|\'?ye|\.nolu)?|TCKN)',
+            r'(?i)(?P<num>(?<!\d)[1-9][0-9lIOoJ|/ ]{8,12}[0-9lIOo]\b)(?P<mid>[ \t]*(?:[,\'\-][ \t]*)?)(?P<label>T\.?\s*C\.?(?:\'?n[uo]l[uo]|\'?de|\'?ye|\.?nolu|\s*ndu)?|TCKN|te\s+nolu\b)',
         )
 
         def repl_num_first(m: re.Match) -> str:
             nonlocal count
-            count += 1
-            return f"{cls.MASK_TCKN}{m.group('mid')}{m.group('label')}"
+            raw_num = m.group('num')
+            if sum(c.isdigit() for c in raw_num) >= 7:
+                count += 1
+                return f"{cls.MASK_TCKN}{m.group('mid')}{m.group('label')}"
+            return m.group(0)
 
         text = p_num_first.sub(repl_num_first, text)
 
-        # 2. Rakam olmayan karakterlerle çevrili 11 haneli sayılar (Algoritmik kontrol)
-        p_standalone = re.compile(r'(?<!\d)[1-9]\d{10}(?!\d)')
+        # 1B-1. Banka dekontu / kurum sorgusu OCR'larında bölünmüş 11 haneli TCKN'ler
+        p_ctx_split = re.compile(
+            r'(?i)(?P<prefix>(?:TCKN|YKN|Kimlik)[^\r\n]{0,25}?)(?<![\d\./])(?P<num>[1-9]\d{6,8}[ \t|/][0-9lIOoJ]{2,4})(?![\d\./])'
+        )
+
+        def repl_ctx_split(m: re.Match) -> str:
+            nonlocal count
+            count += 1
+            return f"{m.group('prefix')}{cls.MASK_TCKN}"
+
+        text = p_ctx_split.sub(repl_ctx_split, text)
+
+        # Bağımsız veya "sc" sonekli OCR bölünmüş TCKN
+        p_ocr_split = re.compile(
+            r'(?<![A-Za-z0-9\./])(?P<num>[1-9]\d{5,7}[ \t|/][0-9lIOoJ]{3,4})(?![A-Za-z0-9\./])'
+        )
+
+        def repl_ocr_split(m: re.Match) -> str:
+            nonlocal count
+            raw = m.group('num')
+            norm_digits = re.sub(r'[ \t|/]', '', cls._normalize_ocr_digits(raw))
+            # 1) Boşluk/ayırıcı kaldırıldığında tam 11 hane olanlar
+            # 2) '|' veya '/' karakteri 1 rakamının OCR bozulması olup 6+4=10 rakam olanlar
+            if len(norm_digits) == 11 or ('|' in raw and len(norm_digits) == 10):
+                count += 1
+                return cls.MASK_TCKN
+            return raw
+
+        text = p_ocr_split.sub(repl_ocr_split, text)
+
+        # 1B-2. 11 haneli bağımsız sayılar (Mod-10/11 doğrulaması VEYA bilinen TCKN ile Hamming mesafesi <= 2)
+        p_standalone = re.compile(r'(?<![A-Za-z0-9\./])[1-9]\d{10}(?![A-Za-z0-9\./])')
 
         def repl_standalone(m: re.Match) -> str:
             nonlocal count
             val = m.group(0)
             if cls.is_valid_tckn(val):
                 count += 1
+                local_known.add(val)
                 return cls.MASK_TCKN
+            for kt in local_known:
+                if len(kt) == 11 and sum(a != b for a, b in zip(val, kt)) <= 2:
+                    count += 1
+                    return cls.MASK_TCKN
+                if len(kt) == 11 and kt[:5] in val[:6]:
+                    count += 1
+                    return cls.MASK_TCKN
             return val
 
         text = p_standalone.sub(repl_standalone, text)
+
+        # 1B-3. Bilinen TCKN'ler için İlk 5 Hane (prefix5) veya Son 4 Hane (suffix4) Bulanık Eşleştirmesi (Known TCKN Fuzzy Match)
+        if local_known:
+            prefixes = sorted({kt[:5] for kt in local_known if len(kt) == 11})
+            suffixes = sorted({kt[-4:] for kt in local_known if len(kt) == 11})
+            pref_union = "|".join(re.escape(p) for p in prefixes)
+            suff_union = "|".join(re.escape(s) for s in suffixes)
+
+            p_fuzzy = re.compile(
+                rf'(?<![A-Za-z0-9\./])(?P<num>'
+                rf'(?:[1-9]?(?:{pref_union})[0-9lIOoJ|/ ]{{4,8}}[0-9lIOoJ])|'
+                rf'(?:[1-9][0-9lIOoJ|/ ]{{5,8}}(?:{suff_union}))'
+                rf')(?![A-Za-z0-9\./])'
+            )
+
+            def repl_fuzzy(m: re.Match) -> str:
+                nonlocal count
+                raw = m.group('num')
+                if cls.MASK_TCKN in raw:
+                    return raw
+                # Tarih (08.10.2021) veya para tutarlarını asla bozmamak için kontrol
+                norm = cls._normalize_ocr_digits(raw)
+                digit_cnt = sum(c.isdigit() for c in norm)
+                if 10 <= len(raw) <= 14 and digit_cnt >= 9:
+                    count += 1
+                    return cls.MASK_TCKN
+                return raw
+
+            text = p_fuzzy.sub(repl_fuzzy, text)
+
+        # 1C. Tebligatlardaki Yıldızlı/Tireli Kısmi TCKN'ler (TC:226*****874, TC:309*****704, TC:382---"566)
+        p_partial = re.compile(
+            r'(?i)(?:T\.?C\.?[:\s]*)?\b[1-9]\d{2}(?=[\*\-\"\s]*[\*\-\"])[\*\-\"\s]{3,7}\d{3}\b'
+        )
+
+        def repl_partial(m: re.Match) -> str:
+            nonlocal count
+            count += 1
+            return cls.MASK_TCKN
+
+        text = p_partial.sub(repl_partial, text)
         return text, count
 
     @classmethod
@@ -272,16 +489,17 @@ class UyapRedactor:
     @classmethod
     def redact_sicil(cls, text: str) -> Tuple[str, int]:
         """
-        Katman 6: Hâkim, Savcı, Kâtip ve Müdür sicil numaralarını maskeler.
-        Unvan bitişikleri, tutanak başlıkları, imza tabloları, iddianame savcı bloğu
-        ve Adli Sicil düzenleyen kişi satırlarındaki 5–6 haneli sicil kodlarını hedefler.
-        Para tutarları (örn. 200.000 TL), tarihler ve dosya esas numaraları korunur.
+        Katman 6: Hâkim, Savcı, Kâtip, Mübaşir ve Müdür sicil numaralarını maskeler.
+        Unvan bitişikleri, tutanak başlıkları, cümle içi 'Unvan + Ad Soyad + Sicil' dizilimleri,
+        imza tabloları, iddianame savcı bloğu ve Adli Sicil düzenleyen kişi satırlarındaki
+        5–6 haneli sicil kodlarını hedefler.
+        Para tutarları (örn. 200.000 TL), tarihler, kanun maddeleri ve dosya esas numaraları korunur.
         """
         count = 0
         titles = cls.TITLES_REGEX
 
-        # 1a. Unvan doğrudan önünde olan sicil (örn. "Başkan 211094", "Cumhuriyet Savcısı-234878", "C.Savcısı:194250^")
-        p1 = re.compile(rf'(?i)(?P<title>{titles})(?P<mid>[\s\*\-_|:\t]+)(?P<sicil>(?<!\d)\d{{5,6}}(?!\d))')
+        # 1a. Unvan doğrudan önünde olan sicil (örn. "Başkan 211094", "Kalip/123456", "Mübaşir 234567", "Makin 112233")
+        p1 = re.compile(rf'(?i)(?P<title>\b{titles})(?P<mid>[\s\*\-_|:\t\/]+)(?P<sicil>(?<![\d\.])\d{{5,6}}(?![\d\./]))')
 
         def repl1(m: re.Match) -> str:
             nonlocal count
@@ -291,7 +509,7 @@ class UyapRedactor:
         text = p1.sub(repl1, text)
 
         # 1b. Unvan doğrudan arkasında olan sicil (örn. "36101 Cumhuriyet Savcısı", "AHMET KABADAYI 123456 Soruşturma Savcısı")
-        p2 = re.compile(rf'(?i)(?P<sicil>(?<!\d)\d{{5,6}}(?!\d))(?P<mid>[\s\*\-_|:\t]+)(?P<title>{titles}\b)')
+        p2 = re.compile(rf'(?i)(?P<sicil>(?<![\d\./])\d{{5,6}}(?![\d\./]))(?P<mid>[\s\*\-_|:\t\/]+)(?P<title>{titles}\b)')
 
         def repl2(m: re.Match) -> str:
             nonlocal count
@@ -299,6 +517,18 @@ class UyapRedactor:
             return f"{cls.MASK_SICIL}{m.group('mid')}{m.group('title')}"
 
         text = p2.sub(repl2, text)
+
+        # 1c. Cümle içi "Unvan + 1-4 kelimelik Ad Soyad + 5-6 haneli Sicil" (örn. "Hakim Ayşe Kaya 112233, Katıp Mehmet Demir 223344, Mübaşir Ali Çelik 334455")
+        p_inline_named = re.compile(
+            rf'(?i)(?P<prefix>\b{titles}\s+(?:[A-ZÇĞİÖŞÜa-zçğıöşü\.]+\s+){{1,4}})(?P<sicil>(?<![\d\./])\d{{5,6}}(?![\d\./]))(?!(?:\s*(?:TL|Türk\s*Liras[ıi]|USD|EUR|say[ıi]l[ıi]|Esas|Karar)\b))'
+        )
+
+        def repl_inline_named(m: re.Match) -> str:
+            nonlocal count
+            count += 1
+            return f"{m.group('prefix')}{cls.MASK_SICIL}"
+
+        text = p_inline_named.sub(repl_inline_named, text)
 
         # 2. Tutanak/Karar başlık satırları: "**BAŞKAN :** Erhan AKMAN  211094"
         p3 = re.compile(
@@ -334,8 +564,10 @@ class UyapRedactor:
 
         text = p5.sub(repl5, text)
 
-        # 5. Açık etiketli sicil ("Sicil No: 123456", "Sicili : 123456")
-        p6 = re.compile(r'(?i)(?P<lead>\bSicil(?:i| No| Numaras[ıi])?[\s\*]*[:\t\-][\s\*]*)(?<!\d)(?P<sicil>\d{4,7})(?!\d)')
+        # 5. Açık etiketli sicil ("Sicil No: 123456", "Sicili : 123456") ve OCR bozulmalı imza satırı ("+0644-112233")
+        p6 = re.compile(
+            r'(?im)(?P<lead>\bSicil(?:i| No| Numaras[ıi])?[\s\*]*[:\t\-][\s\*]*|^[ \t]*\+\d{3,4}[\-\s]+)(?<!\d)(?P<sicil>\d{4,7})(?!\d)'
+        )
 
         def repl6(m: re.Match) -> str:
             nonlocal count
@@ -350,8 +582,8 @@ class UyapRedactor:
     def redact_address(cls, text: str) -> Tuple[str, int]:
         """
         Katman 7: Açık Adres bilgilerini maskeler.
-        UYAP standart şablonundaki (Mah./Mh., Cad./Sk., No:, İç Kapı No:, İlçe/İl)
-        açık ikametgah, işyeri ve tebligat adreslerini hedefler.
+        UYAP standart şablonundaki (Mah./Mh., Cad./Sk./5k., No:/Ne:/K:/D:/Blok/Toki/Apt., İç Kapı No:, İlçe/İl)
+        açık ikametgah, işyeri ve tebligat adreslerini ve iki satıra bölünmüş adres devamlarını hedefler.
         Nüfus kayıt yerleri (cilt/aile sıra no), doğum yerleri ve taraf ad-soyadları korunur.
         """
         count = 0
@@ -390,17 +622,18 @@ class UyapRedactor:
 
         text = p2.sub(repl2, text)
 
-        # 3. Genel Yapısal Açık Adres Kalıbı
+        # 3. Genel Yapısal Açık Adres Kalıbı (K:/D:/Blok/Toki/Apt ve OCR 5k./Ne:/|¢ Kapı varyasyonları dahil)
         p3 = re.compile(
-            r'(?i)(?P<lead>(?:^|(?<=[\s\|\#\:;\,\.\^\(])))'
+            r'(?i)(?P<lead>(?:^|(?<=[\s\|\#\:;\,\.\^\(\-])))'
             r'(?P<addr>'
-            r'(?:[A-ZÇĞİÖŞÜa-zçğıöşü0-9\.\-\/]+\s+){0,4}?'
-            r'\b(?:Mahallesi|Mah\.?|Mh\.?|Cadde(?:si)?|Cad\.?|Cd\.?|Sokak|Sokağ[ıi]|Sok\.?|Sk\.?|Bulvar[ıi]|Bulv\.?|Blv\.?|Küme\s*Evler[i]?)[\s\,\.\^\-]+'
-            r'[^\r\n\|]{0,60}?'
-            r'\b(?:No|[İiIıl]ç\s*Kap[ıi]\s*No|Kat|Daire)[\s\.\-\:\^]*[0-9X][^\r\n\|]{0,60}?'
-            r'(?:[A-ZÇĞİÖŞÜa-zçğıöşü\s]{2,25}/\s*[A-ZÇĞİÖŞÜa-zçğıöşü]{2,25})?'
+            r'(?:[A-ZÇĞİÖŞÜa-zçğıöşü0-9]+\s+){0,2}?'
+            r'\b(?:Mahallesi|Mah\.?|Mh\.?|Cadde(?:si)?|Cad\.?|Cd\.?|Sokak|Sokağ[ıi]|Sok\.?|Sk\.?|5k\.?|Bulvar[ıi]|Bulv\.?|Blv\.?|Küme\s*Evler[i]?|Toki\s+Evleri)[\s\,\.\^\-]+'
+            r'(?:\|¢|[^\r\n\|]){0,100}?'
+            r'(?:\b(?:No|Ne|[İiIıl]ç\s*Kap[ıi](?:\s*No)?|Kat|K|Daire|D|Blok|Blk|Apt|Apartman[ıi]|Sitesi|Evleri)|\|¢\s*Kap[ıi](?:\s*No)?)(?:[\s\.\-\:\^\/]*[0-9A-Za-z]|\s+No\b)'
+            r'(?:\|¢|[^\r\n\|]){0,100}?'
+            r'(?:[A-ZÇĞİÖŞÜa-zçğıöşü\s]{2,25}[\/J]\s*[A-ZÇĞİÖŞÜa-zçğıöşü0-9\s\,\.]{2,25})?'
             r')'
-            r'(?P<tail>(?=\s+(?:adresinde\s+oturur|ikamet\s+eder|adresinde|adresine|SUÇUN\s+TARİHİ|Tel\b|TC\s*Kimlik|\d{2}\.\d{2}\.\d{4}\b|\d\s+5\d{9}\b)|\s*[\|\r\n]|$))'
+            r'(?P<tail>(?=\s+(?:adresinde\s+oturur|ikamet\s+eder|adresinde|adresine|SUÇUN\s+TARİHİ|Tel\b|TC\s*Kimlik|\d{2}\.\d{2}\.\d{4}\b|\d\s+5\d{9}\b)|\s*(?:\|(?!¢)|\r|\n)|$))'
         )
 
         def repl3(m: re.Match) -> str:
@@ -412,16 +645,32 @@ class UyapRedactor:
 
         text = p3.sub(repl3, text)
 
-        # 4. Kapalı Tebligat çok satırlı devam eden İlçe/İl kuyruk temizliği
+        # 4. Kapalı Tebligat ve İki Satıra Bölünmüş Dilekçe Adresleri devam satırı temizliği
+        # (Örn: "Bozkurt Mah. Toki Evleri D/10-A K:2\n... D:40 Burdur Merkez/ BURDUR" veya "[ADRES_GİZLENDİ]\nK:2 D:40 Burdur Merkez/ BURDUR")
         p4 = re.compile(
-            r'(?P<masked>\[ADRES_GİZLENDİ\])(?P<ws>\s*\r?\n(?:\s*\r?\n)?[\s\#\*]*)(?P<city>[A-ZÇĞİÖŞÜa-zçğıöşü\s]{2,30}/\s*[A-ZÇĞİÖŞÜa-zçğıöşü]{2,20})(?=\s*\r?\n|$)'
+            r'(?i)(?P<masked>\[ADRES_GİZLENDİ\])'
+            r'(?P<ws>\s*\r?\n(?:\s*\r?\n)?[\s\#\*]*(?:\.\.\.\s*)?)'
+            r'(?P<city>(?:(?:K|Kat|No|Blok|D|Daire)[\s\:\.\-]*[0-9A-Za-z][0-9A-Za-z\s\:\.\-]*\s+)?[A-ZÇĞİÖŞÜa-zçğıöşü\s]{2,30}/\s*[A-ZÇĞİÖŞÜa-zçğıöşü]{2,20})'
+            r'(?=\s*\r?\n|$)'
         )
         text = p4.sub(r'\g<masked>', text)
+
+        # 4b. Araya 1 satır girmiş veya tek başına kalmış "D:40 Burdur Merkez/ BURDUR" / "Daire: 3 Burdur Merkez/ BURDUR" devam satırları
+        p4_orphan = re.compile(
+            r'(?im)^(?P<lead>[ \t]*(?:\.\.\.[ \t]*)?)(?P<cont>(?:(?:K|Kat)[ \t\:\.]*\d+[ \t]+)?(?:D|Daire)[ \t\:\.]*\d[0-9 \t]*[ \t]+[A-ZÇĞİÖŞÜa-zçğıöşü ]{2,30}/[ \t]*[A-ZÇĞİÖŞÜa-zçğıöşü]{2,20})[ \t]*$'
+        )
+
+        def repl4_orphan(m: re.Match) -> str:
+            nonlocal count
+            count += 1
+            return f"{m.group('lead')}{cls.MASK_ADRES}"
+
+        text = p4_orphan.sub(repl4_orphan, text)
 
         return text, count
 
     @classmethod
-    def redact_text(cls, text: str) -> Tuple[str, Dict[str, int]]:
+    def redact_text(cls, text: str, known_tckns: Optional[Set[str]] = None) -> Tuple[str, Dict[str, int]]:
         """
         Tüm katmanları sırasıyla uygulayarak metni maskeler.
         Dönüş: (maskelenmiş_metin, istatistik_sözlüğü)
@@ -440,14 +689,14 @@ class UyapRedactor:
         # Katman 1: Kimlik MRZ (Önce çalışır, blok halinde temizler)
         t, stats["mrz"] = cls.redact_mrz(text)
 
-        # Katman 2: IBAN
+        # Katman 2: IBAN ve Banka Kartı No
         t, stats["iban"] = cls.redact_iban(t)
 
         # Katman 3: Kimlik Seri No
         t, stats["seri_no"] = cls.redact_seri_no(t)
 
-        # Katman 4: TCKN (Etiketli 9-11 hane ve algoritmik 11 hane)
-        t, stats["tckn"] = cls.redact_tckn(t)
+        # Katman 4: TCKN (Etiketli 9-13 hane, algoritmik 11 hane, Known TCKN Fuzzy Match ve kısmi TCKN)
+        t, stats["tckn"] = cls.redact_tckn(t, known_tckns=known_tckns)
 
         # Katman 5: Cep Telefonu
         t, stats["telefon"] = cls.redact_phone(t)
@@ -470,17 +719,27 @@ class UyapRedactor:
         return t, stats
 
     @classmethod
-    def redact_file_to_memory(cls, file_path: str, encoding: str = "utf-8") -> Tuple[str, Dict[str, int]]:
+    def redact_file_to_memory(
+        cls,
+        file_path: str,
+        encoding: str = "utf-8",
+        known_tckns: Optional[Set[str]] = None
+    ) -> Tuple[str, Dict[str, int]]:
         """
         Dosyayı salt-okunur (read-only) modda belleğe okur ve maskeler.
         Orijinal dosyaya KESİNLİKLE yazma işlemi yapmaz.
         """
         with open(file_path, "r", encoding=encoding, errors="replace") as f:
             content = f.read()
-        return cls.redact_text(content)
+        return cls.redact_text(content, known_tckns=known_tckns)
 
     @classmethod
-    def extract_and_redact_pdf(cls, pdf_path: str, max_pages: int = 150) -> Tuple[str, Dict[str, int]]:
+    def extract_and_redact_pdf(
+        cls,
+        pdf_path: str,
+        max_pages: int = 150,
+        known_tckns: Optional[Set[str]] = None
+    ) -> Tuple[str, Dict[str, int]]:
         """
         PDF belgesini çevrimdışı olarak metne dönüştürür ve maskeler.
         1. fitz ile dijital metin katmanı varsa doğrudan alır.
@@ -535,10 +794,14 @@ class UyapRedactor:
                         pass
 
         full_raw = f"# {os.path.basename(pdf_path)}\n\n" + "\n\n---\n\n".join(pages_content)
-        return cls.redact_text(full_raw)
+        return cls.redact_text(full_raw, known_tckns=known_tckns)
 
     @classmethod
-    def extract_and_redact_image(cls, img_path: str) -> Tuple[str, Dict[str, int]]:
+    def extract_and_redact_image(
+        cls,
+        img_path: str,
+        known_tckns: Optional[Set[str]] = None
+    ) -> Tuple[str, Dict[str, int]]:
         """
         TIFF, PNG, JPEG formatındaki taranmış evrakları Apple Vision OCR ile
         yerel ve çevrimdışı olarak metne dönüştürür ve maskeler.
@@ -598,16 +861,20 @@ class UyapRedactor:
             return "", empty_stats
 
         full_raw = f"# {os.path.basename(img_path)}\n\n" + "\n\n---\n\n".join(pages_content)
-        return cls.redact_text(full_raw)
+        return cls.redact_text(full_raw, known_tckns=known_tckns)
 
     @classmethod
-    def extract_and_redact_scanned_file(cls, file_path: str) -> Tuple[str, Dict[str, int]]:
+    def extract_and_redact_scanned_file(
+        cls,
+        file_path: str,
+        known_tckns: Optional[Set[str]] = None
+    ) -> Tuple[str, Dict[str, int]]:
         """PDF veya TIFF/Görsel dosyalarını uzantısına göre en uygun OCR motoruyla işler ve maskeler."""
         ext = os.path.splitext(file_path)[1].lower()
         if ext == ".pdf":
-            return cls.extract_and_redact_pdf(file_path)
+            return cls.extract_and_redact_pdf(file_path, known_tckns=known_tckns)
         elif ext in (".tif", ".tiff", ".png", ".jpg", ".jpeg"):
-            return cls.extract_and_redact_image(file_path)
+            return cls.extract_and_redact_image(file_path, known_tckns=known_tckns)
         return "", {"tckn": 0, "telefon": 0, "seri_no": 0, "mrz": 0, "iban": 0, "sicil": 0, "adres": 0, "total": 0}
 
     @classmethod
@@ -764,6 +1031,9 @@ class UyapRedactor:
             "last_file_path": "",
         }
 
+        # 0. Klasör genelinde bilinen TCKN setini (known_tckns) topla (2 aşamalı hafıza)
+        known_tckns = cls.collect_known_tckns_from_folder(src_folder)
+
         # 1. Mevcut Markdown ve Metin Belgelerini Topla
         md_files = []
         for root, dirs, files in os.walk(src_folder):
@@ -785,7 +1055,7 @@ class UyapRedactor:
                 with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                     content = f.read()
 
-                redacted_text, stats = cls.redact_text(content)
+                redacted_text, stats = cls.redact_text(content, known_tckns=known_tckns)
                 for k in ["tckn", "telefon", "seri_no", "mrz", "iban", "sicil", "adres", "total"]:
                     grand_stats[k] += stats[k]
 
@@ -827,7 +1097,7 @@ class UyapRedactor:
         ocr_converted_list = []
         for full_p, base_rel, target_dest_md in scanned_files:
             try:
-                red_text, p_stats = cls.extract_and_redact_scanned_file(full_p)
+                red_text, p_stats = cls.extract_and_redact_scanned_file(full_p, known_tckns=known_tckns)
                 grand_stats["processed_items"] += 1
                 grand_stats["last_file_stats"] = p_stats
                 grand_stats["last_file_path"] = base_rel
@@ -874,7 +1144,7 @@ class UyapRedactor:
                 try:
                     with open(sum_src, "r", encoding="utf-8", errors="replace") as sf:
                         s_content = sf.read()
-                    s_red, s_stats = cls.redact_text(s_content)
+                    s_red, s_stats = cls.redact_text(s_content, known_tckns=known_tckns)
                     for k in ["tckn", "telefon", "seri_no", "mrz", "iban", "sicil", "adres", "total"]:
                         grand_stats[k] += s_stats[k]
                     with open(sum_dest, "w", encoding="utf-8") as swf:
@@ -976,17 +1246,37 @@ def main():
     if args.in_place:
         print("Yerinde (in-place) maskeleme çalıştırılıyor...")
         target_dir = args.path if os.path.isdir(args.path) else os.path.dirname(args.path)
+        known_tckns = UyapRedactor.collect_known_tckns_from_folder(target_dir)
+        in_place_stats = {
+            "tckn": 0,
+            "telefon": 0,
+            "seri_no": 0,
+            "mrz": 0,
+            "iban": 0,
+            "sicil": 0,
+            "adres": 0,
+            "total": 0,
+        }
         for root, _, files in os.walk(target_dir):
             if "_kaynak" in root or ".git" in root:
                 continue
             for file in files:
                 if file.endswith((".md", ".txt")) and not file.endswith(".bak"):
                     fp = os.path.join(root, file)
-                    red, stats = UyapRedactor.redact_file_to_memory(fp)
+                    red, stats = UyapRedactor.redact_file_to_memory(fp, known_tckns=known_tckns)
+                    for k in in_place_stats:
+                        in_place_stats[k] += stats[k]
                     if stats["total"] > 0:
                         with open(fp, "w", encoding="utf-8") as wf:
                             wf.write(red)
-        UyapRedactor.sync_index_md(target_dir)
+        synced = UyapRedactor.sync_index_md(target_dir)
+        print(
+            f"Maskelenen TCKN: {in_place_stats['tckn']}, Telefon: {in_place_stats['telefon']}, "
+            f"Seri: {in_place_stats['seri_no']}, MRZ: {in_place_stats['mrz']}, "
+            f"IBAN/Kart: {in_place_stats['iban']}, Sicil: {in_place_stats['sicil']}, "
+            f"Adres: {in_place_stats['adres']}, Toplam: {in_place_stats['total']}, "
+            f"İndeks Senkron: {synced}"
+        )
         print("Yerinde maskeleme ve indeks senkronizasyonu tamamlandı.")
         return
 

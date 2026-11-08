@@ -129,14 +129,97 @@ class TestUyapRedactor(unittest.TestCase):
             self.assertEqual(redacted, expected, f"Failed for: {inp}")
             self.assertGreaterEqual(count, 1)
 
-    def test_preservation_ptt_and_parents(self):
-        """Önemli kural: PTT yıldızlı TCKN ve Anne/Baba adlarının KORUNMASI."""
-        text = "PTT Tebliğ Mazbatası TCKN: 123*****890 Anne Adı: AYŞE Baba Adı: ALİ ve doğum yeri Burdur."
+    def test_preservation_parents_and_partial_tckn_masking(self):
+        """Önemli kural: PTT yıldızlı/tireli kısmi TCKN maskelenmeli, Anne/Baba adları KORUNMALI."""
+        text = (
+            "PTT Tebliğ Mazbatası TC:226*****874, TC:309*****704, TC:382---\"566 ve 123*****890 "
+            "Anne Adı: AYŞE Baba Adı: ALİ ve doğum yeri Burdur."
+        )
         redacted, stats = UyapRedactor.redact_text(text)
-        self.assertIn("123*****890", redacted, "PTT yıldızlı TCKN maskelenmemelidir!")
+        self.assertNotIn("226*****874", redacted)
+        self.assertNotIn("309*****704", redacted)
+        self.assertNotIn('382---"566', redacted)
+        self.assertNotIn("123*****890", redacted)
         self.assertIn("Anne Adı: AYŞE", redacted, "Anne Adı maskelenmemelidir!")
         self.assertIn("Baba Adı: ALİ", redacted, "Baba Adı maskelenmemelidir!")
-        self.assertEqual(stats["tckn"], 0)
+        self.assertEqual(stats["tckn"], 4)
+
+    def test_real_case_ocr_leaks_and_strict_immunity(self):
+        """
+        6 teknik problemdeki tüm OCR kaçak kalıplarının %100 yakalanması ve hukuki analiz
+        verilerinin (taraf/hâkim/kâtip/mübaşir adları, plakalar, tarihler, esas/karar no,
+        tutarlar) ASLA bozulmaması testi (anonimleştirilmiş sentetik verilerle).
+        """
+        known = {"12345678950", "10000000146"}
+        sample_doc = (
+            "Mahkeme: Örnek Aile Mahkemesi Esas No: 2021/542, Tarih: 08.10.2021 ve 22.09.2026\n"
+            "Yargıtay 2. HD E. 2022/10035, K. 2024/171, HMK 324, TMK 236, Tutar: 200.000 TL\n"
+            "Araç Plakaları: 06 AB 123, 34 XY 78, 35 CD 456, 07 EF 789, 16 GH 281\n"
+            "1A) Tanık Ahmet Yılmaz T.C: 123456789012\n"
+            "1B) OCR Bozuk TCKN'ler: 10500000146, 123456|8950, 1234567 J9l0, 12345678 950 sc, 11234567895, IT.@Nº 123456789/82\n"
+            "1C) Kısmi TCKN'ler: TC:123*****890, TC:309*****100, TC:382---\"500\n"
+            "2A) Yapışık OCR IBAN: 931 00729 DAN TR330006 100511123456789012A\n"
+            "2B) ATM PARA ÇEKME KART NO:4532015112830366\n"
+            "3A) AYŞE ÖRNEK. Cumhuriyet Mah. Toki Evleri D/10-A K:2 D:40 Merkez/ ANKARA\n"
+            "3A-2) AYŞE ÖRNEK- Cumhuriyet Mah. Toki Evleri D/10-A K:2 D:4 0 Merkez/ ANKARA\n"
+            "3B-1) Yenimahalle Mah, Atatürk 5k. Ne:17 |¢ Kapı No:4 Ankara\n"
+            "3B-2) Cumhuriyet Mah. Toki Evleri D/10-A K:2\n"
+            "... D:40 Merkez/ ANKARA\n"
+            "4A) Hakim Ayşe Kaya 112233, Katıp Mehmet Demir 223344, Mübaşir Ali Çelik 334455\n"
+            "4B) Kalip/223344 ve Mübaşir 334455 ve Makin 112233\n"
+            "5) 1540 kayıt, A10 seri ve 123456 numaralı fotoğraflı Nüfus Cüzdanına\n"
+        )
+
+        redacted, stats = UyapRedactor.redact_text(sample_doc, known_tckns=known)
+
+        # 1. Tüm kaçak kalıplarının %100 maskelendiğini doğrula
+        must_be_redacted = [
+            "123456789012",
+            "10500000146",
+            "123456|8950",
+            "1234567 J9l0",
+            "12345678 950",
+            "11234567895",
+            "123456789/82",
+            "123*****890",
+            "309*****100",
+            '382---"500',
+            "TR330006 100511123456789012A",
+            "4532015112830366",
+            "Toki Evleri D/10-A K:2 D:40",
+            "Toki Evleri D/10-A K:2 D:4 0",
+            "Atatürk 5k. Ne:17 |¢ Kapı No:4",
+            "D:40 Merkez/ ANKARA",
+            "112233",
+            "223344",
+            "334455",
+            "A10 seri ve 123456 numaralı",
+        ]
+        for leak in must_be_redacted:
+            self.assertNotIn(leak, redacted, f"Kaçak veri maskelenemedi: {leak}\nÇıktı:\n{redacted}")
+
+        # 2. Kesin Dokunulmazlık (Hukuki Analizi Bozmama) doğrulaması
+        must_be_preserved = [
+            "2021/542",
+            "08.10.2021",
+            "22.09.2026",
+            "E. 2022/10035, K. 2024/171",
+            "HMK 324",
+            "TMK 236",
+            "200.000 TL",
+            "06 AB 123",
+            "34 XY 78",
+            "35 CD 456",
+            "07 EF 789",
+            "16 GH 281",
+            "Ahmet Yılmaz",
+            "AYŞE ÖRNEK",
+            "Hakim Ayşe Kaya",
+            "Katıp Mehmet Demir",
+            "Mübaşir Ali Çelik",
+        ]
+        for safe_item in must_be_preserved:
+            self.assertIn(safe_item, redacted, f"Korunması gereken veri bozuldu: {safe_item}\nÇıktı:\n{redacted}")
 
     def test_iban_variations(self):
         """2d-1. Tüm IBAN varyasyonlarının maskelenmesi (boşluklu, bitişik, tireli, noktalı)."""
