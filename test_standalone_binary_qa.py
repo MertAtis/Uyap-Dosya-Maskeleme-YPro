@@ -79,8 +79,9 @@ class Test1_PackageArchitecture(unittest.TestCase):
         self.assertIn('"CFBundleDisplayName" => "UYAP Maskeleme"', res.stdout)
         self.assertIn('"CFBundleIdentifier" => "com.yargipro.uyapredactor"', res.stdout)
         self.assertIn('"CFBundleExecutable" => "UYAP Maskeleme"', res.stdout)
-        self.assertIn('"LSMinimumSystemVersion" => "11.0"', res.stdout)
+        self.assertIn('"LSMinimumSystemVersion" => "12.0"', res.stdout)
         self.assertIn('"NSHighResolutionCapable" => true', res.stdout)
+        self.assertIn('"NSRequiresAquaSystemAppearance" => true', res.stdout)
 
 
 class Test2_EmbeddedLibraries(unittest.TestCase):

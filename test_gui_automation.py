@@ -731,10 +731,33 @@ class TestAutoUpdater(unittest.TestCase):
             "/tmp/mnt/UYAP Maskeleme.app",
             "/tmp/mnt",
             "/tmp/uyap_update_123",
+            old_pid=12345,
         )
-        self.assertIn("ditto \"$SRC_APP\" \"$TARGET_APP\"", script)
-        self.assertIn("hdiutil detach \"$MNT_DIR\"", script)
-        self.assertIn("open -n \"$TARGET_APP\"", script)
+        self.assertIn('OLD_PID="$5"', script)
+        self.assertIn('while kill -0 "$OLD_PID"', script)
+        self.assertIn('ditto "$SRC_APP" "$TARGET_APP"', script)
+        self.assertIn('.backup_', script)
+        self.assertIn('hdiutil detach "$MNT_DIR"', script)
+        self.assertIn('open -n "$TARGET_APP"', script)
+
+    def test_target_app_path_edge_cases(self):
+        # 1. Normal /Applications
+        with patch("sys.executable", "/Applications/UYAP Maskeleme.app/Contents/MacOS/UYAP Maskeleme"):
+            with patch("os.access", return_value=True), patch("os.path.exists", return_value=True):
+                self.assertEqual(gui.AutoUpdater.get_target_app_path(), "/Applications/UYAP Maskeleme.app")
+
+        # 2. Salt-okunur DMG /Volumes/
+        with patch("sys.executable", "/Volumes/UYAP Maskeleme/UYAP Maskeleme.app/Contents/MacOS/UYAP Maskeleme"):
+            self.assertEqual(gui.AutoUpdater.get_target_app_path(), "/Applications/UYAP Maskeleme.app")
+
+        # 3. macOS AppTranslocation geçici dizini
+        with patch("sys.executable", "/private/var/folders/xx/T/AppTranslocation/d/UYAP Maskeleme.app/Contents/MacOS/UYAP Maskeleme"):
+            self.assertEqual(gui.AutoUpdater.get_target_app_path(), "/Applications/UYAP Maskeleme.app")
+
+        # 4. Yazma izni olmayan dizin
+        with patch("sys.executable", "/opt/restricted/UYAP Maskeleme.app/Contents/MacOS/UYAP Maskeleme"):
+            with patch("os.access", return_value=False), patch("os.path.exists", return_value=True):
+                self.assertEqual(gui.AutoUpdater.get_target_app_path(), "/Applications/UYAP Maskeleme.app")
 
 
 def run_tests():

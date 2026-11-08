@@ -13,6 +13,7 @@ OUTPUT_DIR="${1:-$DIST_DIR}"
 
 echo "🚀 [1/4] PyInstaller ile %100 Bağımsız (Standalone) App derleniyor..."
 cd "$DIR"
+rm -rf "$DIST_DIR/$APP_NAME" "$DIST_DIR/UYAP Maskeleme"
 
 # Python interpreter bul (PyInstaller içeren)
 PYINSTALLER_BIN=""

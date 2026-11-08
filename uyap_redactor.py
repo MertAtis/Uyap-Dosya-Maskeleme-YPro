@@ -27,6 +27,7 @@ import os
 import re
 import shutil
 import sys
+import unicodedata
 from datetime import datetime
 from typing import Callable, Dict, Optional, Set, Tuple
 
@@ -917,25 +918,37 @@ class UyapRedactor:
                     m_dosya = re.search(r"\[↗\]\((?:<([^>]+)>|([^\)]+))\)", dosya_col)
                     if m_dosya:
                         raw_dosya_path = m_dosya.group(1) or m_dosya.group(2)
-                        candidates = []
+                        base_candidates = []
 
-                        # 1) _kaynak/ önekini kaldırarak .md adayı
+                        # 1) _kaynak/ önekini kaldırarak .md ve .udf.md adayları
                         clean_path = raw_dosya_path
                         if clean_path.startswith("_kaynak/"):
                             clean_path = clean_path[len("_kaynak/"):]
                         base_no_ext, _ = os.path.splitext(clean_path)
-                        candidates.append(base_no_ext + ".md")
+                        base_candidates.append(base_no_ext + ".md")
+                        if not clean_path.lower().endswith(".md"):
+                            base_candidates.append(clean_path + ".md")
 
-                        # 2) _kaynak/ önekini kaldırmadan .md adayı
+                        # 2) _kaynak/ önekini kaldırmadan .md ve .udf.md adayları
                         base_orig, _ = os.path.splitext(raw_dosya_path)
-                        candidates.append(base_orig + ".md")
+                        base_candidates.append(base_orig + ".md")
+                        if not raw_dosya_path.lower().endswith(".md"):
+                            base_candidates.append(raw_dosya_path + ".md")
+
+                        # macOS APFS NFD ve NFC dosya adı varyasyonları
+                        candidates = []
+                        for c in base_candidates:
+                            for form in ("NFC", "NFD"):
+                                norm_c = unicodedata.normalize(form, c)
+                                if norm_c not in candidates:
+                                    candidates.append(norm_c)
 
                         found_md_rel = None
                         found_md_abs = None
                         for cand in candidates:
                             cand_abs = os.path.join(index_dir, cand)
                             if os.path.isfile(cand_abs):
-                                found_md_rel = cand
+                                found_md_rel = unicodedata.normalize("NFC", cand)
                                 found_md_abs = cand_abs
                                 break
 
@@ -946,7 +959,7 @@ class UyapRedactor:
                                 formatted_cnt = f"{char_cnt:,}".replace(",", ".")
                                 new_metin = f"[↗](<{found_md_rel}>) ({formatted_cnt} karakter)"
 
-                                if metin_col != new_metin:
+                                if unicodedata.normalize("NFC", metin_col) != unicodedata.normalize("NFC", new_metin):
                                     parts[7] = new_metin
                                     line = "| " + " | ".join(parts[1:-1]) + " |\n"
                                     updated_rows += 1
@@ -1005,12 +1018,18 @@ class UyapRedactor:
         Hedef klasörde tek bir orijinal UDF, PDF, TIFF, ZIP veya ikili dosya barındırmaz.
         """
         src_folder = os.path.abspath(src_folder)
+        clean_src = src_folder.rstrip(os.sep)
         if not dest_folder:
-            dest_folder = src_folder.rstrip(os.sep) + " (Maskelenmis AI)"
+            if unicodedata.normalize("NFC", clean_src).endswith("(Maskelenmis AI)"):
+                dest_folder = clean_src
+            else:
+                dest_folder = clean_src + " (Maskelenmis AI)"
         else:
             dest_folder = os.path.abspath(dest_folder)
 
         os.makedirs(dest_folder, exist_ok=True)
+        norm_src = unicodedata.normalize("NFC", src_folder)
+        norm_dest = unicodedata.normalize("NFC", dest_folder)
 
         grand_stats = {
             "tckn": 0,
@@ -1037,7 +1056,8 @@ class UyapRedactor:
         # 1. Mevcut Markdown ve Metin Belgelerini Topla
         md_files = []
         for root, dirs, files in os.walk(src_folder):
-            if "_kaynak" in root or ".git" in root or "node_modules" in root or (dest_folder != src_folder and dest_folder in root):
+            norm_root = unicodedata.normalize("NFC", root)
+            if "_kaynak" in root or ".git" in root or "node_modules" in root or (norm_dest != norm_src and norm_dest in norm_root):
                 continue
             for f in files:
                 if f.endswith((".md", ".txt")) and not f.endswith(".bak"):
@@ -1075,7 +1095,8 @@ class UyapRedactor:
         # 2. Taranmış Evrakları (PDF ve TIFF) Tara ve Gerekirse Apple Vision OCR ile Çöz
         scanned_files = []
         for root, dirs, files in os.walk(src_folder):
-            if ".git" in root or "node_modules" in root or (dest_folder != src_folder and dest_folder in root):
+            norm_root = unicodedata.normalize("NFC", root)
+            if ".git" in root or "node_modules" in root or (norm_dest != norm_src and norm_dest in norm_root):
                 continue
             for f in files:
                 ext = os.path.splitext(f)[1].lower()
@@ -1126,6 +1147,7 @@ class UyapRedactor:
                     if progress_cb:
                         progress_cb("ocr", base_rel, grand_stats)
             except Exception as oe:
+                grand_stats["processed_items"] += 1
                 if progress_cb:
                     progress_cb("error", f"OCR Hatası ({os.path.basename(full_p)}): {str(oe)}", grand_stats)
 

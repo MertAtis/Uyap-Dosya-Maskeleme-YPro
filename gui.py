@@ -62,12 +62,21 @@ class AutoUpdater:
 
     @staticmethod
     def _create_ssl_context() -> ssl.SSLContext:
-        """macOS PyInstaller paketlerinde sistem kök sertifikalarını (/etc/ssl/cert.pem) kullanan güvenli SSL bağlamı."""
+        """macOS PyInstaller paketlerinde sistem ve certifi kök sertifikalarını kullanan güvenli SSL bağlamı."""
+        # 1. macOS sistem OpenSSL sertifika demeti
         if os.path.exists("/etc/ssl/cert.pem"):
             try:
                 return ssl.create_default_context(cafile="/etc/ssl/cert.pem")
             except Exception:
                 pass
+        # 2. certifi kök sertifika deposu (varsa)
+        try:
+            import certifi
+            if os.path.exists(certifi.where()):
+                return ssl.create_default_context(cafile=certifi.where())
+        except Exception:
+            pass
+        # 3. Python varsayılan SSL bağlamı
         return ssl.create_default_context()
 
     @classmethod
@@ -118,30 +127,86 @@ class AutoUpdater:
     def get_target_app_path() -> str:
         """Güncellemenin yazılacağı hedef .app paket yolunu belirler."""
         exe_path = os.path.abspath(sys.executable)
+        default_app = "/Applications/UYAP Maskeleme.app"
+
         if ".app/Contents/MacOS" in exe_path:
             app_root = exe_path.split(".app/Contents/MacOS")[0] + ".app"
-            # Eğer kullanıcı salt-okunur DMG içinden çalıştırdıysa /Applications'a kur
-            if not app_root.startswith("/Volumes/"):
+            # Uç Durum Korumaları:
+            # 1. Salt-okunur DMG bağlı diskindeyse (/Volumes/...)
+            # 2. macOS Gatekeeper App Translocation geçici salt-okunur dizinindeyse (/AppTranslocation/...)
+            # 3. Bulunduğu ana dizine yazma izni (W_OK) yoksa
+            # Bu durumlarda standart '/Applications/UYAP Maskeleme.app' yoluna yönlendir.
+            if (
+                not app_root.startswith("/Volumes/")
+                and "AppTranslocation" not in app_root
+                and os.path.exists(app_root)
+                and os.access(os.path.dirname(app_root), os.W_OK)
+            ):
                 return app_root
-        return "/Applications/UYAP Maskeleme.app"
+        return default_app
 
     @classmethod
-    def build_updater_script(cls, target_app: str, src_app: str, mnt_dir: str, tmp_dir: str) -> str:
-        """Uygulama kapandıktan hemen sonra eski .app'i yenisiyle değiştirip yeniden başlatan kabuk betiği."""
+    def build_updater_script(
+        cls,
+        target_app: str,
+        src_app: str,
+        mnt_dir: str,
+        tmp_dir: str,
+        old_pid: Optional[int] = None,
+    ) -> str:
+        """Uygulama kapandıktan hemen sonra eski .app'i yenisiyle güvenli/atomik değiştirip yeniden başlatan kabuk betiği."""
+        pid_arg = str(old_pid) if old_pid else ""
         return (
             "#!/bin/sh\n"
-            "sleep 1.2\n"
             'TARGET_APP="$1"\n'
             'SRC_APP="$2"\n'
             'MNT_DIR="$3"\n'
             'TMP_DIR="$4"\n'
-            'rm -rf "$TARGET_APP"\n'
-            'ditto "$SRC_APP" "$TARGET_APP"\n'
-            'xattr -cr "$TARGET_APP" 2>/dev/null || true\n'
-            'codesign --force --deep --sign - "$TARGET_APP" 2>/dev/null || true\n'
+            'OLD_PID="$5"\n\n'
+            "# 1. Eski uygulamanın (PID) tamamen kapanmasını bekle (maksimum 10 saniye)\n"
+            'if [ -n "$OLD_PID" ]; then\n'
+            "    count=0\n"
+            '    while kill -0 "$OLD_PID" 2>/dev/null; do\n'
+            "        sleep 0.2\n"
+            "        count=$((count + 1))\n"
+            '        if [ "$count" -ge 50 ]; then\n'
+            '            kill -9 "$OLD_PID" 2>/dev/null || true\n'
+            "            break\n"
+            "        fi\n"
+            "    done\n"
+            "fi\n"
+            "sleep 0.3\n\n"
+            "# 2. Kaynak paketin bütünlüğünü doğrula\n"
+            'if [ ! -d "$SRC_APP/Contents/MacOS" ]; then\n'
+            '    hdiutil detach "$MNT_DIR" -force >/dev/null 2>&1 || true\n'
+            '    rm -rf "$TMP_DIR" 2>/dev/null || true\n'
+            "    exit 1\n"
+            "fi\n\n"
+            "# 3. Güvenli Yedekleme ve Atomik Değiştirme\n"
+            'BACKUP_APP=""\n'
+            'if [ -d "$TARGET_APP" ]; then\n'
+            '    BACKUP_APP="${TARGET_APP}.backup_$$\"\n'
+            '    mv "$TARGET_APP" "$BACKUP_APP" 2>/dev/null || true\n'
+            "fi\n\n"
+            'if ditto "$SRC_APP" "$TARGET_APP"; then\n'
+            '    if [ -n "$BACKUP_APP" ] && [ -d "$BACKUP_APP" ]; then\n'
+            '        rm -rf "$BACKUP_APP" 2>/dev/null || true\n'
+            "    fi\n"
+            '    xattr -cr "$TARGET_APP" 2>/dev/null || true\n'
+            '    codesign --force --deep --sign - "$TARGET_APP" 2>/dev/null || true\n'
+            "else\n"
+            '    rm -rf "$TARGET_APP" 2>/dev/null || true\n'
+            '    if [ -n "$BACKUP_APP" ] && [ -d "$BACKUP_APP" ]; then\n'
+            '        mv "$BACKUP_APP" "$TARGET_APP"\n'
+            "    fi\n"
+            "fi\n\n"
+            "# 4. DMG diskini ayır ve temizle\n"
             'hdiutil detach "$MNT_DIR" -force >/dev/null 2>&1 || true\n'
-            'open -n "$TARGET_APP"\n'
-            'rm -rf "$TMP_DIR" 2>/dev/null || true\n'
+            'rm -rf "$TMP_DIR" 2>/dev/null || true\n\n'
+            "# 5. Uygulamayı yeniden başlat\n"
+            'if [ -d "$TARGET_APP" ]; then\n'
+            '    open -n "$TARGET_APP"\n'
+            "fi\n"
         )
 
     @classmethod
@@ -206,12 +271,13 @@ class AutoUpdater:
 
         target_app = cls.get_target_app_path()
         updater_sh = os.path.join(tmp_dir, "apply_update.sh")
+        old_pid = os.getpid()
         with open(updater_sh, "w", encoding="utf-8") as sh_file:
-            sh_file.write(cls.build_updater_script(target_app, src_app, mnt_dir, tmp_dir))
+            sh_file.write(cls.build_updater_script(target_app, src_app, mnt_dir, tmp_dir, old_pid=old_pid))
         os.chmod(updater_sh, 0o755)
 
         subprocess.Popen(
-            ["/bin/sh", updater_sh, target_app, src_app, mnt_dir, tmp_dir],
+            ["/bin/sh", updater_sh, target_app, src_app, mnt_dir, tmp_dir, str(old_pid)],
             start_new_session=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -685,9 +751,17 @@ class UyapRedactorApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("UYAP Kişisel Veri Maskeleme & İzole Temiz Klasör Üretici (Offline)")
-        self.geometry("860x780")
+        try:
+            sw = self.winfo_screenwidth()
+            sh = self.winfo_screenheight()
+            px = max(0, (sw - 860) // 2)
+            py = max(25, (sh - 780) // 2 - 15)
+            self.geometry(f"860x780+{px}+{py}")
+        except Exception:
+            self.geometry("860x780")
         self.minsize(800, 700)
         self.configure(bg=Theme.BG_CANVAS)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self.msg_queue = queue.Queue()
         self.is_running = False
@@ -712,6 +786,19 @@ class UyapRedactorApp(tk.Tk):
         self.bind("<Control-k>", lambda e: self._clear_logs())
         self.bind("<Command-q>", lambda e: self.destroy())
         self.bind("<Command-w>", lambda e: self.destroy())
+
+    def _on_close(self):
+        """İşlem devam ederken yanlışlıkla kapatmayı önleyen güvenli çıkış kontrolü."""
+        if getattr(self, "is_running", False):
+            confirm = messagebox.askyesno(
+                "İşlem Devam Ediyor",
+                "Şu anda arka planda maskeleme veya güncelleme işlemi devam ediyor.\n\n"
+                "Uygulamayı şimdi kapatırsanız işlem yarım kalabilir.\n"
+                "Yine de çıkmak istiyor musunuz?"
+            )
+            if not confirm:
+                return
+        self.destroy()
 
     def _create_widgets(self):
         # ----------------------------------------------------------------------
@@ -1212,10 +1299,20 @@ class UyapRedactorApp(tk.Tk):
                         text=f"🔄 v{APP_VERSION} • Güncelleme Denetle"
                     )
                     if manual:
+                        if "CERTIFICATE_VERIFY_FAILED" in str(err_str):
+                            msg_text = (
+                                "Kurumsal ağ güvenlik duvarı veya antivirüs SSL sertifika denetimi algılandı.\n\n"
+                                "Yeni sürümü web tarayıcınızdan doğrudan indirebilirsiniz:\n"
+                                f"https://github.com/{GITHUB_REPO}/releases/latest"
+                            )
+                        else:
+                            msg_text = (
+                                "Güncelleme kontrolü için internet bağlantısı kurulamadı.\n\n"
+                                "Not: UYAP Maskeleme motoru %100 çevrimdışı (offline) olarak tam kapasiteyle çalışmaya devam etmektedir."
+                            )
                         messagebox.showwarning(
                             "Güncelleme Sunucusuna Ulaşılamadı",
-                            "Güncelleme kontrolü için internet bağlantısı kurulamadı.\n\n"
-                            "Not: UYAP Maskeleme motoru %100 çevrimdışı (offline) olarak tam kapasiteyle çalışmaya devam etmektedir."
+                            msg_text
                         )
                 elif msg_type == "update_ready_restart":
                     target_app = payload
@@ -1344,10 +1441,22 @@ class UyapRedactorApp(tk.Tk):
             self.msg_queue.put(("update_install_error", str(e)))
 
     def _start_process(self):
-        folder = self.folder_var.get().strip()
+        folder = self.folder_var.get().strip().strip("'\"").strip()
+        if folder != self.folder_var.get():
+            self.folder_var.set(folder)
         if not folder or not os.path.isdir(folder):
             messagebox.showwarning("Geçersiz Klasör", "Lütfen geçerli bir UYAP dava klasörü seçin.")
             return
+
+        if folder.rstrip("/\\").endswith("(Maskelenmis AI)"):
+            proceed = messagebox.askyesno(
+                "Zaten Maskelenmiş Klasör",
+                "Seçtiğiniz klasör daha önce üretilmiş bir '(Maskelenmis AI)' çıktı klasörüne benziyor.\n\n"
+                "Orijinal UDF/PDF/TIFF dosyalarını içeren ana dava klasörünü seçmeniz önerilir.\n"
+                "Yine de bu klasör üzerinde işlem yapmak istiyor musunuz?"
+            )
+            if not proceed:
+                return
 
         self.is_running = True
         self.btn_run.config(state="disabled", text="İşleniyor...")

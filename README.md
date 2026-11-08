@@ -2,7 +2,17 @@
 
 > **%100 Çevrimdışı (Offline) UYAP Kişisel Veri Maskeleme, Temizleme ve Yapay Zekâya Hazırlama Aracı**
 
-UYAP dava dosyalarında yer alan hassas kişisel verileri (TCKN, Cep Telefonu, Kimlik Seri No, Kimlik MRZ Kodu, IBAN, Açık Adres, Hâkim/Savcı/Kâtip Sicil No) **sıfır veri kaybı prensibiyle** ve **tamamen yerel bilgisayarınızda (offline)** maskeleyerek yapay zekâ analizlerine hazır hale getiren profesyonel hukuk aracıdır.
+<div align="center">
+
+[![macOS İndir](https://img.shields.io/badge/İndir-UYAP--Maskeleme.dmg-007AFF?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/MertAtis/Uyap-Dosya-Maskeleme-YPro/releases/latest/download/UYAP-Maskeleme.dmg)
+[![Son Sürüm](https://img.shields.io/github/v/release/MertAtis/Uyap-Dosya-Maskeleme-YPro?style=for-the-badge&color=10B981&label=S%C3%BCr%C3%BCm)](https://github.com/MertAtis/Uyap-Dosya-Maskeleme-YPro/releases/latest)
+[![Platform](https://img.shields.io/badge/Platform-macOS%2011%2B%20(Apple%20Silicon%20%26%20Intel)-6B7280?style=for-the-badge&logo=apple)](https://github.com/MertAtis/Uyap-Dosya-Maskeleme-YPro/releases/latest)
+[![Offline](https://img.shields.io/badge/%25100-Çevrimdışı%20(Offline)-3B82F6?style=for-the-badge)](https://github.com/MertAtis/Uyap-Dosya-Maskeleme-YPro)
+
+**[⬇️ Son Sürüm UYAP-Maskeleme.dmg İndir (Doğrudan Bağlantı)](https://github.com/MertAtis/Uyap-Dosya-Maskeleme-YPro/releases/latest/download/UYAP-Maskeleme.dmg)**  
+*macOS Sequoia (15.x), Sonoma (14.x), Ventura (13.x) ve Monterey uyumludur. Python veya ek kurulum gerektirmez.*
+
+</div>
 
 ---
 
@@ -14,6 +24,7 @@ UYAP dava dosyalarında yer alan hassas kişisel verileri (TCKN, Cep Telefonu, K
 - **📱 Cep Telefonu ve İletişim Koruması:** Müvekkil ve taraf cep telefonlarının tüm Türkiye formatlarını (`05xx`, `+90 5xx`, boşluklu, parantezli) tespit ederek maskeler.
 - **🪪 Kimlik Kartı & MRZ Koruma:** Taranmış evraklardaki kimlik fotokopilerinde yer alan yeni/eski seri numaralarını ve 3 satırlı ICAO/MRZ şeritlerini (`I<TUR...`) kapatır.
 - **🔄 Otomatik INDEX.md Senkronizasyonu:** OCR sonradan tamamlansa dahi `INDEX.md` dosyasını tarayarak güncel `.md` bağlantılarını ve karakter sayılarını otomatik olarak tabloya işler.
+- **🔄 Tek Tıkla Otomatik Güncelleme (Auto-Updater):** Yeni bir sürüm çıktığında uygulama açılışında haber verir; tek tıkla arka planda DMG'yi indirip baştan kurulum gerektirmeden kendini yerinde günceller.
 - **📦 EYP ve Arşiv Desteği:** DYS üzerinden gelen `.eyp` (Elektronik Yazışma Paketleri) arşivlerini otomatik açar ve ekleri metne döker.
 - **👁️ Apple Vision OCR Uyumu:** Taranmış fiziki belgeleri, tebliğ mazbatalarını ve hastane tahlillerini yerel OCR ile metne dönüştürerek maskeler.
 
@@ -56,9 +67,13 @@ Kullanıcı deneyimini sadeleştirmek ve veri güvenliğini en üst seviyeye ç�
 
 ### 1. Avukatlar ve Son Kullanıcılar İçin (Önerilen: Tek Tıkla Kurulum)
 Kullanıcıların bilgisayarında Python veya herhangi bir geliştirici aracı bulunmasına gerek yoktur:
-1. GitHub **[Releases](https://github.com/MertAtis/Uyap-Dosya-Maskeleme-YPro/releases)** sayfasından son sürüm **`UYAP-Maskeleme.dmg`** dosyasını indirin.
-2. DMG dosyasını çift tıklayarak açın ve **`UYAP Maskeleme`** simgesini **`Applications`** (Uygulamalar) klasörüne sürükleyin.
-3. Uygulamayı ilk kez çalıştırırken simgeye **Sağ Tık (İki Parmak) -> Aç** deyin ve onaylayın.
+1. **İndirin:** Doğrudan **[UYAP-Maskeleme.dmg](https://github.com/MertAtis/Uyap-Dosya-Maskeleme-YPro/releases/latest/download/UYAP-Maskeleme.dmg)** bağlantısına tıklayarak son sürüm kurulum paketini indirin.
+2. **Kurun:** İndirilen DMG dosyasına çift tıklayın; açılan penceredeki **`UYAP Maskeleme`** simgesini **`Applications` (Uygulamalar)** klasörüne sürükleyip bırakın.
+3. **İlk Açılış (macOS Gatekeeper İzni):**
+   - Uygulama bağımsız dağıtıldığı için macOS ilk açılışta güvenlik uyarısı gösterebilir.
+   - **Yöntem A (Hızlı):** Uygulama simgesine **Sağ Tık (veya İki Parmakla Tık) -> Aç** deyin ve gelen onay penceresinde **Aç**'a tıklayın.
+   - **Yöntem B (macOS Sequoia / Sonoma için):** Sağ tıkta "Aç" seçeneği çıkmazsa: Mac'inizde **Sistem Ayarları > Gizlilik ve Güvenlik** sekmesine gidin. Sayfanın altına kaydırın ve *"UYAP Maskeleme engellendi"* uyarısının yanındaki **"Yine de Aç" (Open Anyway)** butonuna tıklayın.
+4. **Otomatik Güncelleme:** Uygulamayı bir kez kurduktan sonra güncellemeleri takip etmeniz gerekmez. Yeni bir sürüm çıktığında uygulama açılışta sizi uyarır ve onayınızla kendini baştan kurulum yapmadan günceller.
 
 ---
 
@@ -90,18 +105,19 @@ chmod +x build_dmg.sh
 
 ```text
 uyap-dosya-maskeleme-ypro/
-├── gui.py                  # macOS Tkinter modern grafik arayüzü (2x4 İstatistik Paneli)
+├── gui.py                  # macOS Tkinter modern grafik arayüzü (2x4 İstatistik Paneli & AutoUpdater)
 ├── uyap_redactor.py        # 7 Katmanlı maskeleme ve INDEX.md senkronizasyon motoru
 ├── test_uyap_redactor.py   # Çekirdek motor test paketi
-├── test_gui_automation.py  # 34 Testlik GUI ve UI/UX otomasyon paketi
-├── build_dmg.sh            # %100 Bağımsız standalone .app ve .dmg derleme betiği
-├── build_app.sh            # Hızlı yerel .app derleme betiği
+├── test_gui_automation.py  # 40 Testlik GUI, AutoUpdater ve UI/UX otomasyon paketi
+├── test_standalone_binary_qa.py # Standalone ikili dosya, otool ve Apple Vision QA paketi
+├── build_dmg.sh            # %100 Bağımsız standalone .app ve .dmg derleme betiği (Resmî Dağıtım)
+├── build_app.sh            # Geliştiriciler için hızlı yerel test .app derleme betiği
 ├── UYAP Maskeleme.spec     # PyInstaller bağımsız derleme spesifikasyonu
 ├── requirements.txt        # Sistem gereksinimleri (Zero-Dependency)
 ├── bundle/                 # macOS uygulama kaynakları
 │   ├── Info.plist          # Paket meta verileri
 │   ├── app.icns            # Uygulama simgesi
-│   └── launcher.sh         # macOS başlatıcı kabuk betiği
+│   └── launcher.sh         # macOS yerel geliştirici başlatıcı betiği
 ├── README.md               # Dokümantasyon
 └── .gitignore              # Git yoksayma kuralları
 ```
