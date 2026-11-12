@@ -13,6 +13,9 @@ import time
 import subprocess
 from unittest.mock import MagicMock, patch
 
+# Testlerde açılan uygulamalar (alt süreçler dahil) GitHub güncelleme sorgusu yapmasın
+os.environ["UYAP_DISABLE_UPDATE_CHECK"] = "1"
+
 # Çalışma dizini ayarları
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 if CURRENT_DIR not in sys.path:
@@ -784,6 +787,70 @@ class TestAutoUpdater(unittest.TestCase):
         with patch("urllib.request.urlopen", return_value=mock_resp):
             res = gui.AutoUpdater.check_for_updates(current_version="1.1.0")
             self.assertIsNone(res)
+
+    @staticmethod
+    def _rate_limited(*args, **kwargs):
+        import urllib.error
+        raise urllib.error.HTTPError(gui.GITHUB_API_LATEST, 403, "rate limit exceeded", {}, None)
+
+    def test_rate_limit_falls_back_to_web_redirect(self):
+        """API sınırı (403) dolunca releases/latest yönlendirmesinden yeni sürüm bulunur."""
+        def fake_head(url, ua, timeout):
+            if url == gui.GITHUB_WEB_LATEST:
+                return 302, "https://github.com/MertAtis/Uyap-Dosya-Maskeleme-YPro/releases/tag/v1.3.0"
+            self.assertTrue(url.endswith("/releases/download/v1.3.0/UYAP-Maskeleme.dmg"))
+            return 302, "https://objects.githubusercontent.com/..."
+
+        with patch("urllib.request.urlopen", side_effect=self._rate_limited), \
+                patch.object(gui.AutoUpdater, "_head_status", side_effect=fake_head):
+            res = gui.AutoUpdater.check_for_updates(current_version="1.2.0")
+        self.assertIsNotNone(res)
+        self.assertEqual(res["version"], "1.3.0")
+        self.assertEqual(
+            res["download_url"],
+            "https://github.com/MertAtis/Uyap-Dosya-Maskeleme-YPro/releases/download/v1.3.0/UYAP-Maskeleme.dmg",
+        )
+
+    def test_rate_limit_fallback_up_to_date_and_missing_dmg(self):
+        """Yedek yolda sürüm güncelse veya DMG yüklenmemişse güncelleme önerilmez."""
+        same = lambda url, ua, t: (302, "https://github.com/x/y/releases/tag/v1.2.0")
+        with patch("urllib.request.urlopen", side_effect=self._rate_limited), \
+                patch.object(gui.AutoUpdater, "_head_status", side_effect=same):
+            self.assertIsNone(gui.AutoUpdater.check_for_updates(current_version="1.2.0"))
+
+        def no_dmg(url, ua, t):
+            if url == gui.GITHUB_WEB_LATEST:
+                return 302, "https://github.com/x/y/releases/tag/v1.3.0"
+            return 404, ""
+        with patch("urllib.request.urlopen", side_effect=self._rate_limited), \
+                patch.object(gui.AutoUpdater, "_head_status", side_effect=no_dmg):
+            self.assertIsNone(gui.AutoUpdater.check_for_updates(current_version="1.2.0"))
+
+    def test_rate_limit_fallback_failure_reports_original_error(self):
+        """Yedek yol da başarısızsa asıl API hatası (403) iletilir; 404 gibi diğer hatalarda yedek denenmez."""
+        import urllib.error
+        with patch("urllib.request.urlopen", side_effect=self._rate_limited), \
+                patch.object(gui.AutoUpdater, "_head_status", side_effect=OSError("ağ yok")):
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                gui.AutoUpdater.check_for_updates(current_version="1.2.0")
+            self.assertEqual(ctx.exception.code, 403)
+
+        def not_found(*a, **k):
+            raise urllib.error.HTTPError(gui.GITHUB_API_LATEST, 404, "Not Found", {}, None)
+        with patch("urllib.request.urlopen", side_effect=not_found), \
+                patch.object(gui.AutoUpdater, "_head_status") as mock_head:
+            with self.assertRaises(urllib.error.HTTPError):
+                gui.AutoUpdater.check_for_updates(current_version="1.2.0")
+            mock_head.assert_not_called()
+
+    def test_auto_update_check_disabled_by_env(self):
+        """UYAP_DISABLE_UPDATE_CHECK=1 iken açılışta güncelleme kontrolü zamanlanmaz."""
+        with patch.object(messagebox, "showinfo"):
+            app = UyapRedactorApp()
+        try:
+            self.assertIsNone(app._update_check_job)
+        finally:
+            app.destroy()
 
     def test_build_updater_script(self):
         script = gui.AutoUpdater.build_updater_script(

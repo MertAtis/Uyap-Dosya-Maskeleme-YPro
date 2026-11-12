@@ -23,6 +23,7 @@ import ssl
 import tempfile
 import urllib.request
 import urllib.error
+import urllib.parse
 import threading
 import queue
 import time
@@ -35,10 +36,14 @@ from tkinter import ttk, filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
 
 # Uygulama Sürümü ve Otomatik Güncelleme Kaynağı
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 RUN_BUTTON_TEXT = "▶  Başlat"
 GITHUB_REPO = "MertAtis/Uyap-Dosya-Maskeleme-YPro"
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+# API'nin saatlik istek sınırına takılınca kullanılan, sınırsız web adresleri
+GITHUB_WEB_LATEST = f"https://github.com/{GITHUB_REPO}/releases/latest"
+GITHUB_WEB_DOWNLOAD = f"https://github.com/{GITHUB_REPO}/releases/download/{{tag}}/{{asset}}"
+DMG_ASSET_NAME = "UYAP-Maskeleme.dmg"
 
 
 class AutoUpdater:
@@ -87,6 +92,10 @@ class AutoUpdater:
         GitHub Releases API'sini sorgular.
         Daha yeni bir sürüm varsa {'version', 'tag_name', 'download_url', 'release_notes', 'html_url', 'size'}
         sözlüğünü döndürür. Güncelse None döndürür. Bağlantı hatasında exception fırlatır.
+
+        API, kimliksiz isteklerde IP başına saatte 60 sorguyla sınırlıdır. Aynı ağı paylaşan
+        bürolarda bu sınır dolunca (403/429) veya API geçici olarak yanıt vermezse (5xx),
+        sınırı olmayan github.com web adreslerinden aynı bilgi çıkarılır.
         """
         req = urllib.request.Request(
             GITHUB_API_LATEST,
@@ -96,8 +105,17 @@ class AutoUpdater:
             },
         )
         ctx = cls._create_ssl_context()
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as api_err:
+            if api_err.code in (403, 429) or api_err.code >= 500:
+                try:
+                    return cls._check_for_updates_via_web(current_version, timeout)
+                except Exception:
+                    # Yedek yol da başarısızsa asıl API hatasını bildir
+                    raise api_err
+            raise
 
         tag_name = data.get("tag_name", "")
         if not tag_name or not cls.is_newer_version(tag_name, current_version):
@@ -123,6 +141,57 @@ class AutoUpdater:
             "size": int(dmg_asset.get("size", 0) or 0),
             "release_notes": (data.get("body") or "").strip() or "Yeni kişisel veri yakalama kuralları ve performans iyileştirmeleri.",
             "html_url": data.get("html_url", f"https://github.com/{GITHUB_REPO}/releases/latest"),
+        }
+
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        """Yönlendirmeyi izlemez; 30x yanıtı HTTPError olarak döner ki Location okunabilsin."""
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+
+    @classmethod
+    def _head_status(cls, url: str, user_agent: str, timeout: float) -> Tuple[int, str]:
+        """URL'ye yönlendirme izlemeden HEAD isteği atar; (durum_kodu, Location) döndürür."""
+        opener = urllib.request.build_opener(
+            cls._NoRedirect(),
+            urllib.request.HTTPSHandler(context=cls._create_ssl_context()),
+        )
+        req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": user_agent})
+        try:
+            with opener.open(req, timeout=timeout) as resp:
+                return resp.status, resp.headers.get("Location", "") or ""
+        except urllib.error.HTTPError as e:
+            return e.code, (e.headers.get("Location", "") if e.headers else "") or ""
+
+    @classmethod
+    def _check_for_updates_via_web(cls, current_version: str, timeout: float) -> Optional[Dict]:
+        """
+        API sınırına takılınca yedek yol:
+        1. github.com/<repo>/releases/latest -> /releases/tag/<etiket> yönlendirmesinden etiketi okur.
+        2. Etiketteki DMG'nin varlığını releases/download/<etiket>/UYAP-Maskeleme.dmg ile doğrular
+           (dosya indirilmez; yalnızca HEAD).
+        """
+        ua = f"UYAP-Maskeleme-macOS/{current_version}"
+        status, location = cls._head_status(GITHUB_WEB_LATEST, ua, timeout)
+        m = re.search(r"/releases/tag/([^/?#]+)/?$", location)
+        if status not in (301, 302, 303, 307, 308) or not m:
+            raise RuntimeError(f"Son sürüm etiketi okunamadı (HTTP {status}).")
+        tag_name = urllib.parse.unquote(m.group(1))
+        if not cls.is_newer_version(tag_name, current_version):
+            return None
+
+        download_url = GITHUB_WEB_DOWNLOAD.format(tag=urllib.parse.quote(tag_name), asset=DMG_ASSET_NAME)
+        asset_status, _ = cls._head_status(download_url, ua, timeout)
+        if asset_status not in (200, 301, 302, 303, 307, 308):
+            # Etiket var ama DMG henüz yüklenmemiş: güncelleme sunma
+            return None
+
+        return {
+            "version": tag_name.lstrip("vV"),
+            "tag_name": tag_name,
+            "download_url": download_url,
+            "size": 0,
+            "release_notes": "Sürüm notları için GitHub sürüm sayfasına bakabilirsiniz.",
+            "html_url": f"https://github.com/{GITHUB_REPO}/releases/tag/{tag_name}",
         }
 
     @staticmethod
@@ -781,8 +850,10 @@ class UyapRedactorApp(tk.Tk):
         self._create_widgets()
         self._setup_shortcuts()
         self._check_queue()
-        # Açılışta arka planda sessiz güncelleme kontrolü (çevrimdışıysa sessizce geçer)
-        self._update_check_job = self.after(1500, lambda: self._check_updates(manual=False))
+        # Açılışta arka planda sessiz güncelleme kontrolü (çevrimdışıysa sessizce geçer).
+        # Otomatik testler UYAP_DISABLE_UPDATE_CHECK=1 ile kapatır ki GitHub sorgu sınırını tüketmesin.
+        if os.environ.get("UYAP_DISABLE_UPDATE_CHECK") != "1":
+            self._update_check_job = self.after(1500, lambda: self._check_updates(manual=False))
 
     def _setup_shortcuts(self):
         """macOS Klavye Kısayolları (⌘O, ⌘R, ⌘K, ⌘Q, ⌘W)."""

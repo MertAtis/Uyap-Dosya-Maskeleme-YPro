@@ -15,6 +15,9 @@ import unittest
 import subprocess
 from unittest.mock import patch, MagicMock
 
+# Testlerde açılan uygulamalar (alt süreçler dahil) GitHub güncelleme sorgusu yapmasın
+os.environ["UYAP_DISABLE_UPDATE_CHECK"] = "1"
+
 # Proje ana dizini
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 APP_PATH = os.path.join(PROJECT_ROOT, "dist", "UYAP Maskeleme.app")
