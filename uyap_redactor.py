@@ -52,6 +52,49 @@ class UyapRedactor:
         r'Mübaş[ıi]r|Müb\.?|Yaz[ıi]\s+İşleri\s+Müdürü)(?!\w)'
     )
 
+    # Sicil sanılmaması gereken sayı sonekleri (para birimi, "sayılı" kanun/karar, Esas/Karar no)
+    NOT_SICIL_SUFFIX = r'(?!\s*(?:TL|Türk\s*Liras[ıi]|USD|EUR|say[ıi]l[ıi]|Esas|Karar)\b)'
+
+    # Klasör taramalarında atlanacak dizin adları (yalnızca tam ad eşleşmesi)
+    SKIP_DIRS = ("_kaynak", ".git", "node_modules")
+    SKIP_DIRS_OCR = (".git", "node_modules")
+
+    # Yargı PRO manifest JSON dosyaları (değer bazında maskelenerek aktarılır)
+    META_JSON_NAMES = ("uyap-project.json", "uyap-evrak-listesi.json")
+
+    @staticmethod
+    def _is_skipped_dir(root: str, base: str, skip_names) -> bool:
+        """
+        'root' dizininin, 'base' klasörüne göre göreli yol bileşenlerinden herhangi biri
+        'skip_names' içindeki bir adla TAM eşleşiyorsa True döner.
+        Kaynak klasörün ÜST yolunda geçen '.git' / '_kaynak' alt dizeleri (örn. 'my.gitrepo',
+        '.github') dikkate alınmaz.
+        """
+        rel = os.path.relpath(root, base)
+        if rel in (".", ""):
+            return False
+        return any(part in skip_names for part in rel.split(os.sep))
+
+    @staticmethod
+    def _is_inside_path(path: str, parent: str) -> bool:
+        """'path', 'parent' ile aynı veya onun alt dizini mi? (alt-dize değil, yol-öneki karşılaştırması)"""
+        parent = parent.rstrip(os.sep)
+        return path == parent or path.startswith(parent + os.sep)
+
+    @staticmethod
+    def _is_date_or_esas_number(raw: str) -> bool:
+        """
+        Sayı dizisi içinde eğik çizgili tarih (g/a/yyyy) veya yıl/esas (19xx|20xx/...) biçiminde
+        bir parça varsa True döner. Bu biçimler TCKN sanılarak maskelenmemelidir.
+        """
+        compact = re.sub(r'[ \t]*/[ \t]*', '/', raw)
+        for token in compact.split():
+            if re.fullmatch(r'\d{1,2}/\d{1,2}/\d{4}', token):
+                return True
+            if re.fullmatch(r'(?:19|20)\d{2}/[^/\s]+', token):
+                return True
+        return False
+
     @staticmethod
     def _normalize_ocr_digits(val: str) -> str:
         """OCR kaynaklı l/I/| -> 1, O/o -> 0, J -> 3 dönüşümünü yapar."""
@@ -165,7 +208,7 @@ class UyapRedactor:
         """
         count = 0
         pattern = re.compile(
-            r'(?i)(?:^|(?<=[\s\*\_\(\[\"\'\:\-\^]))TR[\s\^\.\-]*(?:[0-9lIOo][\s\^\.\-]*){24}[A-Za-z]?(?![0-9])'
+            r'(?i)(?:^|(?<=[\s\*\_\(\[\"\'\:\-\^]))TR[ \t\^\.\-]*(?:[0-9lIOo][ \t\^\.\-]*){23}[0-9lIOo](?:[A-Za-z](?![A-Za-z0-9]))?(?![0-9])'
         )
 
         def repl(m: re.Match) -> str:
@@ -268,9 +311,9 @@ class UyapRedactor:
             if cls.is_valid_tckn(val):
                 known.add(val)
 
-        # 2. Açık etiketli TCKN'ler
+        # 2. Açık etiketli TCKN'ler (boşluklu varyasyonlar dahil)
         p_lab = re.compile(
-            r'(?i)(?:\b(?:T\.?\s*C\.?(?:\s*(?:KN|Kimlik(?:\s*No(?:su|\.lu|marası)?)?|No(?:su|\.lu|marası)?))?|TCKN|YKN|K[İIÍ]ML[İIÍ]K\s*(?:NO(?:SU)?|NUMARASI))|IT\.?@?N[ºo°])[\s\*\_]*[:\t\.\-]?[\s\*\_]*(?P<num>[0-9lIOJ|/]{9,13})(?!\d)'
+            r'(?i)(?:\b(?:T\.?\s*C\.?(?:\s*(?:KN|Kimlik(?:\s*No(?:su|\.lu|marası)?)?|No(?:su|\.lu|marası)?))?|TCKN|YKN|K[İIÍ]ML[İIÍ]K\s*(?:NO(?:SU)?|NUMARASI))|IT\.?@?N[ºo°])[\s\*\_]*[:\t\.\-]?[\s\*\_]*(?P<num>(?:[0-9lIOJ|/][ \t]*){8,12}[0-9lIOJ|/])(?!\d)'
         )
         for m in p_lab.finditer(text):
             norm = re.sub(r'\D', '', cls._normalize_ocr_digits(m.group('num')))
@@ -281,10 +324,14 @@ class UyapRedactor:
                 known.add(norm[1:12])
 
         # 3. Sayı önce, etiket sonra gelenler (OCR bozulmalı TCKN + te nolu / T.C. ndu dahil)
+        # Etiketten sonra harf gelmemeli (TCK, TCMB, TCDD gibi kısaltmalar etiket sayılmaz)
         p_nf = re.compile(
-            r'(?i)(?P<num>(?<!\d)[1-9][0-9lIOoJ|/ ]{8,12}[0-9lIOo]\b)[ \t]*(?:[,\'\-][ \t]*)?(?:T\.?\s*C\.?(?:\'?n[uo]l[uo]|\'?de|\'?ye|\.?nolu|\s*ndu)?|TCKN|te\s+nolu\b)'
+            r'(?i)(?P<num>(?<!\d)[1-9][0-9lIOoJ|/ ]{8,12}[0-9lIOo]\b)[ \t]*(?:[,\'\-][ \t]*)?(?:(?:T\.?\s*C\.?(?:\'?n[uo]l[uo]|\'?de|\'?ye|\.?nolu|\s*ndu)?|TCKN)(?![^\W\d_])|te\s+nolu\b)'
         )
         for m in p_nf.finditer(text):
+            # Tarih (12/03/2015) ve yıl/esas (2021/123456) biçimleri TCKN değildir
+            if cls._is_date_or_esas_number(m.group('num')):
+                continue
             norm = re.sub(r'\D', '', cls._normalize_ocr_digits(m.group('num')))
             if len(norm) == 11 and norm[0] != '0':
                 known.add(norm)
@@ -301,7 +348,7 @@ class UyapRedactor:
         known: Set[str] = set()
         folders_to_scan = [folder]
 
-        norm_folder = os.path.abspath(folder)
+        norm_folder = unicodedata.normalize("NFC", os.path.abspath(folder).rstrip(os.sep))
         if norm_folder.endswith("(Maskelenmis AI)"):
             orig_cand = re.sub(r'\s*\(Maskelenmis AI\)\s*$', '', norm_folder)
             if os.path.isdir(orig_cand) and orig_cand not in folders_to_scan:
@@ -310,11 +357,13 @@ class UyapRedactor:
         for scan_dir in folders_to_scan:
             if not os.path.isdir(scan_dir):
                 continue
-            for root, _, files in os.walk(scan_dir):
-                if "_kaynak" in root or ".git" in root or "node_modules" in root:
+            for root, dirs, files in os.walk(scan_dir):
+                if cls._is_skipped_dir(root, scan_dir, cls.SKIP_DIRS):
+                    dirs[:] = []
                     continue
+                dirs[:] = [d for d in dirs if not cls._is_skipped_dir(os.path.join(root, d), scan_dir, cls.SKIP_DIRS)]
                 for f in files:
-                    if f.endswith((".md", ".txt")) and not f.endswith(".bak"):
+                    if (f.endswith((".md", ".txt")) and not f.endswith(".bak")) or f in cls.META_JSON_NAMES:
                         fp = os.path.join(root, f)
                         try:
                             with open(fp, "r", encoding="utf-8", errors="replace") as rf:
@@ -341,15 +390,19 @@ class UyapRedactor:
         local_known: Set[str] = set(known_tckns) if known_tckns else set()
         local_known.update(cls.collect_known_tckns_from_text(text))
 
-        # 1A-1. Açık Etiketli TCKN (9-13 hane, OCR l/I/O/J/|// bozulmaları ve markdown ** bold desteği dahil)
+        # 1A-1. Açık Etiketli TCKN (9-13 hane, boşluklu varyasyonlar, OCR l/I/O/J/|// bozulmaları ve markdown ** bold desteği dahil)
         p_labeled = re.compile(
-            r'(?i)(?P<label>(?:\b(?:T\.?\s*C\.?(?:\s*(?:KN|Kimlik(?:\s*No(?:su|\.lu|marası)?)?|No(?:su|\.lu|marası)?))?|TCKN|YKN|K[İIÍ]ML[İIÍ]K\s*(?:NO(?:SU)?|NUMARASI))|IT\.?@?N[ºo°])[\s\*\_]*[:\t\.\-]?[\s\*\_]*)(?P<num>[0-9lIOoJ|/]{9,13})(?!\d)'
+            r'(?i)(?P<label>(?:\b(?:T\.?\s*C\.?(?:\s*(?:KN|Kimlik(?:\s*No(?:su|\.lu|marası)?)?|No(?:su|\.lu|marası)?))?|TCKN|YKN|K[İIÍ]ML[İIÍ]K\s*(?:NO(?:SU)?|NUMARASI))|IT\.?@?N[ºo°])[\s\*\_]*[:\t\.\-]?[\s\*\_]*)(?P<num>(?:[0-9lIOoJ|/][ \t]*){8,12}[0-9lIOoJ|/])(?!\d)'
         )
 
         def repl_labeled(m: re.Match) -> str:
             nonlocal count
             raw_num = m.group('num')
-            if sum(c.isdigit() for c in raw_num) >= 5:
+            norm_num = re.sub(r'[ \t]', '', raw_num)
+            # Eğer numara tarih (12/03/2015) veya yıl/esas formatındaysa (2021/12345678) koru
+            if '/' in norm_num and cls._is_date_or_esas_number(raw_num):
+                return m.group(0)
+            if sum(c.isdigit() for c in norm_num) >= 5:
                 count += 1
                 return f"{m.group('label')}{cls.MASK_TCKN}"
             return m.group(0)
@@ -357,13 +410,23 @@ class UyapRedactor:
         text = p_labeled.sub(repl_labeled, text)
 
         # 1A-2. Sayı önce, etiket sonra gelen durumlar (9-13 hane; örn: "12345678901 T.C'nolu")
+        # Etiketten sonra harf gelmemeli: "TCK 141", "TCMB kuru", "TCDD" etiket sayılmaz.
         p_num_first = re.compile(
-            r'(?i)(?P<num>(?<!\d)[1-9][0-9lIOoJ|/ ]{8,12}[0-9lIOo]\b)(?P<mid>[ \t]*(?:[,\'\-][ \t]*)?)(?P<label>T\.?\s*C\.?(?:\'?n[uo]l[uo]|\'?de|\'?ye|\.?nolu|\s*ndu)?|TCKN|te\s+nolu\b)',
+            r'(?i)(?P<num>(?<!\d)[1-9][0-9lIOoJ|/ ]{8,12}[0-9lIOo]\b)(?P<mid>[ \t]*(?:[,\'\-][ \t]*)?)(?P<label>(?:T\.?\s*C\.?(?:\'?n[uo]l[uo]|\'?de|\'?ye|\.?nolu|\s*ndu)?|TCKN)(?![^\W\d_])|te\s+nolu\b)',
         )
+        p_bare_tc = re.compile(r'(?i)T\.?\s*C\.?')
 
         def repl_num_first(m: re.Match) -> str:
             nonlocal count
             raw_num = m.group('num')
+            # Tarih (12/03/2015 T.C. ...) ve yıl/esas (2021/123456 T.C. ...) korunur
+            if cls._is_date_or_esas_number(raw_num):
+                return m.group(0)
+            # Ek almamış çıplak "T.C." (mahkeme başlığı olabilir) için 10-12 hane şartı
+            if p_bare_tc.fullmatch(m.group('label')):
+                norm_digits = re.sub(r'\D', '', cls._normalize_ocr_digits(raw_num))
+                if not 10 <= len(norm_digits) <= 12:
+                    return m.group(0)
             if sum(c.isdigit() for c in raw_num) >= 7:
                 count += 1
                 return f"{cls.MASK_TCKN}{m.group('mid')}{m.group('label')}"
@@ -453,11 +516,17 @@ class UyapRedactor:
 
         # 1C. Tebligatlardaki Yıldızlı/Tireli Kısmi TCKN'ler (TC:226*****874, TC:309*****704, TC:382---"566)
         p_partial = re.compile(
-            r'(?i)(?:T\.?C\.?[:\s]*)?\b[1-9]\d{2}(?=[\*\-\"\s]*[\*\-\"])[\*\-\"\s]{3,7}\d{3}\b'
+            r'(?i)(?P<label>\bT\.?C\.?[:\s]*)?\b[1-9]\d{2}(?P<sep>(?=[\*\-\"\s]*[\*\-\"])[\*\-\"\s]{3,7})\d{3}\b'
         )
 
         def repl_partial(m: re.Match) -> str:
             nonlocal count
+            # "TC:" etiketi yoksa ayırıcıda en az 3 maske karakteri (*, -, ") aranır;
+            # böylece "150 - 200 TL", "madde 141 - 142", "sayfa 120 -- 135" korunur.
+            if not m.group('label'):
+                mask_chars = sum(c in '*-"' for c in m.group('sep'))
+                if mask_chars < 3:
+                    return m.group(0)
             count += 1
             return cls.MASK_TCKN
 
@@ -498,9 +567,11 @@ class UyapRedactor:
         """
         count = 0
         titles = cls.TITLES_REGEX
+        not_sicil = cls.NOT_SICIL_SUFFIX
 
         # 1a. Unvan doğrudan önünde olan sicil (örn. "Başkan 211094", "Kalip/123456", "Mübaşir 234567", "Makin 112233")
-        p1 = re.compile(rf'(?i)(?P<title>\b{titles})(?P<mid>[\s\*\-_|:\t\/]+)(?P<sicil>(?<![\d\.])\d{{5,6}}(?![\d\./]))')
+        # Para tutarı / "sayılı" / Esas / Karar sonekli sayılar sicil sayılmaz ("Hakim 150000 TL", "Başkan 20245 sayılı")
+        p1 = re.compile(rf'(?i)(?P<title>\b{titles})(?P<mid>[\s\*\-_|:\t\/]+)(?P<sicil>(?<![\d\.])\d{{5,6}}(?![\d\./])){not_sicil}')
 
         def repl1(m: re.Match) -> str:
             nonlocal count
@@ -521,7 +592,7 @@ class UyapRedactor:
 
         # 1c. Cümle içi "Unvan + 1-4 kelimelik Ad Soyad + 5-6 haneli Sicil" (örn. "Hakim Ayşe Kaya 112233, Katıp Mehmet Demir 223344, Mübaşir Ali Çelik 334455")
         p_inline_named = re.compile(
-            rf'(?i)(?P<prefix>\b{titles}\s+(?:[A-ZÇĞİÖŞÜa-zçğıöşü\.]+\s+){{1,4}})(?P<sicil>(?<![\d\./])\d{{5,6}}(?![\d\./]))(?!(?:\s*(?:TL|Türk\s*Liras[ıi]|USD|EUR|say[ıi]l[ıi]|Esas|Karar)\b))'
+            rf'(?i)(?P<prefix>\b{titles}\s+(?:[A-ZÇĞİÖŞÜa-zçğıöşü\.]+\s+){{1,4}})(?P<sicil>(?<![\d\./])\d{{5,6}}(?![\d\./])){not_sicil}'
         )
 
         def repl_inline_named(m: re.Match) -> str:
@@ -593,7 +664,14 @@ class UyapRedactor:
         p1 = re.compile(
             r'(?i)(?P<label>(?:(?:İkam[ae]t(?:g[aâ]h)?|İş\s*yeri|Tebligat)\s*)?Adres(?:i)?[\s\*]*[:\t]+[\s\*]*)'
             r'(?P<addr>[^\r\n]+?)'
-            r'(?=(?:\s*(?:Tel\b|ARANMIYOR|TC\s*Kimlik|T\.C\.|SUÇUN\s+TARİHİ|$|\r?\n)))'
+            r'(?=(?:\s*(?:'
+            r'(?:Anne|Baba)\s*Ad[ıi]|'
+            r'Doğum\s*(?:Yeri|Tarihi)|'
+            r'Nüfus[a-z]*|Cilt\s*No|Aile\s*Sıra|'
+            r'GSM\b|Cep\b|Tel(?:efon)?\b|Faks\b|'
+            r'E-?\s*posta|Email\b|KEP\b|'
+            r'Vekil(?:i)?\b|Müdafi(?:i)?\b|Baro|Meslek|'
+            r'Tel\b|ARANMIYOR|TC\s*Kimlik|T\.C\.|SUÇUN\s+TARİHİ|$|\r?\n)))'
         )
 
         def repl1(m: re.Match) -> str:
@@ -625,9 +703,9 @@ class UyapRedactor:
 
         # 3. Genel Yapısal Açık Adres Kalıbı (K:/D:/Blok/Toki/Apt ve OCR 5k./Ne:/|¢ Kapı varyasyonları dahil)
         p3 = re.compile(
-            r'(?i)(?P<lead>(?:^|(?<=[\s\|\#\:;\,\.\^\(\-])))'
+            r'(?i)(?P<lead>(?:^|(?<=[\s\|\#\:;\,\.\^\(\-\/])))'
             r'(?P<addr>'
-            r'(?:[A-ZÇĞİÖŞÜa-zçğıöşü0-9]+\s+){0,2}?'
+            r'(?:(?:^|(?<=[\r\n\|\#\:;\,\.\^\(\-\/]))[ \t]*(?:[A-ZÇĞİÖŞÜa-zçğıöşü0-9]+\s+){1,2})?'
             r'\b(?:Mahallesi|Mah\.?|Mh\.?|Cadde(?:si)?|Cad\.?|Cd\.?|Sokak|Sokağ[ıi]|Sok\.?|Sk\.?|5k\.?|Bulvar[ıi]|Bulv\.?|Blv\.?|Küme\s*Evler[i]?|Toki\s+Evleri)[\s\,\.\^\-]+'
             r'(?:\|¢|[^\r\n\|]){0,100}?'
             r'(?:\b(?:No|Ne|[İiIıl]ç\s*Kap[ıi](?:\s*No)?|Kat|K|Daire|D|Blok|Blk|Apt|Apartman[ıi]|Sitesi|Evleri)|\|¢\s*Kap[ıi](?:\s*No)?)(?:[\s\.\-\:\^\/]*[0-9A-Za-z]|\s+No\b)'
@@ -766,35 +844,45 @@ class UyapRedactor:
         except Exception:
             return "", empty_stats
 
-        page_count = min(len(doc), max_pages)
-        pages_content = []
+        try:
+            total_pages = len(doc)
+            page_count = min(total_pages, max_pages)
+            pages_content = []
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            for pno in range(page_count):
-                page = doc[pno]
-                text = page.get_text().strip()
+            with tempfile.TemporaryDirectory() as tmpdir:
+                for pno in range(page_count):
+                    page = doc[pno]
+                    text = page.get_text().strip()
 
-                if len(text) > 50:
-                    pages_content.append(f"### Sayfa {pno + 1}\n\n{text}")
-                elif has_vision:
-                    try:
-                        pix = page.get_pixmap(dpi=150)
-                        img_path = os.path.join(tmpdir, f"page_{pno}.png")
-                        pix.save(img_path)
-                        url = NSURL.fileURLWithPath_(img_path)
-                        req_h = Vision.VNImageRequestHandler.alloc().initWithURL_options_(url, None)
-                        req = Vision.VNRecognizeTextRequest.alloc().init()
-                        req.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
-                        req.setUsesLanguageCorrection_(True)
-                        req.setRecognitionLanguages_(['tr-TR', 'en-US'])
-                        succ, _ = req_h.performRequests_error_([req], None)
-                        if succ:
-                            lines = [r.topCandidates_(1)[0].string() for r in req.results()]
-                            pages_content.append(f"### Sayfa {pno + 1} (Yerel OCR)\n\n" + "\n".join(lines))
-                    except Exception:
-                        pass
+                    if len(text) > 50:
+                        pages_content.append(f"### Sayfa {pno + 1}\n\n{text}")
+                    elif has_vision:
+                        try:
+                            pix = page.get_pixmap(dpi=150)
+                            img_path = os.path.join(tmpdir, f"page_{pno}.png")
+                            pix.save(img_path)
+                            url = NSURL.fileURLWithPath_(img_path)
+                            req_h = Vision.VNImageRequestHandler.alloc().initWithURL_options_(url, None)
+                            req = Vision.VNRecognizeTextRequest.alloc().init()
+                            req.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
+                            req.setUsesLanguageCorrection_(True)
+                            req.setRecognitionLanguages_(['tr-TR', 'en-US'])
+                            succ, _ = req_h.performRequests_error_([req], None)
+                            if succ:
+                                lines = [r.topCandidates_(1)[0].string() for r in req.results()]
+                                pages_content.append(f"### Sayfa {pno + 1} (Yerel OCR)\n\n" + "\n".join(lines))
+                        except Exception:
+                            pass
+        finally:
+            doc.close()
 
         full_raw = f"# {os.path.basename(pdf_path)}\n\n" + "\n\n---\n\n".join(pages_content)
+        # Sayfa sınırı aşıldıysa kalan sayfaların sessizce atılmaması için görünür uyarı ekle
+        if total_pages > page_count:
+            full_raw += (
+                f"\n\n---\n\n> ⚠️ Bu belge {total_pages} sayfadır; "
+                f"yalnızca ilk {page_count} sayfa işlenmiştir.\n"
+            )
         return cls.redact_text(full_raw, known_tckns=known_tckns)
 
     @classmethod
@@ -992,14 +1080,73 @@ class UyapRedactor:
 
         total_updated = 0
         for root, dirs, files in os.walk(folder):
-            if "_kaynak" in root or ".git" in root:
+            if cls._is_skipped_dir(root, folder, cls.SKIP_DIRS):
+                dirs[:] = []
                 continue
+            dirs[:] = [d for d in dirs if not cls._is_skipped_dir(os.path.join(root, d), folder, cls.SKIP_DIRS)]
             for f in files:
                 if f == "INDEX.md":
                     full_index_path = os.path.join(root, f)
                     total_updated += cls.sync_index_file(full_index_path)
 
         return total_updated
+
+    @classmethod
+    def _redact_json_value(cls, value, known_tckns: Optional[Set[str]], stats: Dict[str, int]):
+        """
+        JSON ağacındaki tüm string değerleri (iç içe dict/list dahil) tek tek maskeler.
+        Anahtarlara dokunulmaz. Tamsayı olarak saklanan 11 haneli geçerli/bilinen TCKN'ler
+        MASK_TCKN stringine çevrilir.
+        """
+        if isinstance(value, dict):
+            return {k: cls._redact_json_value(v, known_tckns, stats) for k, v in value.items()}
+        if isinstance(value, list):
+            return [cls._redact_json_value(v, known_tckns, stats) for v in value]
+        if isinstance(value, str):
+            red, s = cls.redact_text(value, known_tckns=known_tckns)
+            for k in ["tckn", "telefon", "seri_no", "mrz", "iban", "sicil", "adres", "total"]:
+                stats[k] += s[k]
+            return red
+        if isinstance(value, int) and not isinstance(value, bool):
+            sval = str(value)
+            if len(sval) == 11 and (cls.is_valid_tckn(sval) or (known_tckns and sval in known_tckns)):
+                stats["tckn"] += 1
+                stats["total"] += 1
+                return cls.MASK_TCKN
+        return value
+
+    @classmethod
+    def redact_json_file(
+        cls,
+        src_path: str,
+        dest_path: str,
+        known_tckns: Optional[Set[str]] = None
+    ) -> Dict[str, int]:
+        """
+        Manifest JSON dosyasını değer bazında maskeleyerek hedefe yazar.
+        JSON parse edilemezse dosya ASLA ham kopyalanmaz: tüm metin redact_text'ten
+        geçirilerek yazılır (fail-closed).
+        Not: Ham JSON satırını doğrudan redact_text'e vermek, adres regex'inin satırın
+        kalanını yutmasına yol açtığından değer bazında maskeleme tercih edilir.
+        """
+        import json
+        stats = {"tckn": 0, "telefon": 0, "seri_no": 0, "mrz": 0, "iban": 0, "sicil": 0, "adres": 0, "total": 0}
+        with open(src_path, "r", encoding="utf-8", errors="replace") as f:
+            raw = f.read()
+        try:
+            data = json.loads(raw)
+        except (ValueError, RecursionError):
+            red, s = cls.redact_text(raw, known_tckns=known_tckns)
+            for k in stats:
+                stats[k] += s[k]
+            with open(dest_path, "w", encoding="utf-8") as wf:
+                wf.write(red)
+            return stats
+
+        red_data = cls._redact_json_value(data, known_tckns, stats)
+        with open(dest_path, "w", encoding="utf-8") as wf:
+            json.dump(red_data, wf, ensure_ascii=False, indent=2)
+        return stats
 
     @classmethod
     def export_isolated_clean_folder(
@@ -1027,9 +1174,27 @@ class UyapRedactor:
         else:
             dest_folder = os.path.abspath(dest_folder)
 
+        # Veri kaybı koruması: Hedef, kaynak klasörün kendisiyse (ör. --out kaynakla aynı)
+        # temizlik adımı orijinal _kaynak/ dizinini ve UDF/PDF/TIFF'leri silerdi.
+        # Yalnızca zaten '(Maskelenmis AI)' adlı çıktı klasörünün kendi üzerine yeniden çalıştırılmasına izin ver.
+        real_src = unicodedata.normalize("NFC", os.path.realpath(src_folder))
+        real_dest = unicodedata.normalize("NFC", os.path.realpath(dest_folder))
+        if real_src == real_dest and not real_src.rstrip(os.sep).endswith("(Maskelenmis AI)"):
+            raise ValueError(
+                "Hedef klasör kaynak dava klasörüyle aynı olamaz: bu işlem orijinal UDF/PDF/TIFF "
+                "dosyalarını silerdi. Lütfen farklı bir hedef klasör seçin "
+                "(varsayılan: '<klasör> (Maskelenmis AI)')."
+            )
+
         os.makedirs(dest_folder, exist_ok=True)
         norm_src = unicodedata.normalize("NFC", src_folder)
         norm_dest = unicodedata.normalize("NFC", dest_folder)
+
+        def _is_dest_subtree(path: str) -> bool:
+            """Hedef klasör kaynağın içindeyse, hedefin kendisi ve altı taranmaz."""
+            if norm_dest == norm_src:
+                return False
+            return cls._is_inside_path(unicodedata.normalize("NFC", path), norm_dest)
 
         grand_stats = {
             "tckn": 0,
@@ -1056,9 +1221,14 @@ class UyapRedactor:
         # 1. Mevcut Markdown ve Metin Belgelerini Topla
         md_files = []
         for root, dirs, files in os.walk(src_folder):
-            norm_root = unicodedata.normalize("NFC", root)
-            if "_kaynak" in root or ".git" in root or "node_modules" in root or (norm_dest != norm_src and norm_dest in norm_root):
+            if cls._is_skipped_dir(root, src_folder, cls.SKIP_DIRS) or _is_dest_subtree(root):
+                dirs[:] = []
                 continue
+            dirs[:] = [
+                d for d in dirs
+                if not cls._is_skipped_dir(os.path.join(root, d), src_folder, cls.SKIP_DIRS)
+                and not _is_dest_subtree(os.path.join(root, d))
+            ]
             for f in files:
                 if f.endswith((".md", ".txt")) and not f.endswith(".bak"):
                     md_files.append(os.path.join(root, f))
@@ -1094,10 +1264,16 @@ class UyapRedactor:
 
         # 2. Taranmış Evrakları (PDF ve TIFF) Tara ve Gerekirse Apple Vision OCR ile Çöz
         scanned_files = []
+        # Not: Bu tarama _kaynak/ dizinini BİLEREK tarar (orijinal PDF/TIFF'ler oradadır)
         for root, dirs, files in os.walk(src_folder):
-            norm_root = unicodedata.normalize("NFC", root)
-            if ".git" in root or "node_modules" in root or (norm_dest != norm_src and norm_dest in norm_root):
+            if cls._is_skipped_dir(root, src_folder, cls.SKIP_DIRS_OCR) or _is_dest_subtree(root):
+                dirs[:] = []
                 continue
+            dirs[:] = [
+                d for d in dirs
+                if not cls._is_skipped_dir(os.path.join(root, d), src_folder, cls.SKIP_DIRS_OCR)
+                and not _is_dest_subtree(os.path.join(root, d))
+            ]
             for f in files:
                 ext = os.path.splitext(f)[1].lower()
                 if ext in (".pdf", ".tif", ".tiff", ".png", ".jpg", ".jpeg"):
@@ -1128,15 +1304,7 @@ class UyapRedactor:
                     with open(target_dest_md, "w", encoding="utf-8") as wf:
                         wf.write(red_text)
 
-                    # Orijinal klasörde de _kaynak dışındaki dizine kazandır (varsa)
-                    src_target_md = os.path.join(src_folder, base_rel)
-                    if not os.path.exists(src_target_md):
-                        try:
-                            os.makedirs(os.path.dirname(src_target_md), exist_ok=True)
-                            with open(src_target_md, "w", encoding="utf-8") as swf:
-                                swf.write(red_text)
-                        except Exception:
-                            pass
+
 
                     for k in ["tckn", "telefon", "seri_no", "mrz", "iban", "sicil", "adres", "total"]:
                         grand_stats[k] += p_stats[k]
@@ -1151,30 +1319,22 @@ class UyapRedactor:
                 if progress_cb:
                     progress_cb("error", f"OCR Hatası ({os.path.basename(full_p)}): {str(oe)}", grand_stats)
 
-        # 3. Yargı PRO Manifest ve Meta Dosyalarını Aktar
-        for meta_name in ["uyap-project.json", "uyap-evrak-listesi.json", "AGENTS.md"]:
+        # 3. Yargı PRO Manifest JSON Dosyalarını Değer Bazında Maskeleyerek Aktar
+        # (AGENTS.md ve kök seviyedeki dosya-bilgileri.md / safahat.md / dava-analiz.md
+        #  1. adımda zaten maskelenerek aktarılır; burada maskesiz kopyalanmaz / çift sayılmaz.)
+        for meta_name in cls.META_JSON_NAMES:
             meta_src = os.path.join(src_folder, meta_name)
             meta_dest = os.path.join(dest_folder, meta_name)
-            if os.path.exists(meta_src) and os.path.abspath(meta_src) != os.path.abspath(meta_dest):
-                shutil.copy2(meta_src, meta_dest)
-
-        # 4. Kök Seviyedeki Dava Özeti ve Safahat Dosyalarını Maskele
-        for summary_name in ["dosya-bilgileri.md", "safahat.md", "dava-analiz.md"]:
-            sum_src = os.path.join(src_folder, summary_name)
-            if os.path.exists(sum_src):
-                sum_dest = os.path.join(dest_folder, summary_name)
+            if os.path.isfile(meta_src):
                 try:
-                    with open(sum_src, "r", encoding="utf-8", errors="replace") as sf:
-                        s_content = sf.read()
-                    s_red, s_stats = cls.redact_text(s_content, known_tckns=known_tckns)
+                    j_stats = cls.redact_json_file(meta_src, meta_dest, known_tckns=known_tckns)
                     for k in ["tckn", "telefon", "seri_no", "mrz", "iban", "sicil", "adres", "total"]:
-                        grand_stats[k] += s_stats[k]
-                    with open(sum_dest, "w", encoding="utf-8") as swf:
-                        swf.write(s_red)
-                except Exception:
-                    pass
+                        grand_stats[k] += j_stats[k]
+                except Exception as je:
+                    if progress_cb:
+                        progress_cb("error", f"{meta_name}: {str(je)}", grand_stats)
 
-        # 5. Sıfır İkili Dosya Denetimi (Hedef klasördeki olası ikili kalıntıları ve _kaynak dizinini temizle)
+        # 4. Sıfır İkili Dosya Denetimi (Hedef klasördeki olası ikili kalıntıları ve _kaynak dizinini temizle)
         clean_kaynak = os.path.join(dest_folder, "_kaynak")
         if os.path.isdir(clean_kaynak):
             shutil.rmtree(clean_kaynak, ignore_errors=True)
@@ -1196,12 +1356,11 @@ class UyapRedactor:
                 except Exception:
                     pass
 
-        # 6. INDEX.md Senkronizasyonu (Hem hedef hem kaynak klasör)
+        # 5. INDEX.md Senkronizasyonu (Sadece hedef temiz klasör; kaynak klasör dokunulmazdır)
         synced_dest = cls.sync_index_md(dest_folder)
         grand_stats["index_synced"] = synced_dest
-        cls.sync_index_md(src_folder)
 
-        # 7. Güvenlik ve Dönüşüm Raporu Oluştur
+        # 6. Güvenlik ve Dönüşüm Raporu Oluştur
         report_path = os.path.join(dest_folder, "DAVA_DÖNÜŞÜM_VE_GÜVENLİK_RAPORU.md")
         with open(report_path, "w", encoding="utf-8") as rf:
             rf.write("# 🛡️ Dava Dönüşüm ve Güvenlik Raporu\n\n")
@@ -1279,9 +1438,12 @@ def main():
             "adres": 0,
             "total": 0,
         }
-        for root, _, files in os.walk(target_dir):
-            if "_kaynak" in root or ".git" in root:
+        skip_names = UyapRedactor.SKIP_DIRS
+        for root, dirs, files in os.walk(target_dir):
+            if UyapRedactor._is_skipped_dir(root, target_dir, skip_names):
+                dirs[:] = []
                 continue
+            dirs[:] = [d for d in dirs if not UyapRedactor._is_skipped_dir(os.path.join(root, d), target_dir, skip_names)]
             for file in files:
                 if file.endswith((".md", ".txt")) and not file.endswith(".bak"):
                     fp = os.path.join(root, file)
@@ -1306,7 +1468,11 @@ def main():
     print("=" * 60)
     print("🛡️ UYAP İZOLE TEMİZ DAVA KLASÖRÜ ÜRETİMİ (AI EXPORT)")
     print("=" * 60)
-    dest, stats = UyapRedactor.export_isolated_clean_folder(args.path, args.out)
+    try:
+        dest, stats = UyapRedactor.export_isolated_clean_folder(args.path, args.out)
+    except ValueError as ve:
+        print(f"Hata: {ve}", file=sys.stderr)
+        sys.exit(1)
 
     print(f"\n✅ İzole Temiz Klasör %100 Başarıyla Oluşturuldu!")
     print(f"📂 Hedef Klasör : {dest}")

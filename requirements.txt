@@ -1,7 +1,19 @@
 # UYAP Dosya Maskeleme (YPro) Gereksinimleri
-# Bu uygulama sıfır dış bağımlılık prensibiyle Python standart kütüphaneleri 
-# kullanılarak geliştirilmiştir. Ekstra bir 'pip install' gerekmez.
+#
+# Çekirdek maskeleme (.md/.txt evrakları, INDEX.md senkronizasyonu, manifest JSON'ları)
+# yalnızca Python standart kütüphanesiyle çalışır; ek paket gerektirmez.
+#
+# Aşağıdaki paketler taranmış PDF / TIFF / görsel evrakların yerel OCR ile metne
+# dökülmesi için GEREKLİDİR. Kurulu değillerse OCR adımı atlanır ve taranmış ekler
+# temiz klasöre aktarılmaz.
+#   pip install -r requirements.txt
 #
 # Sistem Gereksinimleri:
 # - Python 3.9 veya üzeri (macOS Apple Silicon / Intel)
 # - Tkinter (macOS / Anaconda / Homebrew Python ile birlikte gelir)
+# - Apple Vision OCR için macOS (pyobjc paketleri yalnızca macOS'ta çalışır)
+
+PyMuPDF                     # fitz: PDF metin katmanı ve sayfa görüntüsü
+Pillow                      # PIL: çok sayfalı TIFF karelerinin ayrıştırılması
+pyobjc-framework-Vision     # Apple Vision yerel OCR motoru
+pyobjc-framework-Cocoa      # NSURL (Vision'a dosya yolu aktarımı)

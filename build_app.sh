@@ -1,14 +1,23 @@
 #!/bin/bash
 # ==============================================================================
-# UYAP Dosya Maskeleme (YPro) — macOS App Builder
+# UYAP Dosya Maskeleme (YPro) — macOS Geliştirici Test Paketi (Dev Wrapper)
+# NOT: Bu betik yerel geliştirici testleri içindir. Dağıtılabilir %100 bağımsız
+# standalone sürüm için 'build_dmg.sh' kullanılmalıdır.
 # ==============================================================================
 set -e
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 APP_NAME="UYAP Maskeleme.app"
-OUTPUT_DIR="${1:-$DIR/dist}"
+OUTPUT_DIR="${1:-$DIR/dist_dev}"
 
-echo "🔨 [1/4] Derleme dizini hazırlanıyor: $OUTPUT_DIR/$APP_NAME"
+# dist/ içindeki gerçek standalone ikilinin kazara ezilmesini önle
+if [ -d "$OUTPUT_DIR/$APP_NAME/Contents/Frameworks" ] || ([ -f "$OUTPUT_DIR/$APP_NAME/Contents/MacOS/UYAP Maskeleme" ] && file "$OUTPUT_DIR/$APP_NAME/Contents/MacOS/UYAP Maskeleme" 2>/dev/null | grep -q "Mach-O"); then
+    echo "⚠️ HATA: '$OUTPUT_DIR/$APP_NAME' bağımsız bir PyInstaller ikilisi içeriyor!"
+    echo "Gerçek standalone ikiliyi ezmemek için işlem durduruldu. Lütfen 'dist_dev' kullanın veya farklı bir hedef dizin belirtin."
+    exit 1
+fi
+
+echo "🔨 [1/4] Geliştirici derleme dizini hazırlanıyor: $OUTPUT_DIR/$APP_NAME"
 mkdir -p "$OUTPUT_DIR/$APP_NAME/Contents/MacOS"
 mkdir -p "$OUTPUT_DIR/$APP_NAME/Contents/Resources"
 

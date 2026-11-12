@@ -436,13 +436,13 @@ class TestUyapRedactorApp(unittest.TestCase):
         self.patch_subproc.stop()
 
     def test_window_geometry_and_properties(self):
-        """Pencere geometrisi (860x780), minsize (800x700) ve arka plan (#F4F4F6) doğrulaması."""
+        """Pencere geometrisi (760x640), minsize (720x580) ve arka plan (#F4F4F6) doğrulaması."""
         self.assertEqual(self.app.cget("bg"), Theme.BG_CANVAS)
-        self.assertIn("860", self.app.geometry())
-        self.assertIn("780", self.app.geometry())
+        self.assertIn("760", self.app.geometry())
+        self.assertIn("640", self.app.geometry())
         min_w, min_h = self.app.minsize()
-        self.assertEqual(min_w, 800)
-        self.assertEqual(min_h, 700)
+        self.assertEqual(min_w, 720)
+        self.assertEqual(min_h, 580)
         self.assertIn("UYAP Kişisel Veri Maskeleme", self.app.title())
 
     def test_all_components_instantiated(self):
@@ -503,6 +503,33 @@ class TestUyapRedactorApp(unittest.TestCase):
         with patch.object(self.app, "_start_process") as mock_run_blocked:
             self.app.event_generate("<Command-r>")
             mock_run_blocked.assert_not_called()
+
+        # 5. Command-q ve Command-w -> _on_close çağrılmalı
+        with patch.object(self.app, "_on_close") as mock_close:
+            self.app.event_generate("<Command-q>")
+            mock_close.assert_called_once()
+
+        with patch.object(self.app, "_on_close") as mock_close_w:
+            self.app.event_generate("<Command-w>")
+            mock_close_w.assert_called_once()
+
+    def test_start_process_reentrancy_and_path_expansion(self):
+        """_start_process reentrancy koruması ve '~' tilde yol genişletme testi."""
+        # 1. is_running = True iken doğrudan _start_process çağrısı engellenmeli
+        self.app.is_running = True
+        self.app.folder_var.set("/tmp")
+        with patch("threading.Thread") as mock_th:
+            self.app._start_process()
+            mock_th.assert_not_called()
+
+        # 2. '~' ile başlayan geçerli yolun expanduser ile genişletilmesi
+        self.app.is_running = False
+        fake_home = os.path.expanduser("~")
+        self.app.folder_var.set("~/")
+        with patch.object(gui.UyapRedactor, "export_isolated_clean_folder") as mock_exp:
+            with patch("threading.Thread") as mock_th:
+                self.app._start_process()
+                self.assertTrue(self.app.folder_var.get().startswith(fake_home))
 
     def test_console_logging_and_tags(self):
         """Konsol loglama ve syntax etiketleri (mask, ocr, sync, error, header, info)."""

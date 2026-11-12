@@ -6,13 +6,13 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[('uyap_redactor.py', '.')],
-    hiddenimports=['tkinter', 'tkinter.ttk', 'tkinter.filedialog', 'tkinter.messagebox', 'tkinter.scrolledtext', 'urllib.request', 'urllib.error', 'json', 'ssl', 'Vision', 'Cocoa', 'fitz', 'PIL'],
+    hiddenimports=['tkinter', 'tkinter.ttk', 'tkinter.filedialog', 'tkinter.messagebox', 'tkinter.scrolledtext', 'urllib.request', 'urllib.error', 'json', 'ssl', 'Vision', 'Cocoa', 'AppKit', 'Foundation', 'Quartz', 'objc', 'fitz', 'PIL'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
         'PyQt5', 'PyQt6', 'PySide2', 'PySide6', 'qtpy',
-        'matplotlib', 'scipy', 'pandas', 'IPython', 'jupyter',
+        'matplotlib', 'scipy', 'pandas', 'numpy', 'openblas', 'IPython', 'jupyter',
         'sphinx', 'tornado', 'notebook', 'nbformat', 'nbconvert',
         'docutils', 'lxml', 'zmq', 'black', 'yapf', 'pytest'
     ],

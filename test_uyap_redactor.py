@@ -390,6 +390,333 @@ class TestUyapRedactor(unittest.TestCase):
             # 5. Manifest kopyalanmalı
             self.assertTrue(os.path.isfile(os.path.join(dest_dir, "uyap-project.json")))
 
+    def test_iban_does_not_swallow_next_line_title(self):
+        """5a. IBAN maskelemesinin alt satırdaki unvanın ilk harfini yutmamasını doğrulama."""
+        text = (
+            "IBAN: TR33 0006 1005 1112 3456 7890 12\n"
+            "Hakim Ayşe Kaya 112233"
+        )
+        red, stats = UyapRedactor.redact_text(text)
+        self.assertIn("Hakim Ayşe Kaya [SİCİL_GİZLENDİ]", red)
+        self.assertEqual(stats["iban"], 1)
+        self.assertEqual(stats["sicil"], 1)
+
+    def test_address_preserves_surnames_and_parent_names(self):
+        """5b. Adres maskelemesinde taraf soyadlarının ve Anne/Baba adlarının korunması."""
+        # 1. Taraf soyadının korunması
+        addr_case = "Sanık Ali Veli, Cumhuriyet Mah. No: 5 Kadıköy/İstanbul"
+        red, _ = UyapRedactor.redact_address(addr_case)
+        self.assertIn("Sanık Ali Veli", red, "Taraf soyadı silinmemelidir!")
+
+        # 2. Tek satırlı sorgularda Anne/Baba Adı ve Doğum Yeri gibi alanların korunması
+        parents_case = "Adres: Atatürk Mah. No: 12 Burdur, Anne Adı: Emine, Baba Adı: Hüseyin, Doğum Yeri: BURDUR"
+        red_p, _ = UyapRedactor.redact_address(parents_case)
+        self.assertIn("Anne Adı: Emine", red_p)
+        self.assertIn("Baba Adı: Hüseyin", red_p)
+        self.assertIn("Doğum Yeri: BURDUR", red_p)
+        self.assertIn("[ADRES_GİZLENDİ]", red_p)
+
+    def test_spaced_tckn_variations(self):
+        """5c. Boşluklu etiketli TCKN varyasyonlarının başarıyla maskelenmesi."""
+        spaced_cases = [
+            "TCKN: 123 456 789 50",
+            "T.C. Kimlik No: 12345 678950",
+            "TC Kimlik No: 123 45678950",
+        ]
+        for c in spaced_cases:
+            red, count = UyapRedactor.redact_tckn(c)
+            self.assertEqual(count, 1, f"Failed to redact spaced TCKN: {c}")
+            self.assertIn("[TCKN_GİZLENDİ]", red)
+
+    def test_source_folder_immutability(self):
+        """5d. Sıfır Veri Değişikliği Prensibi: export_isolated_clean_folder kaynak klasörü asla değiştirmemelidir."""
+        with tempfile.TemporaryDirectory() as src_dir:
+            tutanak_dir = os.path.join(src_dir, "01-Tutanak")
+            os.makedirs(tutanak_dir, exist_ok=True)
+            md_path = os.path.join(tutanak_dir, "duruşma.md")
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write("TCKN: 12345678901")
+            index_path = os.path.join(src_dir, "INDEX.md")
+            initial_index = "| Tarih | Tür | Yön | Gönderen | No | Dosya | Metin |\n|---|---|---|---|---|---|---|\n| 2024-01-15 | T | — | M | 1 | [↗](<01-Tutanak/duruşma.md>) | — |\n"
+            with open(index_path, "w", encoding="utf-8") as f:
+                f.write(initial_index)
+
+            initial_files = {}
+            for root, _, files in os.walk(src_dir):
+                for f in files:
+                    fp = os.path.join(root, f)
+                    with open(fp, "rb") as rf:
+                        initial_files[fp] = rf.read()
+
+            dest_dir, stats = UyapRedactor.export_isolated_clean_folder(src_dir)
+
+            # Kaynak klasördeki hiçbir dosya silinmemiş, değiştirilmemiş ve yeni dosya eklenmemiş olmalı
+            current_files = {}
+            for root, _, files in os.walk(src_dir):
+                for f in files:
+                    fp = os.path.join(root, f)
+                    with open(fp, "rb") as rf:
+                        current_files[fp] = rf.read()
+
+            self.assertEqual(initial_files, current_files, "Kaynak klasördeki dosyalar mutasyona uğradı!")
+
+
+class TestRegressionFixes(unittest.TestCase):
+    """Analizde deneyle doğrulanan sızıntı / veri kaybı / yanlış pozitif hatalarının regresyon testleri."""
+
+    VALID_TCKN = "10000000146"
+    PHONE = "05321112233"
+
+    def _make_case(self, parent: str, name: str = "Dava 2024-100") -> str:
+        src = os.path.join(parent, name)
+        os.makedirs(src, exist_ok=True)
+        return src
+
+    # --- A) export_isolated_clean_folder ---
+
+    def test_agents_md_is_not_overwritten_with_unmasked_original(self):
+        """1. AGENTS.md maskelendikten sonra maskesiz orijinalle üzerine yazılmamalı."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = self._make_case(tmp)
+            with open(os.path.join(src, "AGENTS.md"), "w", encoding="utf-8") as f:
+                f.write(f"# Ajan Notları\n\nMüvekkil TCKN: {self.VALID_TCKN}, Tel: {self.PHONE}\n")
+            dest, _ = UyapRedactor.export_isolated_clean_folder(src)
+            with open(os.path.join(dest, "AGENTS.md"), "r", encoding="utf-8") as f:
+                content = f.read()
+            self.assertNotIn(self.VALID_TCKN, content)
+            self.assertNotIn(self.PHONE, content)
+            self.assertIn("[TCKN_GİZLENDİ]", content)
+
+    def test_manifest_json_files_are_redacted_and_stay_valid(self):
+        """2. uyap-project.json ve uyap-evrak-listesi.json değer bazında maskelenmeli, geçerli JSON kalmalı."""
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            src = self._make_case(tmp)
+            project = {
+                "case": "2024/100 Esas",
+                "taraflar": [
+                    {"ad": "Örnek Kişi", "tckn": self.VALID_TCKN, "telefon": self.PHONE},
+                    {"ad": "Diğer Kişi", "tckn_int": int(self.VALID_TCKN)},
+                ],
+                "adres": "Atatürk Mah. Gül Sok. No:5 Burdur",
+                "sayfa": 12,
+            }
+            evrak = [{"no": 1, "aciklama": f"Dilekçe ({self.VALID_TCKN})", "tarih": "2024-01-15"}]
+            with open(os.path.join(src, "uyap-project.json"), "w", encoding="utf-8") as f:
+                json.dump(project, f, ensure_ascii=False)
+            with open(os.path.join(src, "uyap-evrak-listesi.json"), "w", encoding="utf-8") as f:
+                json.dump(evrak, f, ensure_ascii=False)
+
+            dest, stats = UyapRedactor.export_isolated_clean_folder(src)
+
+            for name in ("uyap-project.json", "uyap-evrak-listesi.json"):
+                with open(os.path.join(dest, name), "r", encoding="utf-8") as f:
+                    raw = f.read()
+                self.assertNotIn(self.VALID_TCKN, raw, f"{name} içinde TCKN sızdı")
+                self.assertNotIn(self.PHONE, raw, f"{name} içinde telefon sızdı")
+                json.loads(raw)  # Hâlâ geçerli JSON olmalı
+
+            with open(os.path.join(dest, "uyap-project.json"), "r", encoding="utf-8") as f:
+                red_project = json.load(f)
+            # Anahtarlar ve hassas olmayan değerler korunur
+            self.assertEqual(red_project["case"], "2024/100 Esas")
+            self.assertEqual(red_project["sayfa"], 12)
+            self.assertEqual(red_project["taraflar"][0]["ad"], "Örnek Kişi")
+            self.assertEqual(red_project["taraflar"][0]["tckn"], UyapRedactor.MASK_TCKN)
+            self.assertEqual(red_project["taraflar"][1]["tckn_int"], UyapRedactor.MASK_TCKN)
+            self.assertIn("[ADRES_GİZLENDİ]", red_project["adres"])
+            self.assertGreaterEqual(stats["tckn"], 3)
+            self.assertGreaterEqual(stats["telefon"], 1)
+
+    def test_invalid_manifest_json_is_redacted_fail_closed(self):
+        """2. Parse edilemeyen JSON ham kopyalanmamalı; metin maskelenerek yazılmalı."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = self._make_case(tmp)
+            with open(os.path.join(src, "uyap-project.json"), "w", encoding="utf-8") as f:
+                f.write('{"tckn": "' + self.VALID_TCKN + '", bozuk json\n')
+            dest, _ = UyapRedactor.export_isolated_clean_folder(src)
+            with open(os.path.join(dest, "uyap-project.json"), "r", encoding="utf-8") as f:
+                raw = f.read()
+            self.assertNotIn(self.VALID_TCKN, raw)
+
+    def test_known_tckns_collected_from_manifest_json(self):
+        """2. collect_known_tckns_from_folder manifest JSON'larını da taramalı."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = self._make_case(tmp)
+            with open(os.path.join(src, "uyap-evrak-listesi.json"), "w", encoding="utf-8") as f:
+                f.write('[{"tckn": "' + self.VALID_TCKN + '"}]')
+            known = UyapRedactor.collect_known_tckns_from_folder(src)
+            self.assertIn(self.VALID_TCKN, known)
+
+    def test_dest_equal_to_src_raises_and_keeps_originals(self):
+        """3. Hedef == kaynak ise ValueError fırlatılmalı ve _kaynak/ altındaki orijinaller silinmemeli."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = self._make_case(tmp)
+            kaynak = os.path.join(src, "_kaynak")
+            os.makedirs(kaynak)
+            udf = os.path.join(kaynak, "x.udf")
+            with open(udf, "wb") as f:
+                f.write(b"ORIJINAL_UDF")
+            with open(os.path.join(src, "not.md"), "w", encoding="utf-8") as f:
+                f.write(f"TCKN: {self.VALID_TCKN}\n")
+
+            with self.assertRaises(ValueError):
+                UyapRedactor.export_isolated_clean_folder(src, src)
+            # Sondaki ayraçlı yazım da aynı klasör sayılmalı
+            with self.assertRaises(ValueError):
+                UyapRedactor.export_isolated_clean_folder(src, src + os.sep)
+
+            self.assertTrue(os.path.isfile(udf), "_kaynak/x.udf silindi!")
+            with open(os.path.join(src, "not.md"), "r", encoding="utf-8") as f:
+                self.assertIn(self.VALID_TCKN, f.read(), "Kaynak .md değiştirildi!")
+
+    def test_rerun_on_masked_folder_itself_is_allowed(self):
+        """3. '(Maskelenmis AI)' ile biten klasörün kendi üzerine yeniden çalıştırılması desteklenmeye devam etmeli."""
+        with tempfile.TemporaryDirectory() as tmp:
+            masked = self._make_case(tmp, "Dava (Maskelenmis AI)")
+            with open(os.path.join(masked, "not.md"), "w", encoding="utf-8") as f:
+                f.write(f"TCKN: {self.VALID_TCKN}\n")
+            dest, _ = UyapRedactor.export_isolated_clean_folder(masked, masked)
+            self.assertEqual(os.path.realpath(dest), os.path.realpath(masked))
+            with open(os.path.join(masked, "not.md"), "r", encoding="utf-8") as f:
+                self.assertNotIn(self.VALID_TCKN, f.read())
+
+    def test_parent_path_containing_git_or_kaynak_does_not_skip_files(self):
+        """4. Kaynağın üst yolunda '.git' / '_kaynak' geçmesi dosyaların atlanmasına yol açmamalı."""
+        for parent_name in ("my.gitrepo", ".github", "eski_kaynak_arsiv", "node_modules_yedek"):
+            with self.subTest(parent=parent_name), tempfile.TemporaryDirectory() as tmp:
+                parent = os.path.join(tmp, parent_name)
+                src = self._make_case(parent)
+                sub = os.path.join(src, "01-Tutanak")
+                os.makedirs(sub)
+                with open(os.path.join(sub, "tutanak.md"), "w", encoding="utf-8") as f:
+                    f.write(f"# Tutanak\n\nTCKN: {self.VALID_TCKN}\n")
+                # Gerçek .git ve _kaynak alt dizinleri yine de atlanmalı
+                os.makedirs(os.path.join(src, ".git"))
+                with open(os.path.join(src, ".git", "HEAD.md"), "w", encoding="utf-8") as f:
+                    f.write("git iç dosyası")
+
+                dest, stats = UyapRedactor.export_isolated_clean_folder(src)
+                self.assertEqual(stats["md_transferred"], 1)
+                self.assertTrue(os.path.isfile(os.path.join(dest, "01-Tutanak", "tutanak.md")))
+                self.assertFalse(os.path.exists(os.path.join(dest, ".git")))
+                self.assertIn(self.VALID_TCKN, UyapRedactor.collect_known_tckns_from_folder(src))
+
+    def test_is_skipped_dir_uses_exact_component_names(self):
+        """4. _is_skipped_dir yalnızca göreli yol bileşenlerinde tam ad eşleşmesine bakmalı."""
+        base = os.path.join(os.sep, "Users", "x", "my.gitrepo", "dava")
+        skip = UyapRedactor.SKIP_DIRS
+        self.assertFalse(UyapRedactor._is_skipped_dir(base, base, skip))
+        self.assertFalse(UyapRedactor._is_skipped_dir(os.path.join(base, ".github"), base, skip))
+        self.assertFalse(UyapRedactor._is_skipped_dir(os.path.join(base, "eski_kaynak"), base, skip))
+        self.assertTrue(UyapRedactor._is_skipped_dir(os.path.join(base, "_kaynak", "01"), base, skip))
+        self.assertTrue(UyapRedactor._is_skipped_dir(os.path.join(base, "a", ".git"), base, skip))
+
+    def test_root_summary_files_counted_once(self):
+        """5. dosya-bilgileri.md içindeki tek TCKN bir kez sayılmalı (çift sayım yok)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = self._make_case(tmp)
+            with open(os.path.join(src, "dosya-bilgileri.md"), "w", encoding="utf-8") as f:
+                f.write(f"# Dosya Bilgileri\n\nDavacı TCKN: {self.VALID_TCKN}\n")
+            dest, stats = UyapRedactor.export_isolated_clean_folder(src)
+            self.assertEqual(stats["tckn"], 1)
+            with open(os.path.join(dest, "dosya-bilgileri.md"), "r", encoding="utf-8") as f:
+                self.assertNotIn(self.VALID_TCKN, f.read())
+
+    def test_collect_known_tckns_from_masked_folder_with_nfd_name(self):
+        """6. NFD yazılmış '(Maskelenmis AI)' yolunda da kaynak klasör taranmalı (NFC tutarlılığı)."""
+        import unicodedata
+        with tempfile.TemporaryDirectory() as tmp:
+            src = self._make_case(tmp, "Dava Şükrü")
+            with open(os.path.join(src, "not.md"), "w", encoding="utf-8") as f:
+                f.write(f"TCKN: {self.VALID_TCKN}\n")
+            masked = os.path.join(tmp, "Dava Şükrü (Maskelenmis AI)")
+            os.makedirs(masked)
+            known = UyapRedactor.collect_known_tckns_from_folder(unicodedata.normalize("NFD", masked))
+            self.assertIn(self.VALID_TCKN, known)
+
+    # --- B) Yanlış pozitifler ---
+
+    def test_partial_tckn_does_not_mask_unlabeled_number_ranges(self):
+        """7. Etiketsiz 3 haneli sayı aralıkları kısmi TCKN sanılmamalı."""
+        for text in (
+            "Kira bedeli 150 - 200 TL arasındadır.",
+            "TCK madde 141 - 142 uyarınca",
+            "sayfa 120 -- 135",
+        ):
+            red, stats = UyapRedactor.redact_text(text)
+            self.assertEqual(red, text)
+            self.assertEqual(stats["tckn"], 0)
+
+        for text in ("TC:226*****874", "TC:309*****704", 'TC:382---"566', "226*****874"):
+            red, count = UyapRedactor.redact_tckn(text)
+            self.assertEqual(red, UyapRedactor.MASK_TCKN, f"Kısmi TCKN maskelenmedi: {text}")
+            self.assertEqual(count, 1)
+
+    def test_num_first_does_not_mask_dates_esas_and_abbreviations(self):
+        """8. Tarih / esas no / TCK / TCMB öncesindeki sayılar 'sayı önce etiket sonra' TCKN sanılmamalı."""
+        for text in (
+            "Karar Tarihi: 12/03/2015 T.C. ANKARA 3. ASLİYE HUKUK MAHKEMESİ",
+            "Esas No: 2021/123456 T.C. İSTANBUL",
+            "Dosya 2021/1234567 TCK 141",
+            "Tutar 1 250 000 00 TCMB kuru",
+        ):
+            red, stats = UyapRedactor.redact_text(text)
+            self.assertEqual(red, text)
+            self.assertEqual(stats["tckn"], 0)
+            self.assertEqual(UyapRedactor.collect_known_tckns_from_text(text), set())
+
+        for text, expected in (
+            ("12345678901 T.C'nolu", "[TCKN_GİZLENDİ] T.C'nolu"),
+            ("12345678901 TCKN", "[TCKN_GİZLENDİ] TCKN"),
+            ("12345678901 TC nolu", "[TCKN_GİZLENDİ] TC nolu"),
+            ("1234567890 T.C. ndu", "[TCKN_GİZLENDİ] T.C. ndu"),
+            ("1234567890 te nolu", "[TCKN_GİZLENDİ] te nolu"),
+        ):
+            red, count = UyapRedactor.redact_tckn(text)
+            self.assertEqual(red, expected)
+            self.assertEqual(count, 1)
+        self.assertIn("12345678901", UyapRedactor.collect_known_tckns_from_text("12345678901 T.C'nolu"))
+
+    def test_sicil_does_not_mask_amounts_and_sayili(self):
+        """9. Unvan + sayı kalıbında para tutarı ve 'sayılı' ifadeleri sicil sanılmamalı."""
+        for text in ("Hakim 150000 TL ödenmesine", "Başkan 20245 sayılı"):
+            red, count = UyapRedactor.redact_sicil(text)
+            self.assertEqual(red, text)
+            self.assertEqual(count, 0)
+        for text, expected in (
+            ("Başkan 211094", "Başkan [SİCİL_GİZLENDİ]"),
+            ("Mübaşir 234567", "Mübaşir [SİCİL_GİZLENDİ]"),
+            ("Kalip/123456", "Kalip/[SİCİL_GİZLENDİ]"),
+        ):
+            red, count = UyapRedactor.redact_sicil(text)
+            self.assertEqual(red, expected)
+            self.assertEqual(count, 1)
+
+    # --- D) PDF sayfa sınırı ---
+
+    def test_pdf_truncation_adds_visible_warning(self):
+        """11. max_pages aşıldığında çıktıya görünür bir kesilme uyarısı eklenmeli."""
+        try:
+            import fitz
+        except ImportError:
+            self.skipTest("PyMuPDF (fitz) kurulu değil")
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf_path = os.path.join(tmp, "uzun.pdf")
+            doc = fitz.open()
+            for i in range(3):
+                page = doc.new_page()
+                page.insert_text((72, 72), f"Sayfa {i + 1} icin yeterince uzun bir dijital metin satiri burada yer aliyor.")
+            doc.save(pdf_path)
+            doc.close()
+
+            red, _ = UyapRedactor.extract_and_redact_pdf(pdf_path, max_pages=2)
+            self.assertIn("Bu belge 3 sayfadır; yalnızca ilk 2 sayfa işlenmiştir.", red)
+
+            red_full, _ = UyapRedactor.extract_and_redact_pdf(pdf_path, max_pages=150)
+            self.assertNotIn("yalnızca ilk", red_full)
+
+
 
 if __name__ == "__main__":
     unittest.main()

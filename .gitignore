@@ -17,6 +17,7 @@ Icon
 
 # Build outputs & Backups
 dist/
+dist_dev/
 build/
 *.bak
 *.md.bak

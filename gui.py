@@ -27,6 +27,7 @@ import threading
 import queue
 import time
 import subprocess
+import unicodedata
 from datetime import datetime
 from typing import Optional, Dict, Tuple, Callable
 import tkinter as tk
@@ -486,7 +487,11 @@ class GlassButton(tk.Frame):
             self.config(bg=self.bg_hover, highlightbackground=self.border_hover)
             self.label.config(bg=self.bg_hover)
             # Fare imleci buton alanı içinde mi bırakıldı kontrolü
-            if was_pressed and 0 <= e.x <= self.winfo_width() and 0 <= e.y <= self.winfo_height():
+            # (Pencere henüz haritalanmamışken winfo_width()/winfo_height() 1 döner;
+            #  istenen boyutla (winfo_reqwidth/reqheight) birlikte büyük olanı kullan)
+            btn_w = max(self.winfo_width(), self.winfo_reqwidth())
+            btn_h = max(self.winfo_height(), self.winfo_reqheight())
+            if was_pressed and 0 <= e.x <= btn_w and 0 <= e.y <= btn_h:
                 if self.command:
                     self.command()
 
@@ -533,15 +538,15 @@ class GlassStatCard(tk.Frame):
             bg=Theme.BG_SURFACE,
             highlightbackground=Theme.BORDER_GLASS,
             highlightthickness=1,
-            padx=12,
-            pady=9,
+            padx=8,
+            pady=5,
             **kwargs
         )
         self.color = color
 
         # 1. Üst kenar Liquid Glass ışık yansıması (Subtle Highlight Bevel)
         self.top_highlight = tk.Frame(self, bg="#F4F4F6", height=1)
-        self.top_highlight.pack(fill="x", pady=(0, 5))
+        self.top_highlight.pack(fill="x", pady=(0, 3))
 
         # 2. Başlık / Etiket
         self.lbl_title = tk.Label(
@@ -557,11 +562,11 @@ class GlassStatCard(tk.Frame):
         self.lbl_val = tk.Label(
             self,
             text=str(value),
-            font=Theme.font_display(17, "bold"),
+            font=Theme.font_display(14, "bold"),
             fg=color,
             bg=Theme.BG_SURFACE
         )
-        self.lbl_val.pack(anchor="w", pady=(2, 0))
+        self.lbl_val.pack(anchor="w", pady=(1, 0))
 
         # Hover mikro etkileşimi
         for w in (self, self.top_highlight, self.lbl_title, self.lbl_val):
@@ -754,12 +759,12 @@ class UyapRedactorApp(tk.Tk):
         try:
             sw = self.winfo_screenwidth()
             sh = self.winfo_screenheight()
-            px = max(0, (sw - 860) // 2)
-            py = max(25, (sh - 780) // 2 - 15)
-            self.geometry(f"860x780+{px}+{py}")
+            px = max(0, (sw - 760) // 2)
+            py = max(25, (sh - 640) // 2 - 15)
+            self.geometry(f"760x640+{px}+{py}")
         except Exception:
-            self.geometry("860x780")
-        self.minsize(800, 700)
+            self.geometry("760x640")
+        self.minsize(720, 580)
         self.configure(bg=Theme.BG_CANVAS)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -784,8 +789,8 @@ class UyapRedactorApp(tk.Tk):
         self.bind("<Control-r>", lambda e: self._start_process() if not self.is_running else None)
         self.bind("<Command-k>", lambda e: self._clear_logs())
         self.bind("<Control-k>", lambda e: self._clear_logs())
-        self.bind("<Command-q>", lambda e: self.destroy())
-        self.bind("<Command-w>", lambda e: self.destroy())
+        self.bind("<Command-q>", lambda e: self._on_close())
+        self.bind("<Command-w>", lambda e: self._on_close())
 
     def _on_close(self):
         """İşlem devam ederken yanlışlıkla kapatmayı önleyen güvenli çıkış kontrolü."""
@@ -807,8 +812,8 @@ class UyapRedactorApp(tk.Tk):
         header_frame = tk.Frame(
             self,
             bg=Theme.BG_SURFACE,
-            padx=24,
-            pady=14,
+            padx=16,
+            pady=10,
             highlightbackground=Theme.BORDER_GLASS,
             highlightthickness=1
         )
@@ -821,7 +826,7 @@ class UyapRedactorApp(tk.Tk):
         title_lbl = tk.Label(
             header_top,
             text="🛡️ UYAP Kişisel Veri Maskeleme",
-            font=Theme.font_display(17, "bold"),
+            font=Theme.font_display(15, "bold"),
             fg=Theme.TEXT_PRIMARY,
             bg=Theme.BG_SURFACE
         )
@@ -892,14 +897,14 @@ class UyapRedactorApp(tk.Tk):
             bg=Theme.BG_SURFACE,
             highlightbackground=Theme.BORDER_GLASS,
             highlightthickness=1,
-            padx=14,
-            pady=10
+            padx=12,
+            pady=7
         )
-        folder_card.pack(fill="x", pady=(0, 8))
+        folder_card.pack(fill="x", pady=(0, 6))
 
         # Başlık ve ipucu
         f_header = tk.Frame(folder_card, bg=Theme.BG_SURFACE)
-        f_header.pack(fill="x", pady=(0, 6))
+        f_header.pack(fill="x", pady=(0, 4))
 
         tk.Label(
             f_header,
@@ -962,13 +967,13 @@ class UyapRedactorApp(tk.Tk):
             bg=Theme.BG_SURFACE,
             highlightbackground=Theme.BORDER_GLASS,
             highlightthickness=1,
-            padx=14,
-            pady=10
+            padx=12,
+            pady=7
         )
-        mode_card.pack(fill="x", pady=(0, 8))
+        mode_card.pack(fill="x", pady=(0, 6))
 
         mode_header = tk.Frame(mode_card, bg=Theme.BG_SURFACE)
-        mode_header.pack(fill="x", pady=(0, 4))
+        mode_header.pack(fill="x", pady=(0, 2))
 
         tk.Label(
             mode_header,
@@ -989,58 +994,52 @@ class UyapRedactorApp(tk.Tk):
 
         mode_desc = tk.Label(
             mode_card,
-            text=(
-                "• Orijinal dosyalara ASLA dokunmaz; yanına '<Dava Klasörü> (Maskelenmis AI)' adında izole bir klasör üretir.\n"
-                "• SADECE maskeli Markdown (.md) dosyalarını aktarır; ikili UDF/PDF/TIFF dosyalarını dışarıda bırakır.\n"
-                "• Taranmış fotokopi ve ekleri yerel Apple Vision OCR motoruyla çevrimdışı olarak metne döker.\n"
-                "• 7 Katmanlı PII Maskelemesi: TCKN, Cep Telefonu, Kimlik Seri No, MRZ Kodu, IBAN, Sicil No, Adres.\n"
-                "• INDEX.md tablosunu güncel karakter sayıları ve .md dosya bağlantılarıyla %100 senkronize eder."
-            ),
-            font=Theme.font_text(10, "normal"),
+            text="Orijinal dosyalara dokunmaz • Yalnızca maskelenmiş .md aktarımı • Sıfır ikili dosya sızıntısı",
+            font=Theme.font_text(9, "normal"),
             justify="left",
-            fg=Theme.TEXT_SECONDARY,
+            fg=Theme.TEXT_MUTED,
             bg=Theme.BG_SURFACE
         )
-        mode_desc.pack(anchor="w", pady=(2, 0))
+        mode_desc.pack(anchor="w", pady=(1, 0))
 
         # ----------------------------------------------------------------------
         # 4. İSTATİSTİK KARTLARI (2 Satır x 4 Cam Kart)
         # ----------------------------------------------------------------------
         stats_frame_row1 = tk.Frame(main_frame, bg=Theme.BG_CANVAS)
-        stats_frame_row1.pack(fill="x", pady=(0, 5))
+        stats_frame_row1.pack(fill="x", pady=(0, 4))
 
         self.card_tckn = GlassStatCard(stats_frame_row1, "🆔 TCKN Gizlenen", "0", color=Theme.STAT_TCKN)
-        self.card_tckn.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        self.card_tckn.pack(side="left", fill="x", expand=True, padx=(0, 3))
 
         self.card_telefon = GlassStatCard(stats_frame_row1, "📱 Telefon Gizlenen", "0", color=Theme.STAT_TEL)
-        self.card_telefon.pack(side="left", fill="x", expand=True, padx=4)
+        self.card_telefon.pack(side="left", fill="x", expand=True, padx=3)
 
         self.card_seri_no = GlassStatCard(stats_frame_row1, "🪪 Kimlik Seri No", "0", color=Theme.STAT_SERI)
-        self.card_seri_no.pack(side="left", fill="x", expand=True, padx=4)
+        self.card_seri_no.pack(side="left", fill="x", expand=True, padx=3)
 
         self.card_mrz = GlassStatCard(stats_frame_row1, "📑 Kimlik MRZ Kodu", "0", color=Theme.STAT_MRZ)
-        self.card_mrz.pack(side="left", fill="x", expand=True, padx=(4, 0))
+        self.card_mrz.pack(side="left", fill="x", expand=True, padx=(3, 0))
 
         stats_frame_row2 = tk.Frame(main_frame, bg=Theme.BG_CANVAS)
-        stats_frame_row2.pack(fill="x", pady=(0, 8))
+        stats_frame_row2.pack(fill="x", pady=(0, 6))
 
         self.card_iban = GlassStatCard(stats_frame_row2, "💳 IBAN Gizlenen", "0", color=Theme.STAT_IBAN)
-        self.card_iban.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        self.card_iban.pack(side="left", fill="x", expand=True, padx=(0, 3))
 
         self.card_sicil = GlassStatCard(stats_frame_row2, "⚖️ Sicil No Gizlenen", "0", color=Theme.STAT_SICIL)
-        self.card_sicil.pack(side="left", fill="x", expand=True, padx=4)
+        self.card_sicil.pack(side="left", fill="x", expand=True, padx=3)
 
         self.card_adres = GlassStatCard(stats_frame_row2, "📍 Adres Gizlenen", "0", color=Theme.STAT_ADRES)
-        self.card_adres.pack(side="left", fill="x", expand=True, padx=4)
+        self.card_adres.pack(side="left", fill="x", expand=True, padx=3)
 
         self.card_files = GlassStatCard(stats_frame_row2, "📄 Aktarılan / OCR", "0", color=Theme.STAT_FILES)
-        self.card_files.pack(side="left", fill="x", expand=True, padx=(4, 0))
+        self.card_files.pack(side="left", fill="x", expand=True, padx=(3, 0))
 
         # ----------------------------------------------------------------------
         # 5. İŞLEM BUTONLARI VE DURUM HAPI
         # ----------------------------------------------------------------------
         action_frame = tk.Frame(main_frame, bg=Theme.BG_CANVAS)
-        action_frame.pack(fill="x", pady=(0, 8))
+        action_frame.pack(fill="x", pady=(0, 6))
 
         # 🚀 Ana Çalıştırma Butonu (Apple Blue Primary)
         self.btn_run = GlassButton(
@@ -1048,10 +1047,10 @@ class UyapRedactorApp(tk.Tk):
             text="🚀  İzole Temiz Klasör Üret",
             variant="primary",
             command=self._start_process,
-            padx=18,
-            pady=8
+            padx=16,
+            pady=6
         )
-        self.btn_run.pack(side="left", padx=(0, 8))
+        self.btn_run.pack(side="left", padx=(0, 6))
 
         # 📂 Klasörü Aç Butonu
         self.btn_open_folder = GlassButton(
@@ -1060,10 +1059,10 @@ class UyapRedactorApp(tk.Tk):
             variant="secondary",
             command=self._open_dest_folder,
             state="disabled",
-            padx=14,
-            pady=8
+            padx=12,
+            pady=6
         )
-        self.btn_open_folder.pack(side="left", padx=(0, 10))
+        self.btn_open_folder.pack(side="left", padx=(0, 8))
 
         # Parlayan Durum Hapı (Glowing Status Pill)
         self.lbl_status = GlassStatusPill(
@@ -1076,7 +1075,7 @@ class UyapRedactorApp(tk.Tk):
         # İLERLEME ÇUBUĞU (LIQUID GLASS PROGRESS BAR)
         # ----------------------------------------------------------------------
         self.progress = GlassProgressBar(main_frame, height=12, bg=Theme.BG_CANVAS)
-        self.progress.pack(fill="x", pady=(0, 8))
+        self.progress.pack(fill="x", pady=(0, 6))
 
         # ----------------------------------------------------------------------
         # 6. GELİŞTİRİCİ KONSOLU / İŞLEM KAYITLARI (APPLE DARK TERMINAL)
@@ -1192,7 +1191,7 @@ class UyapRedactorApp(tk.Tk):
         else:
             messagebox.showinfo("Bilgi", "Oluşturulmuş izole temiz klasör bulunamadı.")
 
-    def _log(self, text):
+    def _log(self, text, autoscroll: bool = True):
         tag = None
         if "[MASKE]" in text:
             tag = "mask"
@@ -1211,7 +1210,8 @@ class UyapRedactorApp(tk.Tk):
             self.log_text.insert(tk.END, text, tag)
         else:
             self.log_text.insert(tk.END, text)
-        self.log_text.see(tk.END)
+        if autoscroll:
+            self.log_text.see(tk.END)
 
     def _clear_logs(self):
         self.log_text.delete("1.0", tk.END)
@@ -1231,11 +1231,13 @@ class UyapRedactorApp(tk.Tk):
                 pass
             self._queue_job = None
 
+        has_new_log = False
         try:
             while True:
                 msg_type, payload = self.msg_queue.get_nowait()
                 if msg_type == "log":
-                    self._log(payload)
+                    self._log(payload, autoscroll=False)
+                    has_new_log = True
                 elif msg_type == "status":
                     self.lbl_status.config(text=payload)
                 elif msg_type == "progress":
@@ -1330,6 +1332,12 @@ class UyapRedactorApp(tk.Tk):
             pass
         except (tk.TclError, Exception):
             return
+
+        if has_new_log:
+            try:
+                self.log_text.see(tk.END)
+            except (tk.TclError, Exception):
+                pass
 
         try:
             if self.winfo_exists():
@@ -1441,14 +1449,18 @@ class UyapRedactorApp(tk.Tk):
             self.msg_queue.put(("update_install_error", str(e)))
 
     def _start_process(self):
+        if self.is_running:
+            return
         folder = self.folder_var.get().strip().strip("'\"").strip()
+        if folder:
+            folder = os.path.expanduser(folder)
         if folder != self.folder_var.get():
             self.folder_var.set(folder)
         if not folder or not os.path.isdir(folder):
             messagebox.showwarning("Geçersiz Klasör", "Lütfen geçerli bir UYAP dava klasörü seçin.")
             return
 
-        if folder.rstrip("/\\").endswith("(Maskelenmis AI)"):
+        if unicodedata.normalize("NFC", folder.rstrip("/\\")).endswith("(Maskelenmis AI)"):
             proceed = messagebox.askyesno(
                 "Zaten Maskelenmiş Klasör",
                 "Seçtiğiniz klasör daha önce üretilmiş bir '(Maskelenmis AI)' çıktı klasörüne benziyor.\n\n"

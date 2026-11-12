@@ -15,21 +15,28 @@ echo "🚀 [1/4] PyInstaller ile %100 Bağımsız (Standalone) App derleniyor...
 cd "$DIR"
 rm -rf "$DIST_DIR/$APP_NAME" "$DIST_DIR/UYAP Maskeleme"
 
-# Python interpreter bul (PyInstaller içeren)
-PYINSTALLER_BIN=""
-for CANDIDATE in /opt/anaconda3/bin/pyinstaller $(which pyinstaller 2>/dev/null); do
-    if [ -x "$CANDIDATE" ]; then
-        PYINSTALLER_BIN="$CANDIDATE"
-        break
-    fi
-done
+# PyInstaller tespit et (Öncelik: Aktif PATH, python3 modülü, sanal ortam, sistem)
+PYINSTALLER_CMD=""
 
-if [ -z "$PYINSTALLER_BIN" ]; then
+if command -v pyinstaller >/dev/null 2>&1; then
+    PYINSTALLER_CMD="$(command -v pyinstaller)"
+elif python3 -m PyInstaller --version >/dev/null 2>&1; then
+    PYINSTALLER_CMD="python3 -m PyInstaller"
+else
+    for CANDIDATE in "$VIRTUAL_ENV/bin/pyinstaller" /opt/homebrew/bin/pyinstaller /opt/anaconda3/bin/pyinstaller "$HOME/opt/anaconda3/bin/pyinstaller" "$HOME/anaconda3/bin/pyinstaller" /usr/local/bin/pyinstaller; do
+        if [ -n "$CANDIDATE" ] && [ -x "$CANDIDATE" ]; then
+            PYINSTALLER_CMD="$CANDIDATE"
+            break
+        fi
+    done
+fi
+
+if [ -z "$PYINSTALLER_CMD" ]; then
     echo "❌ Hata: Sistemde 'pyinstaller' bulunamadı!"
     exit 1
 fi
 
-"$PYINSTALLER_BIN" --noconfirm "$SPEC_FILE"
+$PYINSTALLER_CMD --noconfirm "$SPEC_FILE"
 
 echo "🔐 [2/4] Standalone App için Ad-Hoc Kod İmzası uygulanıyor..."
 if command -v codesign >/dev/null 2>&1; then

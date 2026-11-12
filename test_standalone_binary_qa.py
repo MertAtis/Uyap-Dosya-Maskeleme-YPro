@@ -136,13 +136,13 @@ class Test3_GUIComponentsAndLayout(unittest.TestCase):
             pass
 
     def test_window_geometry_and_properties(self):
-        """Pencere boyutu (860x780), minsize (800, 700), başlık ve arka plan rengi."""
+        """Pencere boyutu (760x640), minsize (720, 580), başlık ve arka plan rengi."""
         self.assertEqual(self.app.cget("bg"), Theme.BG_CANVAS)
         self.assertIn("UYAP Kişisel Veri Maskeleme", self.app.title())
         min_w, min_h = self.app.minsize()
-        self.assertEqual(min_w, 800)
-        self.assertEqual(min_h, 700)
-        self.assertEqual(self.app.winfo_width(), 860)
+        self.assertEqual(min_w, 720)
+        self.assertEqual(min_h, 580)
+        self.assertEqual(self.app.winfo_width(), 760)
 
     def test_canvas_progress_bar(self):
         """Canvas tabanlı GlassProgressBar bileşeni doğrulama."""
@@ -317,15 +317,50 @@ class Test4_ButtonInteractionsAndShortcuts(unittest.TestCase):
             self.app.event_generate("<Command-r>")
             mock_r_blocked.assert_not_called()
 
+        self.app.is_running = False
+        close_method = "_on_close"
+
         # Command-w (Kapatma)
-        with patch.object(self.app, "destroy") as mock_destroy_w:
+        with patch.object(self.app, close_method) as mock_destroy_w:
             self.app.event_generate("<Command-w>")
             mock_destroy_w.assert_called_once()
 
         # Command-q (Çıkış)
-        with patch.object(self.app, "destroy") as mock_destroy_q:
+        with patch.object(self.app, close_method) as mock_destroy_q:
             self.app.event_generate("<Command-q>")
             mock_destroy_q.assert_called_once()
+
+
+def _send_cmd_key_when_frontmost(pid: int, key: str, attempts: int = 10) -> str:
+    """
+    Süreci öne alır ve YALNIZCA gerçekten ön plandaysa ⌘<key> gönderir.
+    Odak başka bir uygulamadaysa (kullanıcı o sırada başka pencerede çalışıyorsa) tuş
+    gönderilmez; böylece ⌘Q/⌘W yanlışlıkla kullanıcının açık uygulamasına gitmez.
+    Dönüş: "SENT" | "NOT_FRONT" | "NOT_FOUND"
+    """
+    ascript = f'''
+    tell application "System Events"
+        repeat {attempts} times
+            set procs to every process whose unix id is {pid}
+            if (count of procs) > 0 then
+                set theProc to item 1 of procs
+                if (count of windows of theProc) > 0 then
+                    set frontmost of theProc to true
+                    delay 0.3
+                    if frontmost of theProc then
+                        keystroke "{key}" using {{command down}}
+                        return "SENT"
+                    end if
+                end if
+            end if
+            delay 0.3
+        end repeat
+        if (count of (every process whose unix id is {pid})) > 0 then return "NOT_FRONT"
+        return "NOT_FOUND"
+    end tell
+    '''
+    res = subprocess.run(["osascript", "-e", ascript], capture_output=True, text=True)
+    return res.stdout.strip() or "NOT_FOUND"
 
 
 class Test5_LiveStandaloneBinaryProcess(unittest.TestCase):
@@ -368,6 +403,10 @@ class Test5_LiveStandaloneBinaryProcess(unittest.TestCase):
             self.assertIn(exit_code, [0, 1, -15, 143])
             self.assertIsNotNone(proc.poll(), "Süreç SIGTERM sonrasında kapanmadı!")
         finally:
+            if proc.stdout:
+                proc.stdout.close()
+            if proc.stderr:
+                proc.stderr.close()
             if proc.poll() is None:
                 proc.kill()
 
@@ -380,24 +419,19 @@ class Test5_LiveStandaloneBinaryProcess(unittest.TestCase):
         try:
             self.assertIsNone(proc.poll(), f"Binary başlatılamadı: PID {pid}")
 
-            # AppleScript ile ön plana al ve Command-q tuş kombinasyonu gönder
-            ascript = f'''
-            tell application "System Events"
-                set procs to every process whose unix id is {pid}
-                if (count of procs) > 0 then
-                    set frontmost of (item 1 of procs) to true
-                    delay 0.5
-                    keystroke "q" using {{command down}}
-                    return "SENT"
-                end if
-            end tell
-            '''
-            subprocess.run(["osascript", "-e", ascript], capture_output=True, text=True)
+            # Ön plana al ve yalnızca gerçekten öndeyse Command-q gönder
+            sent = _send_cmd_key_when_frontmost(pid, "q")
+            if sent != "SENT":
+                self.skipTest(f"Uygulama ön plana alınamadı ({sent}); tuş gönderilmedi.")
             
             # Uygulamanın destroy ile kapanmasını bekle
             exit_code = proc.wait(timeout=4.0)
             self.assertEqual(exit_code, 0, f"Command-Q ile temiz çıkış kodu 0 bekleniyordu, gelen: {exit_code}")
         finally:
+            if proc.stdout:
+                proc.stdout.close()
+            if proc.stderr:
+                proc.stderr.close()
             if proc.poll() is None:
                 proc.kill()
 
@@ -410,24 +444,19 @@ class Test5_LiveStandaloneBinaryProcess(unittest.TestCase):
         try:
             self.assertIsNone(proc.poll(), f"Binary başlatılamadı: PID {pid}")
 
-            # AppleScript ile ön plana al ve Command-w tuş kombinasyonu gönder
-            ascript = f'''
-            tell application "System Events"
-                set procs to every process whose unix id is {pid}
-                if (count of procs) > 0 then
-                    set frontmost of (item 1 of procs) to true
-                    delay 0.5
-                    keystroke "w" using {{command down}}
-                    return "SENT"
-                end if
-            end tell
-            '''
-            subprocess.run(["osascript", "-e", ascript], capture_output=True, text=True)
+            # Ön plana al ve yalnızca gerçekten öndeyse Command-w gönder
+            sent = _send_cmd_key_when_frontmost(pid, "w")
+            if sent != "SENT":
+                self.skipTest(f"Uygulama ön plana alınamadı ({sent}); tuş gönderilmedi.")
             
             # 3 saniye içinde uygulamanın destroy ile kapanmasını bekle
             exit_code = proc.wait(timeout=4.0)
             self.assertEqual(exit_code, 0, f"Command-W ile temiz çıkış kodu 0 bekleniyordu, gelen: {exit_code}")
         finally:
+            if proc.stdout:
+                proc.stdout.close()
+            if proc.stderr:
+                proc.stderr.close()
             if proc.poll() is None:
                 proc.kill()
 
