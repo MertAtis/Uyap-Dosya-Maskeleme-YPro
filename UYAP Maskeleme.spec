@@ -1,11 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_data_files
+
+_dnd_datas = collect_data_files('tkinterdnd2')
 
 
 a = Analysis(
     ['gui.py'],
     pathex=[],
     binaries=[],
-    datas=[('uyap_redactor.py', '.')],
+    datas=[('uyap_redactor.py', '.')] + _dnd_datas,
     hiddenimports=['tkinterdnd2', 'tkinter', 'tkinter.ttk', 'tkinter.filedialog', 'tkinter.messagebox', 'tkinter.scrolledtext', 'urllib.request', 'urllib.error', 'json', 'ssl', 'Vision', 'Cocoa', 'AppKit', 'Foundation', 'Quartz', 'objc', 'fitz', 'PIL'],
     hookspath=[],
     hooksconfig={},
