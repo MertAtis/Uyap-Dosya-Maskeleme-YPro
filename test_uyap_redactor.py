@@ -717,6 +717,90 @@ class TestRegressionFixes(unittest.TestCase):
             self.assertNotIn("yalnızca ilk", red_full)
 
 
+class TestRealCaseFolderFixes(unittest.TestCase):
+    """İzmir 6. AHM 2025/69 dosyası karşılaştırmasında bulunan sızıntı ve yanlış maskeler."""
+
+    def red(self, t):
+        return UyapRedactor.redact_text(t)[0]
+
+    def test_tebligat_new_address_label_keeps_notice_text(self):
+        t = ("Muhatap adresini değiştirmişse tebliğ memuru tarafından tespit edilen yeni adresi: \n\n"
+             "## Bilirkişi raporuna HMK 281. maddesi gereğince tebliğ tarihinden itibaren iki hafta \n")
+        out = self.red(t)
+        self.assertIn("HMK 281. maddesi", out)
+        self.assertNotIn("[ADRES_GİZLENDİ]", out)
+
+    def test_url_kep_and_verification_addresses_not_masked(self):
+        for t in ("Belge Doğrulama Adresi : https://izmirdogrulama.barobirlik.com/",
+                  "İnternet Adresi: http://www.izmirbarosu.org.tr Kep Adresi: izmirbarosu@hs01.kep.tr",
+                  "KEP Adresi: adaletbakanligi@hs01.kep.tr ve ileti detay alanına"):
+            self.assertEqual(self.red(t), t)
+
+    def test_ocr_garbled_iban_prefix_is_masked(self):
+        out = self.red("VELİ\n|TR578326616630494032699102\n-2000\nITR674095461113930955972979\n")
+        self.assertNotIn("0622439332836791601108", out)
+        self.assertNotIn("0364697482123789914330", out)
+        self.assertEqual(out.count("[IBAN_GİZLENDİ]"), 2)
+
+    def test_address_continuation_line_masked_until_phone(self):
+        out = self.red("Yakalama Adresi: Papatyalı Mah. 3740 Sk. Menekşe Apt No:9\n"
+                       "İç Kapı No: 2 Örnekçay / Antalya Tel: (90)5321234567, İlköğretim,\n")
+        self.assertNotIn("Örnekçay", out)
+        self.assertIn("İlköğretim", out)
+
+    def test_ocr_table_scattered_street_masked(self):
+        out = self.red("Açık Adres\n[ADRES_GİZLENDİ]\niç Kapı No\nDENEME SK.\n28\nSonraki\n")
+        self.assertNotIn("TARIM", out)
+        self.assertIn("Sonraki", out)
+
+    def test_label_on_own_line_masks_next_address_line(self):
+        out = self.red("Adres:\nÖrnekköy Mah. 8009 Sk. No:42 Denemeli/ Antalya\n")
+        self.assertNotIn("Bayat", out)
+
+    def test_mernis_template_line_not_swallowed(self):
+        t = ("MERNİS ADRESİ \n   ili,  ilçesi,  mah/köy,  Cilt,  Aile sıra no,  sırada nüfusa kayıtlı, "
+             "İSMAİL ve DİLEK oğlu/kızı, 01/01/1983 dogumlu,\n")
+        self.assertIn("oğlu/kızı", self.red(t))
+
+    def test_low_quality_ocr_flag_and_dropped_links(self):
+        import tempfile, shutil
+        d = tempfile.mkdtemp()
+        try:
+            good = "Mahkeme dosya dava davacı davalı vekili talep tebligat müzekkere cevap banka hesap " * 5
+            with open(os.path.join(d, "iyi.md"), "w", encoding="utf-8") as f:
+                f.write("# iyi\n\n" + good)
+            bad = "# kotu.tif\n\n### Taranmış Belge (Yerel OCR)\n\n" + "ECMAL TiDI KARAC COZA INIRL RURUMU MIMARLiTE " * 6
+            with open(os.path.join(d, "kotu.md"), "w", encoding="utf-8") as f:
+                f.write(bad)
+            ok = "# ok.tif\n\n### Taranmış Belge (Yerel OCR)\n\n" + good
+            with open(os.path.join(d, "ok.md"), "w", encoding="utf-8") as f:
+                f.write(ok)
+            flagged = UyapRedactor.flag_low_quality_ocr(d)
+            self.assertEqual(flagged, ["kotu.md"])
+            with open(os.path.join(d, "kotu.md"), encoding="utf-8") as f:
+                self.assertIn("OCR UYARISI", f.read())
+
+            os.makedirs(os.path.join(d, "belge"))
+            with open(os.path.join(d, "belge", "gorsel-1.md"), "w", encoding="utf-8") as f:
+                f.write("ocr")
+            doc = os.path.join(d, "belge.md")
+            with open(doc, "w", encoding="utf-8") as f:
+                f.write("> **Görseller:** 2 görsel `belge/` klasörüne çıkarıldı.\n"
+                        "![gorsel-1.png](belge/gorsel-1.png) ![gorsel-2.png](belge/gorsel-2.png) ![g3](Genel Müzekkere_1/gorsel-3.png) [↗](<_kaynak/x.udf>) "
+                        "[ana_evrak.pdf](<ana_evrak.pdf>) [site](https://x.gov.tr/a.pdf)\n")
+            UyapRedactor.rewrite_dropped_links(doc)
+            with open(doc, encoding="utf-8") as f:
+                out = f.read()
+            self.assertIn("(<belge/gorsel-1.md>)", out)
+            self.assertIn("[görsel aktarılmadı: gorsel-2.png]", out)
+            self.assertIn("[görsel aktarılmadı: g3]", out)
+            self.assertNotIn("_kaynak/x.udf", out)
+            self.assertNotIn("(<ana_evrak.pdf>)", out)
+            self.assertIn("https://x.gov.tr/a.pdf", out)
+            self.assertNotIn("klasörüne çıkarıldı", out)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

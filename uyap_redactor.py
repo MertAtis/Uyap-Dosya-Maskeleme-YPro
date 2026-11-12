@@ -208,7 +208,7 @@ class UyapRedactor:
         """
         count = 0
         pattern = re.compile(
-            r'(?i)(?:^|(?<=[\s\*\_\(\[\"\'\:\-\^]))TR[ \t\^\.\-]*(?:[0-9lIOo][ \t\^\.\-]*){23}[0-9lIOo](?:[A-Za-z](?![A-Za-z0-9]))?(?![0-9])'
+            r'(?im)(?:^|(?<=[\s\*\_\(\[\"\'\:\-\^\|])|(?<=^[Il1\|])|(?<=[\s\(\:][Il1\|]))TR[ \t\^\.\-]*(?:[0-9lIOo][ \t\^\.\-]*){23}[0-9lIOo](?:[A-Za-z](?![A-Za-z0-9]))?(?![0-9])'
         )
 
         def repl(m: re.Match) -> str:
@@ -650,6 +650,12 @@ class UyapRedactor:
 
         return text, count
 
+    @staticmethod
+    def _looks_like_url_or_email(val: str) -> bool:
+        """Değer bir web adresi, e-posta veya KEP adresi mi? (kişisel ikamet adresi değildir)"""
+        v = val.strip().lower()
+        return bool(re.search(r'https?://|www\.|@|\.(?:com|gov|org|edu|bel|av|k12)\.tr\b|\bhs0\d\.', v))
+
     @classmethod
     def redact_address(cls, text: str) -> Tuple[str, int]:
         """
@@ -662,7 +668,8 @@ class UyapRedactor:
 
         # 1. Açık etiketli adres satırları ("**İkametgah Adresi** **:** ...", "İşyeri Adresi:", "Adres:")
         p1 = re.compile(
-            r'(?i)(?P<label>(?:(?:İkam[ae]t(?:g[aâ]h)?|İş\s*yeri|Tebligat)\s*)?Adres(?:i)?[\s\*]*[:\t]+[\s\*]*)'
+            r'(?i)(?P<pre>\b(?:Doğrulama|Dogrulama|Takip|İnternet|Internet|Web|KEP|E-?\s*Posta|Mail|yeni)\s+)?'
+            r'(?P<label>(?:(?:İkam[ae]t(?:g[aâ]h)?|İş\s*yeri|Tebligat)\s*)?Adres(?:i)?[ \t\*]*[:\t]+[ \t\*]*)'
             r'(?P<addr>[^\r\n]+?)'
             r'(?=(?:\s*(?:'
             r'(?:Anne|Baba)\s*Ad[ıi]|'
@@ -680,10 +687,34 @@ class UyapRedactor:
             # "E-Tebligat Adresidir" gibi cümle sonu ibarelerini yanlışlıkla etiket sanma
             if not addr_val or len(addr_val) < 5 or cls.MASK_ADRES in addr_val:
                 return m.group(0)
+            # Belge doğrulama / internet / KEP / e-posta adresleri kişisel adres değildir
+            if m.group('pre') and not re.search(r'(?i)yeni', m.group('pre')):
+                return m.group(0)
+            if cls._looks_like_url_or_email(addr_val):
+                return m.group(0)
+            count += 1
+            return f"{m.group('pre') or ''}{m.group('label')}{cls.MASK_ADRES}"
+
+        text = p1.sub(repl1, text)
+
+        # 1b. Etiket ile değer ayrı satırdaysa: yalnızca sonraki satır gerçekten adres gibiyse maskele
+        # ("tespit edilen yeni adresi:" altındaki tebliğ açıklaması gibi metinler korunur)
+        p1b = re.compile(
+            r'(?im)(?P<label>^[^\r\n]{0,40}?\b(?:(?:İkam[ae]t(?:g[aâ]h)?|İş\s*yeri|Tebligat|Açık|Yakalama)\s*)?Adres(?:i)?[ \t\*]*:?[ \t\*]*\r?\n(?:[ \t]*\r?\n)?)'
+            r'(?P<addr>[ \t#\*]*[^\r\n]*?(?:\b(?:Mah\.|Mh\.|Mahallesi|Cad\.|Cd\.|Caddesi|Sk\.|Sok\.|Sokak|Bulvar[ıi])(?![A-Za-zçğıöşüÇĞİÖŞÜ])|\bNo\s*[:\.]\s*\d)[^\r\n]*)$'
+        )
+
+        def repl1b(m: re.Match) -> str:
+            nonlocal count
+            if cls.MASK_ADRES in m.group('addr') or cls._looks_like_url_or_email(m.group('addr')):
+                return m.group(0)
+            # Nüfus kayıt şablonu (il/ilçe/cilt/aile sıra) açık adres değildir
+            if re.search(r'(?i)aile\s*s[ıi]ra|\bcilt\b|nüfus(?:a|unda)?\s+kay[ıi]tl[ıi]', m.group('addr')):
+                return m.group(0)
             count += 1
             return f"{m.group('label')}{cls.MASK_ADRES}"
 
-        text = p1.sub(repl1, text)
+        text = p1b.sub(repl1b, text)
 
         # 2. Önceden sınırlandırılmış UYAP adres cümleleri
         p2 = re.compile(
@@ -745,6 +776,34 @@ class UyapRedactor:
             return f"{m.group('lead')}{cls.MASK_ADRES}"
 
         text = p4_orphan.sub(repl4_orphan, text)
+
+        # 4c. "[ADRES_GİZLENDİ]\nİç Kapı No: 2 Örnekçay / Antalya Tel: ..." — devam satırını Tel/GSM'e kadar maskele
+        p4_cont = re.compile(
+            r'(?im)(?P<masked>\[ADRES_GİZLENDİ\][ \t]*\r?\n)(?P<lead>[ \t]*)'
+            r'(?P<cont>(?:[İiIıl]ç\s*Kap[ıi](?:\s*No)?|Kap[ıi]\s*No|Kat|K|Daire|D|No|Blok)[ \t\.:]*[0-9][^\r\n]*?)'
+            r'(?=[ \t,;]+(?:Tel|GSM|Cep|Telefon)\b|[ \t]*$)'
+        )
+
+        def repl4_cont(m: re.Match) -> str:
+            nonlocal count
+            count += 1
+            return f"{m.group('masked')}{m.group('lead')}{cls.MASK_ADRES}"
+
+        text = p4_cont.sub(repl4_cont, text)
+
+        # 4d. OCR tablosundan dağılmış adres: "[ADRES_GİZLENDİ] / iç Kapı No / DENEME SK. / 28"
+        p4_ocr = re.compile(
+            r'(?m)(?P<head>\[ADRES_GİZLENDİ\][ \t]*\r?\n(?:[ \t]*[İiIıl]ç\s*Kap[ıi](?:\s*No)?[ \t:]*\r?\n)?)'
+            r'[ \t]*[A-ZÇĞİÖŞÜ0-9][A-ZÇĞİÖŞÜa-zçğıöşü0-9 \.]{0,40}?\b(?:SK|SOK|CAD|CD|MAH|MH|Sk|Sok|Cad|Cd|Mah|Mh)\.?[ \t]*'
+            r'(?:\r?\n[ \t]*\d{1,4}(?:/[0-9A-Za-z]{1,3})?[ \t]*)?$'
+        )
+
+        def repl4_ocr(m: re.Match) -> str:
+            nonlocal count
+            count += 1
+            return f"{m.group('head')}{cls.MASK_ADRES}"
+
+        text = p4_ocr.sub(repl4_ocr, text)
 
         return text, count
 
@@ -1068,6 +1127,136 @@ class UyapRedactor:
 
         return updated_rows
 
+    # ------------------------------------------------------------------
+    # Temiz klasör son işlemleri: kopuk görsel/ikili bağlantılar ve OCR kalite denetimi
+    # ------------------------------------------------------------------
+    BINARY_LINK_EXTS = (".pdf", ".udf", ".tif", ".tiff", ".png", ".jpg", ".jpeg", ".gif", ".bmp",
+                        ".xlsx", ".xls", ".docx", ".doc", ".html", ".htm", ".eml", ".eyp", ".zip", ".rar")
+    IMAGE_LINK_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff")
+    OCR_MARKER = "Taranmış Belge (Yerel OCR)"
+    OCR_WARNING = (
+        "> ⚠️ **OCR UYARISI:** Bu taranmış evrak (muhtemelen el yazısı veya düşük kaliteli tarama) "
+        "yerel OCR ile güvenilir biçimde okunamadı; aşağıdaki metin büyük ölçüde hatalıdır. "
+        "İçerik için belgenin aslına başvurulmalıdır.\n\n"
+    )
+    _COMMON_TR_WORDS = set("""
+        ve ile için olarak olan bu bir da de ki gibi daha sonra önce tarihli tarihinde sayılı esas karar
+        mahkemesi mahkemesine mahkeme dosya dosyası dava davacı davalı vekili vekil talep talebi edilmesine
+        hakkında ilişkin gereğince madde maddesi kanun kanunu hukuk asliye sulh ceza icra tebligat tebliğ
+        müzekkere cevap cevabı dilekçe dilekçesi yazı yazınız ilgi konu sayın başkanlığı başkanlığına
+        müdürlüğü müdürlüğüne genel bilgi banka bankası hesap hesabı adına ait kayıtlı bulunan bulunmaktadır
+        tespit edilmiştir edilen yapılan arz olunur saygılarımla saygılarımızla rica tarih imza mühür
+        türkiye cumhuriyeti adalet bakanlığı noterliği noter vekaletname adres adresi telefon kimlik
+        nüfus doğum doğumlu oğlu kızı adı soyadı sanık şüpheli müşteki tanık bilirkişi rapor raporu
+    """.split())
+
+    @staticmethod
+    def _tr_lower(x: str) -> str:
+        return x.replace("I", "ı").replace("İ", "i").lower()
+
+    @classmethod
+    def _ocr_word_hit_ratio(cls, text: str, vocab: Set[str]) -> Tuple[float, int]:
+        body = text.split(cls.OCR_MARKER, 1)[-1]
+        body = re.sub(r'\[[A-ZİÇŞĞÜÖ_]+GİZLENDİ\]', ' ', body)
+        words = [cls._tr_lower(w) for w in re.findall(r'[A-Za-zÇĞİÖŞÜçğıöşüÂâÎîÛû]{3,}', body)]
+        if not words:
+            return 1.0, 0
+        hits = sum(1 for w in words if w in vocab or w in cls._COMMON_TR_WORDS)
+        return hits / len(words), len(words)
+
+    @classmethod
+    def flag_low_quality_ocr(cls, dest_folder: str, threshold: float = 0.35, min_words: int = 20) -> list:
+        """
+        Klasördeki OCR'lı .md'leri, aynı dava klasörünün düzgün metinlerinden çıkarılan kelime
+        dağarcığıyla karşılaştırır. Tanınan kelime oranı eşik altındaysa (el yazısı / bozuk OCR)
+        belgenin başına uyarı ekler. Dönüş: işaretlenen göreli yollar.
+        """
+        vocab: Set[str] = set()
+        ocr_docs = []
+        for root, _dirs, files in os.walk(dest_folder):
+            for f in files:
+                if not f.endswith(".md"):
+                    continue
+                p = os.path.join(root, f)
+                try:
+                    with open(p, "r", encoding="utf-8", errors="replace") as fh:
+                        t = fh.read()
+                except Exception:
+                    continue
+                if cls.OCR_MARKER in t:
+                    ocr_docs.append((p, t))
+                else:
+                    vocab.update(cls._tr_lower(w) for w in re.findall(r'[A-Za-zÇĞİÖŞÜçğıöşü]{3,}', t))
+        flagged = []
+        for p, t in ocr_docs:
+            ratio, n = cls._ocr_word_hit_ratio(t, vocab)
+            if n >= min_words and ratio < threshold:
+                if "OCR UYARISI" not in t:
+                    lines = t.split("\n", 1)
+                    if lines and lines[0].startswith("# "):
+                        new_t = lines[0] + "\n\n" + cls.OCR_WARNING + (lines[1].lstrip("\n") if len(lines) > 1 else "")
+                    else:
+                        new_t = cls.OCR_WARNING + t
+                    with open(p, "w", encoding="utf-8") as fh:
+                        fh.write(new_t)
+                flagged.append(os.path.relpath(p, dest_folder))
+        return sorted(flagged)
+
+    @classmethod
+    def rewrite_dropped_links(cls, md_path: str) -> bool:
+        """
+        Temiz klasöre aktarılmayan görsel/ikili dosyalara giden Markdown bağlantılarını düzeltir:
+        - OCR metni varsa bağlantıyı o .md'ye çevirir,
+        - yoksa kopuk bağlantıyı düz metne indirger ("görsel aktarılmadı").
+        """
+        try:
+            with open(md_path, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except Exception:
+            return False
+        base_dir = os.path.dirname(md_path)
+
+        def exists_rel(rel: str) -> bool:
+            for form in ("NFC", "NFD"):
+                if os.path.exists(os.path.join(base_dir, unicodedata.normalize(form, rel))):
+                    return True
+            return False
+
+        link_re = re.compile(r'(?P<img>!?)\[(?P<alt>[^\]\n]*)\]\((?:<(?P<t1>[^>\n]+)>|(?P<t2>[^)\n]+?))\)')
+
+        def repl(m: re.Match) -> str:
+            target = m.group('t1') or m.group('t2') or ""
+            if re.match(r'(?i)^(?:https?|mailto|file):', target) or target.startswith("#"):
+                return m.group(0)
+            low = target.lower()
+            if not low.endswith(cls.BINARY_LINK_EXTS) or exists_rel(target):
+                return m.group(0)
+            alt = m.group('alt')
+            if alt == "↗":  # INDEX tablosundaki "Dosya" sütunu: orijinal aktarılmadı (metin "Metin" sütununda)
+                return "—"
+            for cand in (os.path.splitext(target)[0] + ".md", target + ".md"):
+                if exists_rel(cand):
+                    label = alt if alt and alt != "↗" else os.path.basename(target)
+                    return f"[{label} (OCR metni)](<{cand}>)"
+            if m.group('img') or low.endswith(cls.IMAGE_LINK_EXTS):
+                return f"[görsel aktarılmadı: {alt or os.path.basename(target)}]"
+            if alt == "↗":
+                return "—"
+            return alt or os.path.basename(target)
+
+        new_text = link_re.sub(repl, text)
+        new_text = re.sub(
+            r'(?m)^> \*\*Görseller:\*\*.*$',
+            "> **Görseller:** Bu belgedeki görseller (imza/mühür simgeleri vb.) güvenlik gereği temiz "
+            "klasöre aktarılmadı; metin içeren görseller varsa OCR metni ayrı .md olarak eklenmiştir.",
+            new_text,
+        )
+        if new_text != text:
+            with open(md_path, "w", encoding="utf-8") as fh:
+                fh.write(new_text)
+            return True
+        return False
+
     @classmethod
     def sync_index_md(cls, folder: str) -> int:
         """
@@ -1356,9 +1545,35 @@ class UyapRedactor:
                 except Exception:
                     pass
 
+        # 4b. OCR kalite denetimi (el yazısı / bozuk OCR belgelerine uyarı) ve OCR'lı evrak sayımı
+        low_quality = cls.flag_low_quality_ocr(dest_folder)
+        grand_stats["low_quality_ocr"] = low_quality
+        ocr_present = 0
+        md_paths = []
+        for root, _dirs, files in os.walk(dest_folder):
+            for f in files:
+                if f.endswith(".md"):
+                    md_paths.append(os.path.join(root, f))
+        for p in md_paths:
+            try:
+                with open(p, "r", encoding="utf-8", errors="replace") as fh:
+                    if cls.OCR_MARKER in fh.read():
+                        ocr_present += 1
+            except Exception:
+                pass
+        grand_stats["ocr_present"] = ocr_present
+
+        # 4c. Belgelerdeki kopuk görsel/ikili bağlantıları düzelt (INDEX.md'ler senkrondan sonra)
+        for p in md_paths:
+            if os.path.basename(p) != "INDEX.md":
+                cls.rewrite_dropped_links(p)
+
         # 5. INDEX.md Senkronizasyonu (Sadece hedef temiz klasör; kaynak klasör dokunulmazdır)
         synced_dest = cls.sync_index_md(dest_folder)
         grand_stats["index_synced"] = synced_dest
+        for p in md_paths:
+            if os.path.basename(p) == "INDEX.md":
+                cls.rewrite_dropped_links(p)
 
         # 6. Güvenlik ve Dönüşüm Raporu Oluştur
         report_path = os.path.join(dest_folder, "DAVA_DÖNÜŞÜM_VE_GÜVENLİK_RAPORU.md")
@@ -1368,7 +1583,8 @@ class UyapRedactor:
             rf.write(f"**Hedef Temiz Klasör:** {os.path.basename(dest_folder)}\n")
             rf.write(f"**İşlem Tarihi:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             rf.write(f"**Toplam Aktarılan Markdown Belgesi:** {grand_stats['md_transferred']} adet\n")
-            rf.write(f"**Yerel OCR ile Metne Dökülen Taranmış Ekler:** {grand_stats['ocr_converted']} adet\n")
+            rf.write(f"**Bu çalıştırmada yerel OCR ile metne dökülen taranmış ek:** {grand_stats['ocr_converted']} adet\n")
+            rf.write(f"**Klasördeki OCR'lı (taranmış) evrak toplamı:** {grand_stats.get('ocr_present', 0)} adet\n")
             rf.write(f"**İndeks Senkronizasyonu:** {grand_stats['index_synced']} adet evrak satırı güncellendi\n")
             rf.write(f"**Gizlenen Toplam Kişisel Veri:** {grand_stats['total']} adet\n\n")
             rf.write("### 🔒 Maskelenen Veri Dağılımı\n")
@@ -1381,11 +1597,19 @@ class UyapRedactor:
             rf.write(f"- 📍 **Açık Adres:** {grand_stats['adres']} adet\n\n")
             rf.write("---\n\n")
             rf.write("## 🔒 Güvenlik & Gizlilik Durumu\n\n")
-            rf.write("- ✅ Bu klasörde tek bir orijinal UDF, PDF, TIFF veya ikili dosya **BULUNMAMAKTADIR**.\n")
-            rf.write("- ✅ TCKN, Cep Telefonu, Kimlik Seri No, MRZ Kodu, IBAN, Sicil No ve Açık Adres bilgileri tamamen maskelenmiştir.\n")
-            rf.write("- ✅ Taranmış evraklar Apple Vision OCR ile yerelde çözülmüş ve metne dökülmüştür.\n")
-            rf.write("- ✅ INDEX.md tablosundaki okunmuş tüm metinler güncel karakter sayılarıyla senkronize edilmiştir.\n")
-            rf.write("- ✅ Yapay zekâ bu klasörün tamamını %100 eksiksiz ve sıfır veri sızıntısıyla okuyabilir.\n")
+            rf.write("- ✅ Bu klasörde orijinal UDF, PDF, TIFF veya görsel dosyası bulunmamaktadır; yalnızca metin (.md) ve maskeli JSON vardır.\n")
+            rf.write("- ✅ TCKN, cep telefonu, kimlik seri no, MRZ, IBAN, sicil no ve açık adres kalıpları otomatik maskelenmiştir.\n")
+            rf.write("- ℹ️ Ad-soyad, plaka ve olay yeri gibi bilgiler maskelenmez. Otomatik maskeleme kusursuz değildir; "
+                     "özellikle OCR'lı belgelerde bozulmuş numaralar gözden kaçabilir. Paylaşmadan önce göz atın.\n")
+            rf.write("- ✅ INDEX.md tablosu güncel .md dosyaları ve karakter sayılarıyla senkronize edilmiştir; "
+                     "aktarılmayan orijinallere giden bağlantılar düz metne çevrilmiştir.\n")
+            low_q = grand_stats.get("low_quality_ocr") or []
+            if low_q:
+                rf.write("\n## ⚠️ Okunamayan / Güvenilmez OCR Evrakları\n\n")
+                rf.write("Aşağıdaki taranmış evrakların OCR metni büyük ölçüde hatalıdır (muhtemelen el yazısı). "
+                         "Yapay zekâ bu belgelerin içeriğini doğru anlayamaz; asıllarına başvurun veya elle yazıya geçirin:\n\n")
+                for rel in low_q:
+                    rf.write(f"- `{rel}`\n")
 
         return dest_folder, grand_stats
 
