@@ -29,6 +29,7 @@ import queue
 import time
 import subprocess
 import unicodedata
+import shutil
 from datetime import datetime
 from typing import Optional, Dict, Tuple, Callable
 import tkinter as tk
@@ -824,7 +825,17 @@ class GlassProgressBar(tk.Canvas):
 # ANA UYGULAMA PENCERESİ (UYAP REDACTOR APP)
 # ==============================================================================
 
-class UyapRedactorApp(tk.Tk):
+try:  # Sürükle-bırak desteği (tkinterdnd2 yoksa uygulama yine çalışır, yalnızca "Seç…" kullanılır)
+    from tkinterdnd2 import TkinterDnD, DND_FILES
+    _AppBase = TkinterDnD.Tk
+    DND_AVAILABLE = True
+except Exception:  # pragma: no cover - paket kurulu değilse
+    DND_FILES = None
+    _AppBase = tk.Tk
+    DND_AVAILABLE = False
+
+
+class UyapRedactorApp(_AppBase):
     def __init__(self):
         super().__init__()
         self.title("UYAP Kişisel Veri Maskeleme & İzole Temiz Klasör Üretici (Offline)")
@@ -846,8 +857,12 @@ class UyapRedactorApp(tk.Tk):
         self._queue_job = None
         self._update_check_job = None
         self.pending_update_info = None
+        self.sources = []            # Sürükle-bırak / seçimle gelen dosya ve klasörler
+        self._sources_display = ""   # Girdi kutusuna yazdığımız metin (elle düzenlendi mi anlamak için)
+        self.out_var = tk.StringVar(value="")   # Boşsa: kaynağın yanına
 
         self._create_widgets()
+        self._setup_dnd()
         self._setup_shortcuts()
         self._check_queue()
         # Açılışta arka planda sessiz güncelleme kontrolü (çevrimdışıysa sessizce geçer).
@@ -918,7 +933,7 @@ class UyapRedactorApp(tk.Tk):
         footer = tk.Frame(self, bg=Theme.BG_SURFACE, padx=12, pady=4,
                           highlightbackground=Theme.BORDER_GLASS, highlightthickness=1)
         footer.pack(fill="x", side="bottom")
-        tk.Label(footer, text="⌘O Seç • ⌘R Başlat • ⌘K Temizle", font=Theme.font_text(9),
+        tk.Label(footer, text="⌘O Seç • ⌘R Başlat • ⌘K Temizle • Sürükle-bırak desteklenir", font=Theme.font_text(9),
                  fg=Theme.TEXT_MUTED, bg=Theme.BG_SURFACE).pack(side="left")
         self.lbl_secure = tk.Label(footer, text="🔒 Ağ bağlantısı gerektirmez", font=Theme.font_text(9),
                                    fg=Theme.TEXT_MUTED, bg=Theme.BG_SURFACE)
@@ -930,7 +945,7 @@ class UyapRedactorApp(tk.Tk):
         main = tk.Frame(self, bg=Theme.BG_CANVAS, padx=12, pady=8)
         main.pack(fill="both", expand=True)
         main.columnconfigure(0, weight=1)
-        main.rowconfigure(3, weight=1)
+        main.rowconfigure(4, weight=1)
 
         # 2. Klasör + işlem butonları
         self.controls = tk.Frame(main, bg=Theme.BG_CANVAS)
@@ -954,9 +969,30 @@ class UyapRedactorApp(tk.Tk):
         self.btn_open_folder = GlassButton(self.controls, text="Aç", variant="secondary",
                                            command=self._open_dest_folder, state="disabled", padx=10, pady=4)
 
+        # 3. Çıktı konumu satırı
+        self.out_row = tk.Frame(main, bg=Theme.BG_CANVAS)
+        self.out_row.grid(row=1, column=0, sticky="ew", pady=(0, 6))
+        self.out_row.columnconfigure(0, weight=1)
+        out_wrap = tk.Frame(self.out_row, bg=Theme.BG_SURFACE,
+                            highlightbackground=Theme.BORDER_GLASS, highlightthickness=1, padx=6)
+        out_wrap.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        tk.Label(out_wrap, text="Kaydet", font=Theme.font_text(10, "bold"),
+                 fg=Theme.TEXT_MUTED, bg=Theme.BG_SURFACE).pack(side="left", padx=(0, 6))
+        self.entry_out = tk.Entry(out_wrap, textvariable=self.out_var, width=1,
+                                  font=Theme.font_text(11), bg=Theme.BG_SURFACE, fg=Theme.TEXT_PRIMARY,
+                                  relief="flat", bd=0, highlightthickness=0,
+                                  insertbackground=Theme.TEXT_PRIMARY)
+        self.entry_out.pack(side="left", fill="x", expand=True, ipady=4)
+        self.lbl_out_hint = tk.Label(out_wrap, text="boşsa kaynağın yanına", font=Theme.font_text(9),
+                                     fg=Theme.TEXT_MUTED, bg=Theme.BG_SURFACE)
+        self.lbl_out_hint.pack(side="right")
+        self.btn_out_browse = GlassButton(self.out_row, text="Konum…", variant="secondary",
+                                          command=self._select_output_folder, padx=10, pady=4)
+        self.btn_out_browse.grid(row=0, column=1)
+
         # 4. İstatistik kartları
         self.stats_frame = tk.Frame(main, bg=Theme.BG_CANVAS)
-        self.stats_frame.grid(row=1, column=0, sticky="ew", pady=(0, 6))
+        self.stats_frame.grid(row=2, column=0, sticky="ew", pady=(0, 6))
         self.card_tckn = GlassStatCard(self.stats_frame, "TCKN", "0", color=Theme.STAT_TCKN)
         self.card_telefon = GlassStatCard(self.stats_frame, "Telefon", "0", color=Theme.STAT_TEL)
         self.card_seri_no = GlassStatCard(self.stats_frame, "Seri No", "0", color=Theme.STAT_SERI)
@@ -970,15 +1006,15 @@ class UyapRedactorApp(tk.Tk):
 
         # 5. Durum + ilerleme
         self.status_row = tk.Frame(main, bg=Theme.BG_CANVAS)
-        self.status_row.grid(row=2, column=0, sticky="ew", pady=(0, 6))
+        self.status_row.grid(row=3, column=0, sticky="ew", pady=(0, 6))
         self.lbl_status = GlassStatusPill(
-            self.status_row, text="Hazır. Dava klasörünü seçip Başlat'a tıklayın."
+            self.status_row, text="Hazır. Klasör/dosya seçin ya da sürükleyip bırakın."
         )
         self.progress = GlassProgressBar(self.status_row, height=6, bg=Theme.BG_CANVAS)
 
         # 6. İşlem günlüğü
         log_panel = tk.Frame(main, bg=Theme.TERM_BG, highlightbackground=Theme.TERM_BORDER, highlightthickness=1)
-        log_panel.grid(row=3, column=0, sticky="nsew")
+        log_panel.grid(row=4, column=0, sticky="nsew")
         log_header = tk.Frame(log_panel, bg=Theme.TERM_BAR, padx=8, pady=3)
         log_header.pack(fill="x")
         self.lbl_console_title = tk.Label(log_header, text="İşlem Günlüğü", font=Theme.font_mono(9, "bold"),
@@ -1091,9 +1127,94 @@ class UyapRedactorApp(tk.Tk):
     def _select_folder(self):
         folder = filedialog.askdirectory(title="UYAP Dava Klasörünü Seçin")
         if folder:
-            self.folder_var.set(folder)
+            self._set_sources([folder])
             self._log(f"📁 Kaynak klasör seçildi: {folder}\n")
             self.lbl_status.config(text=f"Klasör hazır: {os.path.basename(folder)}")
+
+    def _select_output_folder(self):
+        folder = filedialog.askdirectory(title="Maskelenmiş Klasörün Kaydedileceği Konumu Seçin")
+        if folder:
+            self.out_var.set(folder)
+            self._log(f"💾 Çıktı konumu: {folder}\n")
+
+    def _set_sources(self, paths):
+        """Kaynak listesini ayarlar ve girdi kutusunu günceller."""
+        self.sources = list(paths)
+        if len(self.sources) == 1:
+            text = self.sources[0]
+        else:
+            text = f"{len(self.sources)} öğe seçildi"
+        self._sources_display = text
+        self.folder_var.set(text)
+
+    def _setup_dnd(self):
+        """Pencerenin TÜM alt bileşenlerini bırakma hedefi yapar (yalnızca kök kayıtlıysa bazı alanlar bırakmayı almaz)."""
+        if not DND_AVAILABLE:
+            return
+
+        def register(w):
+            try:
+                w.drop_target_register(DND_FILES)
+                w.dnd_bind("<<Drop>>", self._on_drop)
+            except Exception:
+                pass
+            for c in w.winfo_children():
+                register(c)
+
+        register(self)
+
+    def _on_drop(self, event):
+        if self.is_running:
+            return "copy"
+        try:
+            raw = list(self.tk.splitlist(event.data))
+            paths = []
+            for p in raw:
+                if p.startswith("file://"):
+                    p = urllib.parse.unquote(urllib.parse.urlparse(p).path)
+                if os.path.exists(p):
+                    paths.append(p)
+            if not paths:
+                self._log(f"⚠️ Bırakılan öğe okunamadı: {event.data!r}\n")
+                return "copy"
+            self._set_sources(paths)
+            self._log(f"📥 Sürükle-bırak: {len(paths)} öğe alındı\n")
+            self.lbl_status.config(text=f"{len(paths)} öğe hazır. Başlat'a tıklayın.")
+        except Exception as e:
+            self._log(f"⚠️ Sürükle-bırak hatası: {e}\n")
+        return "copy"
+
+    def _resolve_sources(self):
+        """Geçerli kaynak yollarının listesini döndürür (girdi kutusu elle düzenlendiyse onu esas alır)."""
+        typed = self.folder_var.get().strip().strip("'\"").strip()
+        if typed != self._sources_display or not self.sources:
+            self.sources = [os.path.expanduser(typed)] if typed else []
+        return [p for p in self.sources if os.path.isdir(p) or os.path.isfile(p)]
+
+    @staticmethod
+    def _stage_sources(srcs):
+        """
+        Tek klasör doğrudan işlenir. Dosyalar / birden çok öğe için geçici bir hazırlık klasörüne
+        KOPYALANIR (orijinallere dokunulmaz). (klasör, ad, geçici_kök) döndürür.
+        """
+        if len(srcs) == 1 and os.path.isdir(srcs[0]):
+            return srcs[0], None, None
+        base = os.path.splitext(os.path.basename(srcs[0]))[0] if len(srcs) == 1 else "Seçilen Evraklar"
+        stage_root = tempfile.mkdtemp(prefix="uyap_maske_")
+        stage = os.path.join(stage_root, base)
+        os.makedirs(stage)
+        for p in srcs:
+            name = os.path.basename(p.rstrip(os.sep))
+            target, n = os.path.join(stage, name), 1
+            while os.path.exists(target):
+                stem, ext = os.path.splitext(name)
+                target = os.path.join(stage, f"{stem} ({n}){ext}")
+                n += 1
+            if os.path.isdir(p):
+                shutil.copytree(p, target)
+            else:
+                shutil.copy2(p, target)
+        return stage, base, stage_root
 
     def _open_dest_folder(self):
         if self.last_dest_folder and os.path.exists(self.last_dest_folder):
@@ -1366,11 +1487,16 @@ class UyapRedactorApp(tk.Tk):
             folder = os.path.expanduser(folder)
         if folder != self.folder_var.get():
             self.folder_var.set(folder)
-        if not folder or not os.path.isdir(folder):
-            messagebox.showwarning("Geçersiz Klasör", "Lütfen geçerli bir UYAP dava klasörü seçin.")
+        srcs = self._resolve_sources()
+        if not srcs:
+            messagebox.showwarning("Geçersiz Kaynak", "Lütfen geçerli bir UYAP dava klasörü seçin veya dosya/klasör sürükleyip bırakın.")
+            return
+        out_parent = os.path.expanduser(self.out_var.get().strip().strip("'\"").strip()) or None
+        if out_parent and not os.path.isdir(out_parent):
+            messagebox.showwarning("Geçersiz Çıktı Konumu", "Seçilen kaydetme konumu bulunamadı. Lütfen mevcut bir klasör seçin.")
             return
 
-        if unicodedata.normalize("NFC", folder.rstrip("/\\")).endswith("(Maskelenmis AI)"):
+        if len(srcs) == 1 and unicodedata.normalize("NFC", folder.rstrip("/\\")).endswith("(Maskelenmis AI)"):
             proceed = messagebox.askyesno(
                 "Zaten Maskelenmiş Klasör",
                 "Seçtiğiniz klasör daha önce üretilmiş bir '(Maskelenmis AI)' çıktı klasörüne benziyor.\n\n"
@@ -1395,11 +1521,13 @@ class UyapRedactorApp(tk.Tk):
         self.card_adres.update_value("0")
         self.card_files.update_value("0")
 
-        thread = threading.Thread(target=self._worker, args=(folder,), daemon=True)
+        thread = threading.Thread(target=self._worker, args=(srcs[0] if len(srcs) == 1 and os.path.isdir(srcs[0]) else srcs, out_parent), daemon=True)
         thread.start()
 
-    def _worker(self, folder):
+    def _worker(self, folder, out_parent=None):
         start_time = time.time()
+        stage_root = None
+        dest_arg = None
         self.msg_queue.put(("status", "İzole temiz dava klasörü üretimi başlatılıyor..."))
         self.msg_queue.put((
             "log",
@@ -1440,7 +1568,26 @@ class UyapRedactorApp(tk.Tk):
                 self.msg_queue.put(("log", f"⚠️ [HATA] {msg_or_path}\n"))
 
         try:
-            dest_folder, final_stats = UyapRedactor.export_isolated_clean_folder(folder, progress_cb=progress_cb)
+            if isinstance(folder, (list, tuple)):
+                self.msg_queue.put(("status", "Seçilen öğeler hazırlanıyor..."))
+                folder, base, stage_root = self._stage_sources(list(folder))
+            if out_parent:
+                name = os.path.basename(os.path.abspath(folder).rstrip(os.sep))
+                if not unicodedata.normalize("NFC", name).endswith("(Maskelenmis AI)"):
+                    name += " (Maskelenmis AI)"
+                dest_arg = os.path.join(out_parent, name)
+            if dest_arg:
+                dest_folder, final_stats = UyapRedactor.export_isolated_clean_folder(
+                    folder, dest_arg, progress_cb=progress_cb)
+            elif stage_root:
+                # Hazırlık klasörü geçici olduğundan varsayılan çıktı ilk kaynağın yanına yazılır
+                first = self.sources[0] if self.sources else folder
+                dest_arg = os.path.join(os.path.dirname(os.path.abspath(first)),
+                                        os.path.basename(folder) + " (Maskelenmis AI)")
+                dest_folder, final_stats = UyapRedactor.export_isolated_clean_folder(
+                    folder, dest_arg, progress_cb=progress_cb)
+            else:
+                dest_folder, final_stats = UyapRedactor.export_isolated_clean_folder(folder, progress_cb=progress_cb)
             self.last_dest_folder = dest_folder
             elapsed = time.time() - start_time
 
@@ -1474,6 +1621,9 @@ class UyapRedactorApp(tk.Tk):
             self.msg_queue.put(("log", f"\n❌ [HATA DETAYI]\n{err_trace}\n"))
             self.msg_queue.put(("status", f"Hata: {str(e)}"))
             self.msg_queue.put(("error", f"İşlem sırasında bir hata oluştu:\n{str(e)}"))
+        finally:
+            if stage_root:
+                shutil.rmtree(stage_root, ignore_errors=True)
 
 
 if __name__ == "__main__":

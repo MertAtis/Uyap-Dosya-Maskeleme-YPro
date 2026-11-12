@@ -17,3 +17,6 @@ PyMuPDF                     # fitz: PDF metin katmanı ve sayfa görüntüsü
 Pillow                      # PIL: çok sayfalı TIFF karelerinin ayrıştırılması
 pyobjc-framework-Vision     # Apple Vision yerel OCR motoru
 pyobjc-framework-Cocoa      # NSURL (Vision'a dosya yolu aktarımı)
+
+# Sürükle-bırak (dosya/klasörü pencereye atma) için. Kurulu değilse yalnızca "Seç…" düğmesi çalışır.
+tkinterdnd2
