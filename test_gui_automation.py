@@ -436,14 +436,47 @@ class TestUyapRedactorApp(unittest.TestCase):
         self.patch_subproc.stop()
 
     def test_window_geometry_and_properties(self):
-        """Pencere geometrisi (760x640), minsize (720x580) ve arka plan (#F4F4F6) doğrulaması."""
+        """Pencere geometrisi (760x560), minsize (400x440) ve arka plan (#F4F4F6) doğrulaması."""
         self.assertEqual(self.app.cget("bg"), Theme.BG_CANVAS)
         self.assertIn("760", self.app.geometry())
-        self.assertIn("640", self.app.geometry())
+        self.assertIn("560", self.app.geometry())
         min_w, min_h = self.app.minsize()
-        self.assertEqual(min_w, 720)
-        self.assertEqual(min_h, 580)
+        self.assertEqual(min_w, 400)
+        self.assertEqual(min_h, 440)
         self.assertIn("UYAP Kişisel Veri Maskeleme", self.app.title())
+
+    def test_responsive_layout_switches_between_wide_and_narrow(self):
+        """Pencere daraltılınca dar düzene, genişletilince geniş düzene geçiş ve taşma olmaması."""
+        # Gizli pencerede boyut (<Configure>) olayları üretilmez; bu test için göster
+        self.app.deiconify()
+
+        def resize(w, h):
+            self.app.geometry(f"{w}x{h}")
+            for _ in range(10):
+                self.app.update()
+                time.sleep(0.02)
+
+        resize(760, 560)
+        self.assertEqual(self.app._layout_mode, "wide", f"genişlik={self.app.winfo_width()} geo={self.app.geometry()}")
+        self.assertEqual(int(self.app.btn_run.grid_info()["row"]), 0)
+        self.assertEqual(int(self.app.card_files.grid_info()["column"]), 7)
+
+        resize(420, 500)
+        self.assertEqual(self.app._layout_mode, "narrow")
+        # Başlat ikinci satıra iner, kartlar 4x2 ızgaraya geçer
+        self.assertEqual(int(self.app.btn_run.grid_info()["row"]), 1)
+        self.assertEqual(int(self.app.card_files.grid_info()["row"]), 1)
+        self.assertEqual(int(self.app.card_files.grid_info()["column"]), 3)
+        self.assertFalse(self.app.lbl_subtitle.winfo_ismapped())
+        # Hiçbir ana öğe pencerenin sağ kenarından taşmamalı
+        win_right = self.app.winfo_rootx() + self.app.winfo_width()
+        for w in (self.app.btn_browse, self.app.btn_open_folder, self.app.card_mrz,
+                  self.app.card_files, self.app.btn_clear, self.app.btn_update):
+            self.assertLessEqual(w.winfo_rootx() + w.winfo_width(), win_right + 1)
+
+        resize(760, 560)
+        self.assertEqual(self.app._layout_mode, "wide")
+        self.assertTrue(self.app.lbl_subtitle.winfo_ismapped())
 
     def test_all_components_instantiated(self):
         """Tüm stat kartlarının, butonların, durum göstergesi ve konsolun varlığı."""
@@ -469,8 +502,8 @@ class TestUyapRedactorApp(unittest.TestCase):
         # Konsol ve Konsol Butonları
         self.assertTrue(hasattr(self.app, "log_text"))
         self.assertIsInstance(self.app.btn_clear, GlassButton)
-        self.assertEqual(self.app.btn_clear["text"], "Kayıtları Temizle")
-        self.assertIn("Console Output", self.app.lbl_console_title.cget("text"))
+        self.assertEqual(self.app.btn_clear["text"], "Temizle")
+        self.assertIn("İşlem Günlüğü", self.app.lbl_console_title.cget("text"))
 
     def test_keyboard_shortcuts_bound(self):
         """macOS Klavye Kısayolları bağlamalarının (bind) varlığı."""
@@ -640,7 +673,7 @@ class TestUyapRedactorApp(unittest.TestCase):
         self.app._check_queue()
         self.assertFalse(self.app.is_running)
         self.assertEqual(self.app.btn_run.state, "normal")
-        self.assertEqual(self.app.btn_run.label.cget("text"), "🚀  İzole Temiz Klasör Üret")
+        self.assertEqual(self.app.btn_run.label.cget("text"), gui.RUN_BUTTON_TEXT)
         self.assertEqual(self.app.btn_open_folder.state, "normal")
         self.mock_yesno.assert_called_once()
 

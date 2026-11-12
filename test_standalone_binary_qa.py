@@ -136,19 +136,19 @@ class Test3_GUIComponentsAndLayout(unittest.TestCase):
             pass
 
     def test_window_geometry_and_properties(self):
-        """Pencere boyutu (760x640), minsize (720, 580), başlık ve arka plan rengi."""
+        """Pencere boyutu (760x560), minsize (400, 440), başlık ve arka plan rengi."""
         self.assertEqual(self.app.cget("bg"), Theme.BG_CANVAS)
         self.assertIn("UYAP Kişisel Veri Maskeleme", self.app.title())
         min_w, min_h = self.app.minsize()
-        self.assertEqual(min_w, 720)
-        self.assertEqual(min_h, 580)
+        self.assertEqual(min_w, 400)
+        self.assertEqual(min_h, 440)
         self.assertEqual(self.app.winfo_width(), 760)
 
     def test_canvas_progress_bar(self):
         """Canvas tabanlı GlassProgressBar bileşeni doğrulama."""
         pbar = self.app.progress
         self.assertIsInstance(pbar, GlassProgressBar)
-        self.assertEqual(pbar.bar_height, 12)
+        self.assertEqual(pbar.bar_height, 6)
         self.assertEqual(pbar.track_color, "#E4E4E7")
         self.assertEqual(pbar.fill_color, Theme.BLUE_PRIMARY)
 
@@ -186,14 +186,14 @@ class Test3_GUIComponentsAndLayout(unittest.TestCase):
     def test_eight_stat_cards(self):
         """8 adet istatistik kartının varlığı, renkleri ve başlangıç değerleri."""
         cards = [
-            (self.app.card_tckn, "🆔 TCKN Gizlenen", Theme.STAT_TCKN),
-            (self.app.card_telefon, "📱 Telefon Gizlenen", Theme.STAT_TEL),
-            (self.app.card_seri_no, "🪪 Kimlik Seri No", Theme.STAT_SERI),
-            (self.app.card_mrz, "📑 Kimlik MRZ Kodu", Theme.STAT_MRZ),
-            (self.app.card_iban, "💳 IBAN Gizlenen", Theme.STAT_IBAN),
-            (self.app.card_sicil, "⚖️ Sicil No Gizlenen", Theme.STAT_SICIL),
-            (self.app.card_adres, "📍 Adres Gizlenen", Theme.STAT_ADRES),
-            (self.app.card_files, "📄 Aktarılan / OCR", Theme.STAT_FILES),
+            (self.app.card_tckn, "TCKN", Theme.STAT_TCKN),
+            (self.app.card_telefon, "Telefon", Theme.STAT_TEL),
+            (self.app.card_seri_no, "Seri No", Theme.STAT_SERI),
+            (self.app.card_mrz, "MRZ", Theme.STAT_MRZ),
+            (self.app.card_iban, "IBAN", Theme.STAT_IBAN),
+            (self.app.card_sicil, "Sicil", Theme.STAT_SICIL),
+            (self.app.card_adres, "Adres", Theme.STAT_ADRES),
+            (self.app.card_files, "Dosya (OCR)", Theme.STAT_FILES),
         ]
         self.assertEqual(len(cards), 8, "Tam olarak 8 adet stat kartı bulunmalı!")
         for card, title, color in cards:
@@ -210,7 +210,7 @@ class Test3_GUIComponentsAndLayout(unittest.TestCase):
         """Koyu terminal konsolu, renkleri, pencere noktaları ve syntax etiketleri."""
         self.assertEqual(self.app.log_text.cget("bg"), Theme.TERM_BG)
         self.assertEqual(self.app.log_text.cget("fg"), Theme.TERM_FG)
-        self.assertEqual(self.app.lbl_console_title.cget("text"), "Console Output  •  Canlı İşlem Günlüğü")
+        self.assertEqual(self.app.lbl_console_title.cget("text"), "İşlem Günlüğü")
 
         # Syntax tag kontrolleri
         tags = self.app.log_text.tag_names()

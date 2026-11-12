@@ -35,7 +35,8 @@ from tkinter import ttk, filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
 
 # Uygulama Sürümü ve Otomatik Güncelleme Kaynağı
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.2.0"
+RUN_BUTTON_TEXT = "▶  Başlat"
 GITHUB_REPO = "MertAtis/Uyap-Dosya-Maskeleme-YPro"
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
@@ -538,15 +539,15 @@ class GlassStatCard(tk.Frame):
             bg=Theme.BG_SURFACE,
             highlightbackground=Theme.BORDER_GLASS,
             highlightthickness=1,
-            padx=8,
-            pady=5,
+            padx=7,
+            pady=3,
             **kwargs
         )
         self.color = color
 
         # 1. Üst kenar Liquid Glass ışık yansıması (Subtle Highlight Bevel)
         self.top_highlight = tk.Frame(self, bg="#F4F4F6", height=1)
-        self.top_highlight.pack(fill="x", pady=(0, 3))
+        self.top_highlight.pack(fill="x", pady=(0, 1))
 
         # 2. Başlık / Etiket
         self.lbl_title = tk.Label(
@@ -554,19 +555,20 @@ class GlassStatCard(tk.Frame):
             text=title,
             font=Theme.font_text(9, "bold"),
             fg=Theme.TEXT_MUTED,
-            bg=Theme.BG_SURFACE
+            bg=Theme.BG_SURFACE,
+            anchor="w"
         )
-        self.lbl_title.pack(anchor="w")
+        self.lbl_title.pack(anchor="w", fill="x")
 
         # 3. İstatistik Sayı Değeri (SF Pro Display)
         self.lbl_val = tk.Label(
             self,
             text=str(value),
-            font=Theme.font_display(14, "bold"),
+            font=Theme.font_display(13, "bold"),
             fg=color,
             bg=Theme.BG_SURFACE
         )
-        self.lbl_val.pack(anchor="w", pady=(1, 0))
+        self.lbl_val.pack(anchor="w")
 
         # Hover mikro etkileşimi
         for w in (self, self.top_highlight, self.lbl_title, self.lbl_val):
@@ -599,8 +601,8 @@ class GlassStatusPill(tk.Frame):
             bg=Theme.BG_SURFACE,
             highlightbackground=Theme.BORDER_GLASS,
             highlightthickness=1,
-            padx=12,
-            pady=7,
+            padx=8,
+            pady=3,
             **kwargs
         )
         self.pulse_index = 0
@@ -623,7 +625,8 @@ class GlassStatusPill(tk.Frame):
             text=text,
             font=Theme.font_text(10, "normal"),
             fg=Theme.TEXT_SECONDARY,
-            bg=Theme.BG_SURFACE
+            bg=Theme.BG_SURFACE,
+            anchor="w"
         )
         self.lbl_text.pack(side="left", fill="x", expand=True, anchor="w")
 
@@ -760,11 +763,11 @@ class UyapRedactorApp(tk.Tk):
             sw = self.winfo_screenwidth()
             sh = self.winfo_screenheight()
             px = max(0, (sw - 760) // 2)
-            py = max(25, (sh - 640) // 2 - 15)
-            self.geometry(f"760x640+{px}+{py}")
+            py = max(25, (sh - 560) // 2 - 15)
+            self.geometry(f"760x560+{px}+{py}")
         except Exception:
-            self.geometry("760x640")
-        self.minsize(720, 580)
+            self.geometry("760x560")
+        self.minsize(400, 440)
         self.configure(bg=Theme.BG_CANVAS)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -805,374 +808,210 @@ class UyapRedactorApp(tk.Tk):
                 return
         self.destroy()
 
+    # Pencere bu genişliğin altına inince dar (tek sütun) düzene geçilir
+    NARROW_BREAKPOINT = 640
+
     def _create_widgets(self):
-        # ----------------------------------------------------------------------
-        # 1. ÜST BAŞLIK BÖLÜMÜ (FROSTED GLASS HEADER)
-        # ----------------------------------------------------------------------
-        header_frame = tk.Frame(
-            self,
-            bg=Theme.BG_SURFACE,
-            padx=16,
-            pady=10,
-            highlightbackground=Theme.BORDER_GLASS,
-            highlightthickness=1
-        )
-        header_frame.pack(fill="x")
+        """
+        Kompakt ve esnek düzen.
+        - Geniş pencere: klasör + Seç + Başlat + Aç tek satırda, 8 istatistik tek satırda.
+        - Dar pencere: Başlat/Aç ikinci satıra iner, istatistikler 4x2 ızgaraya geçer,
+          ikincil açıklamalar gizlenir. Her öğe grid ağırlıklarıyla küçülür, taşmaz.
+        """
+        self._layout_mode = None
 
-        # Üst Satır: Başlık & Rozetler
-        header_top = tk.Frame(header_frame, bg=Theme.BG_SURFACE)
-        header_top.pack(fill="x")
+        # ------------------------------------------------------------------
+        # 1. ÜST BAŞLIK
+        # ------------------------------------------------------------------
+        header = tk.Frame(self, bg=Theme.BG_SURFACE, padx=12, pady=6,
+                          highlightbackground=Theme.BORDER_GLASS, highlightthickness=1)
+        header.pack(fill="x", side="top")
+        header.columnconfigure(2, weight=1)
 
-        title_lbl = tk.Label(
-            header_top,
-            text="🛡️ UYAP Kişisel Veri Maskeleme",
-            font=Theme.font_display(15, "bold"),
-            fg=Theme.TEXT_PRIMARY,
-            bg=Theme.BG_SURFACE
-        )
-        title_lbl.pack(side="left")
+        self.lbl_title = tk.Label(header, text="🛡️ UYAP Maskeleme", font=Theme.font_display(13, "bold"),
+                                  fg=Theme.TEXT_PRIMARY, bg=Theme.BG_SURFACE)
+        self.lbl_title.grid(row=0, column=0, sticky="w")
 
-        # Shadcn Hap Rozetler (Pill Badges)
-        badge_container = tk.Frame(header_top, bg=Theme.BG_SURFACE)
-        badge_container.pack(side="right")
+        self.lbl_subtitle = tk.Label(header, text="Çevrimdışı • Orijinal dosyalara dokunmaz",
+                                     font=Theme.font_text(10), fg=Theme.TEXT_MUTED, bg=Theme.BG_SURFACE, anchor="w")
+        self.lbl_subtitle.grid(row=0, column=1, sticky="w", padx=(10, 0))
 
-        GlassPillBadge(
-            badge_container,
-            text="%100 Çevrimdışı",
-            dot_color="#10B981",
-            bg="#F0FDF4",
-            border="#DCFCE7",
-            fg="#15803D"
-        ).pack(side="left", padx=(0, 6))
+        self.btn_update = GlassButton(header, text=f"v{APP_VERSION} • Güncelle", variant="secondary",
+                                      command=self._on_update_button_click, padx=8, pady=2,
+                                      font=Theme.font_text(10, "bold"))
+        self.btn_update.grid(row=0, column=3, sticky="e")
 
-        GlassPillBadge(
-            badge_container,
-            text="Sıfır Değişiklik",
-            dot_color="#3B82F6",
-            bg="#EFF6FF",
-            border="#DBEAFE",
-            fg="#1D4ED8"
-        ).pack(side="left", padx=(0, 6))
+        # ------------------------------------------------------------------
+        # 7. ALT BİLGİ (başlıktan hemen sonra pack'lenir ki küçülünce kaybolmasın)
+        # ------------------------------------------------------------------
+        footer = tk.Frame(self, bg=Theme.BG_SURFACE, padx=12, pady=4,
+                          highlightbackground=Theme.BORDER_GLASS, highlightthickness=1)
+        footer.pack(fill="x", side="bottom")
+        tk.Label(footer, text="⌘O Seç • ⌘R Başlat • ⌘K Temizle", font=Theme.font_text(9),
+                 fg=Theme.TEXT_MUTED, bg=Theme.BG_SURFACE).pack(side="left")
+        self.lbl_secure = tk.Label(footer, text="🔒 Ağ bağlantısı gerektirmez", font=Theme.font_text(9),
+                                   fg=Theme.TEXT_MUTED, bg=Theme.BG_SURFACE)
+        self.lbl_secure.pack(side="right")
 
-        GlassPillBadge(
-            badge_container,
-            text="Apple Vision OCR",
-            dot_color="#8B5CF6",
-            bg="#F5F3FF",
-            border="#EDE9FE",
-            fg="#6D28D9"
-        ).pack(side="left", padx=(0, 6))
+        # ------------------------------------------------------------------
+        # ANA İÇERİK
+        # ------------------------------------------------------------------
+        main = tk.Frame(self, bg=Theme.BG_CANVAS, padx=12, pady=8)
+        main.pack(fill="both", expand=True)
+        main.columnconfigure(0, weight=1)
+        main.rowconfigure(3, weight=1)
 
-        self.btn_update = GlassButton(
-            badge_container,
-            text=f"🔄 v{APP_VERSION} • Güncelleme Denetle",
-            variant="secondary",
-            command=self._on_update_button_click,
-            padx=10,
-            pady=4
-        )
-        self.btn_update.pack(side="left")
-
-        # Alt Satır: Açıklama
-        sub_lbl = tk.Label(
-            header_frame,
-            text="İzole Temiz Klasör & AI Hazırlık Motoru • Orijinal UDF/PDF/TIFF dosyalarına ASLA dokunmaz.",
-            font=Theme.font_text(10, "normal"),
-            fg=Theme.TEXT_MUTED,
-            bg=Theme.BG_SURFACE
-        )
-        sub_lbl.pack(anchor="w", pady=(4, 0))
-
-        # ----------------------------------------------------------------------
-        # ANA İÇERİK KONTEYNERİ
-        # ----------------------------------------------------------------------
-        main_frame = tk.Frame(self, bg=Theme.BG_CANVAS, padx=20, pady=12)
-        main_frame.pack(fill="both", expand=True)
-
-        # ----------------------------------------------------------------------
-        # 2. DAVA KLASÖRÜ SEÇİMİ (GLASS PANEL)
-        # ----------------------------------------------------------------------
-        folder_card = tk.Frame(
-            main_frame,
-            bg=Theme.BG_SURFACE,
-            highlightbackground=Theme.BORDER_GLASS,
-            highlightthickness=1,
-            padx=12,
-            pady=7
-        )
-        folder_card.pack(fill="x", pady=(0, 6))
-
-        # Başlık ve ipucu
-        f_header = tk.Frame(folder_card, bg=Theme.BG_SURFACE)
-        f_header.pack(fill="x", pady=(0, 4))
-
-        tk.Label(
-            f_header,
-            text="📂  Kaynak Dava Klasörü",
-            font=Theme.font_text(11, "bold"),
-            fg=Theme.TEXT_PRIMARY,
-            bg=Theme.BG_SURFACE
-        ).pack(side="left")
-
-        tk.Label(
-            f_header,
-            text="UYAP UDF, taranmış TIFF veya PDF içeren yerel klasör",
-            font=Theme.font_text(9, "normal"),
-            fg=Theme.TEXT_MUTED,
-            bg=Theme.BG_SURFACE
-        ).pack(side="right")
-
-        # Giriş kutusu ve Seç butonu satırı
-        f_input_row = tk.Frame(folder_card, bg=Theme.BG_SURFACE)
-        f_input_row.pack(fill="x")
+        # 2. Klasör + işlem butonları
+        self.controls = tk.Frame(main, bg=Theme.BG_CANVAS)
+        self.controls.grid(row=0, column=0, sticky="ew", pady=(0, 6))
 
         self.folder_var = tk.StringVar(value="")
-        entry_wrap = tk.Frame(
-            f_input_row,
-            bg=Theme.BG_SURFACE_ALT,
-            highlightbackground=Theme.BORDER_GLASS,
-            highlightthickness=1,
-            padx=8,
-            pady=3
-        )
-        entry_wrap.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.entry_wrap = tk.Frame(self.controls, bg=Theme.BG_SURFACE,
+                                   highlightbackground=Theme.BORDER_GLASS, highlightthickness=1, padx=6)
+        tk.Label(self.entry_wrap, text="Klasör", font=Theme.font_text(10, "bold"),
+                 fg=Theme.TEXT_MUTED, bg=Theme.BG_SURFACE).pack(side="left", padx=(0, 6))
+        self.entry_folder = tk.Entry(self.entry_wrap, textvariable=self.folder_var, width=1,
+                                     font=Theme.font_text(11), bg=Theme.BG_SURFACE, fg=Theme.TEXT_PRIMARY,
+                                     relief="flat", bd=0, highlightthickness=0,
+                                     insertbackground=Theme.TEXT_PRIMARY)
+        self.entry_folder.pack(side="left", fill="x", expand=True, ipady=4)
 
-        entry_folder = tk.Entry(
-            entry_wrap,
-            textvariable=self.folder_var,
-            font=Theme.font_text(11, "normal"),
-            bg=Theme.BG_SURFACE_ALT,
-            fg=Theme.TEXT_PRIMARY,
-            relief="flat",
-            bd=0,
-            insertbackground=Theme.TEXT_PRIMARY
-        )
-        entry_folder.pack(fill="x", expand=True, ipady=3)
+        self.btn_browse = GlassButton(self.controls, text="Seç…", variant="secondary",
+                                      command=self._select_folder, padx=10, pady=4)
+        self.btn_run = GlassButton(self.controls, text=RUN_BUTTON_TEXT, variant="primary",
+                                   command=self._start_process, padx=12, pady=4)
+        self.btn_open_folder = GlassButton(self.controls, text="Aç", variant="secondary",
+                                           command=self._open_dest_folder, state="disabled", padx=10, pady=4)
 
-        btn_browse = GlassButton(
-            f_input_row,
-            text="Klasör Seç...",
-            variant="secondary",
-            command=self._select_folder,
-            padx=14,
-            pady=6
-        )
-        btn_browse.pack(side="right")
+        # 4. İstatistik kartları
+        self.stats_frame = tk.Frame(main, bg=Theme.BG_CANVAS)
+        self.stats_frame.grid(row=1, column=0, sticky="ew", pady=(0, 6))
+        self.card_tckn = GlassStatCard(self.stats_frame, "TCKN", "0", color=Theme.STAT_TCKN)
+        self.card_telefon = GlassStatCard(self.stats_frame, "Telefon", "0", color=Theme.STAT_TEL)
+        self.card_seri_no = GlassStatCard(self.stats_frame, "Seri No", "0", color=Theme.STAT_SERI)
+        self.card_mrz = GlassStatCard(self.stats_frame, "MRZ", "0", color=Theme.STAT_MRZ)
+        self.card_iban = GlassStatCard(self.stats_frame, "IBAN", "0", color=Theme.STAT_IBAN)
+        self.card_sicil = GlassStatCard(self.stats_frame, "Sicil", "0", color=Theme.STAT_SICIL)
+        self.card_adres = GlassStatCard(self.stats_frame, "Adres", "0", color=Theme.STAT_ADRES)
+        self.card_files = GlassStatCard(self.stats_frame, "Dosya (OCR)", "0", color=Theme.STAT_FILES)
+        self._cards = [self.card_tckn, self.card_telefon, self.card_seri_no, self.card_mrz,
+                       self.card_iban, self.card_sicil, self.card_adres, self.card_files]
 
-        # ----------------------------------------------------------------------
-        # 3. TEK VE STANDART İŞLEM MODU (STANDART PANELİ)
-        # ----------------------------------------------------------------------
-        mode_card = tk.Frame(
-            main_frame,
-            bg=Theme.BG_SURFACE,
-            highlightbackground=Theme.BORDER_GLASS,
-            highlightthickness=1,
-            padx=12,
-            pady=7
-        )
-        mode_card.pack(fill="x", pady=(0, 6))
-
-        mode_header = tk.Frame(mode_card, bg=Theme.BG_SURFACE)
-        mode_header.pack(fill="x", pady=(0, 2))
-
-        tk.Label(
-            mode_header,
-            text="📦  Standart İşlem Modu: İzole Temiz Klasör (AI Export)",
-            font=Theme.font_display(11, "bold"),
-            fg=Theme.BLUE_PRIMARY,
-            bg=Theme.BG_SURFACE
-        ).pack(side="left")
-
-        GlassPillBadge(
-            mode_header,
-            text="Güvenli Standart",
-            dot_color="#10B981",
-            bg="#F0FDF4",
-            border="#DCFCE7",
-            fg="#15803D"
-        ).pack(side="right")
-
-        mode_desc = tk.Label(
-            mode_card,
-            text="Orijinal dosyalara dokunmaz • Yalnızca maskelenmiş .md aktarımı • Sıfır ikili dosya sızıntısı",
-            font=Theme.font_text(9, "normal"),
-            justify="left",
-            fg=Theme.TEXT_MUTED,
-            bg=Theme.BG_SURFACE
-        )
-        mode_desc.pack(anchor="w", pady=(1, 0))
-
-        # ----------------------------------------------------------------------
-        # 4. İSTATİSTİK KARTLARI (2 Satır x 4 Cam Kart)
-        # ----------------------------------------------------------------------
-        stats_frame_row1 = tk.Frame(main_frame, bg=Theme.BG_CANVAS)
-        stats_frame_row1.pack(fill="x", pady=(0, 4))
-
-        self.card_tckn = GlassStatCard(stats_frame_row1, "🆔 TCKN Gizlenen", "0", color=Theme.STAT_TCKN)
-        self.card_tckn.pack(side="left", fill="x", expand=True, padx=(0, 3))
-
-        self.card_telefon = GlassStatCard(stats_frame_row1, "📱 Telefon Gizlenen", "0", color=Theme.STAT_TEL)
-        self.card_telefon.pack(side="left", fill="x", expand=True, padx=3)
-
-        self.card_seri_no = GlassStatCard(stats_frame_row1, "🪪 Kimlik Seri No", "0", color=Theme.STAT_SERI)
-        self.card_seri_no.pack(side="left", fill="x", expand=True, padx=3)
-
-        self.card_mrz = GlassStatCard(stats_frame_row1, "📑 Kimlik MRZ Kodu", "0", color=Theme.STAT_MRZ)
-        self.card_mrz.pack(side="left", fill="x", expand=True, padx=(3, 0))
-
-        stats_frame_row2 = tk.Frame(main_frame, bg=Theme.BG_CANVAS)
-        stats_frame_row2.pack(fill="x", pady=(0, 6))
-
-        self.card_iban = GlassStatCard(stats_frame_row2, "💳 IBAN Gizlenen", "0", color=Theme.STAT_IBAN)
-        self.card_iban.pack(side="left", fill="x", expand=True, padx=(0, 3))
-
-        self.card_sicil = GlassStatCard(stats_frame_row2, "⚖️ Sicil No Gizlenen", "0", color=Theme.STAT_SICIL)
-        self.card_sicil.pack(side="left", fill="x", expand=True, padx=3)
-
-        self.card_adres = GlassStatCard(stats_frame_row2, "📍 Adres Gizlenen", "0", color=Theme.STAT_ADRES)
-        self.card_adres.pack(side="left", fill="x", expand=True, padx=3)
-
-        self.card_files = GlassStatCard(stats_frame_row2, "📄 Aktarılan / OCR", "0", color=Theme.STAT_FILES)
-        self.card_files.pack(side="left", fill="x", expand=True, padx=(3, 0))
-
-        # ----------------------------------------------------------------------
-        # 5. İŞLEM BUTONLARI VE DURUM HAPI
-        # ----------------------------------------------------------------------
-        action_frame = tk.Frame(main_frame, bg=Theme.BG_CANVAS)
-        action_frame.pack(fill="x", pady=(0, 6))
-
-        # 🚀 Ana Çalıştırma Butonu (Apple Blue Primary)
-        self.btn_run = GlassButton(
-            action_frame,
-            text="🚀  İzole Temiz Klasör Üret",
-            variant="primary",
-            command=self._start_process,
-            padx=16,
-            pady=6
-        )
-        self.btn_run.pack(side="left", padx=(0, 6))
-
-        # 📂 Klasörü Aç Butonu
-        self.btn_open_folder = GlassButton(
-            action_frame,
-            text="📂  Klasörü Aç (Finder)",
-            variant="secondary",
-            command=self._open_dest_folder,
-            state="disabled",
-            padx=12,
-            pady=6
-        )
-        self.btn_open_folder.pack(side="left", padx=(0, 8))
-
-        # Parlayan Durum Hapı (Glowing Status Pill)
+        # 5. Durum + ilerleme
+        self.status_row = tk.Frame(main, bg=Theme.BG_CANVAS)
+        self.status_row.grid(row=2, column=0, sticky="ew", pady=(0, 6))
         self.lbl_status = GlassStatusPill(
-            action_frame,
-            text="Hazır. Dava klasörünü seçip 'İzole Temiz Klasör Üret' butonuna tıklayın."
+            self.status_row, text="Hazır. Dava klasörünü seçip Başlat'a tıklayın."
         )
-        self.lbl_status.pack(side="left", fill="x", expand=True)
+        self.progress = GlassProgressBar(self.status_row, height=6, bg=Theme.BG_CANVAS)
 
-        # ----------------------------------------------------------------------
-        # İLERLEME ÇUBUĞU (LIQUID GLASS PROGRESS BAR)
-        # ----------------------------------------------------------------------
-        self.progress = GlassProgressBar(main_frame, height=12, bg=Theme.BG_CANVAS)
-        self.progress.pack(fill="x", pady=(0, 6))
-
-        # ----------------------------------------------------------------------
-        # 6. GELİŞTİRİCİ KONSOLU / İŞLEM KAYITLARI (APPLE DARK TERMINAL)
-        # ----------------------------------------------------------------------
-        log_panel = tk.Frame(
-            main_frame,
-            bg=Theme.TERM_BG,
-            highlightbackground=Theme.TERM_BORDER,
-            highlightthickness=1
-        )
-        log_panel.pack(fill="both", expand=True)
-
-        # Konsol Üst Barı (macOS Trafik Işıkları & Başlık)
-        log_header = tk.Frame(log_panel, bg=Theme.TERM_BAR, padx=10, pady=6)
+        # 6. İşlem günlüğü
+        log_panel = tk.Frame(main, bg=Theme.TERM_BG, highlightbackground=Theme.TERM_BORDER, highlightthickness=1)
+        log_panel.grid(row=3, column=0, sticky="nsew")
+        log_header = tk.Frame(log_panel, bg=Theme.TERM_BAR, padx=8, pady=3)
         log_header.pack(fill="x")
-
-        # 3 macOS Pencere Noktası
-        dots_frame = tk.Frame(log_header, bg=Theme.TERM_BAR)
-        dots_frame.pack(side="left")
-
-        for dot_color in ["#FF5F56", "#FFBD2E", "#27C93F"]:
-            d = tk.Label(dots_frame, text="●", font=Theme.font_text(7, "bold"), fg=dot_color, bg=Theme.TERM_BAR)
-            d.pack(side="left", padx=(0, 4))
-
-        self.lbl_console_title = tk.Label(
-            log_header,
-            text="Console Output  •  Canlı İşlem Günlüğü",
-            font=Theme.font_mono(9, "bold"),
-            fg=Theme.TEXT_MUTED,
-            bg=Theme.TERM_BAR
-        )
-        self.lbl_console_title.pack(side="left", padx=(6, 0))
-
-        self.btn_clear = GlassButton(
-            log_header,
-            text="Kayıtları Temizle",
-            variant="subtle",
-            command=self._clear_logs,
-            padx=10,
-            pady=3
-        )
+        self.lbl_console_title = tk.Label(log_header, text="İşlem Günlüğü", font=Theme.font_mono(9, "bold"),
+                                          fg=Theme.TEXT_TERTIARY, bg=Theme.TERM_BAR)
+        self.lbl_console_title.pack(side="left")
+        self.btn_clear = GlassButton(log_header, text="Temizle", variant="subtle",
+                                     command=self._clear_logs, padx=8, pady=1)
         self.btn_clear.pack(side="right")
 
-        # Monospace Terminal Metin Alanı
-        self.log_text = ScrolledText(
-            log_panel,
-            font=Theme.font_mono(10, "normal"),
-            bg=Theme.TERM_BG,
-            fg=Theme.TERM_FG,
-            relief="flat",
-            wrap="none",
-            bd=0,
-            padx=12,
-            pady=8,
-            insertbackground="#FFFFFF"
-        )
+        self.log_text = ScrolledText(log_panel, font=Theme.font_mono(10), bg=Theme.TERM_BG, fg=Theme.TERM_FG,
+                                     relief="flat", wrap="word", bd=0, padx=10, pady=6, height=4, width=1,
+                                     insertbackground="#FFFFFF")
         self.log_text.pack(fill="both", expand=True)
+        self.log_text.tag_configure("mask", foreground="#34D399")
+        self.log_text.tag_configure("ocr", foreground="#A78BFA")
+        self.log_text.tag_configure("sync", foreground="#38BDF8")
+        self.log_text.tag_configure("error", foreground="#F87171")
+        self.log_text.tag_configure("header", foreground="#FCD34D", font=Theme.font_mono(10, "bold"))
+        self.log_text.tag_configure("info", foreground="#94A3B8")
+        self.log_text.tag_configure("dim", foreground="#52525B")
 
-        # Syntax Renk Tanımları
-        self.log_text.tag_configure("mask", foreground="#34D399")      # Emerald 400 (Maskelenen veriler)
-        self.log_text.tag_configure("ocr", foreground="#A78BFA")       # Violet 400 (Apple Vision OCR)
-        self.log_text.tag_configure("sync", foreground="#38BDF8")      # Sky 400 (İndeks Senkron)
-        self.log_text.tag_configure("error", foreground="#F87171")     # Rose 400 (Hata mesajları)
-        self.log_text.tag_configure("header", foreground="#FCD34D", font=Theme.font_mono(10, "bold"))  # Amber
-        self.log_text.tag_configure("info", foreground="#94A3B8")      # Slate 400
-        self.log_text.tag_configure("dim", foreground="#52525B")       # Zinc 600
+        self._apply_layout("wide")
+        self.bind("<Configure>", self._on_window_resize, add="+")
+        # Pencere ekrana geldiğinde (ilk açılış, simge durumundan dönüş) gerçek genişliğe eşitle
+        self.bind("<Map>", lambda e: self._sync_layout() if e.widget is self else None, add="+")
+        self.after_idle(self._sync_layout)
 
-        # ----------------------------------------------------------------------
-        # 7. ALT BİLGİ BARI (MINIMALIST FOOTER)
-        # ----------------------------------------------------------------------
-        bottom_frame = tk.Frame(
-            self,
-            bg=Theme.BG_SURFACE,
-            padx=20,
-            pady=7,
-            highlightbackground=Theme.BORDER_GLASS,
-            highlightthickness=1
-        )
-        bottom_frame.pack(fill="x", side="bottom")
+    def _on_window_resize(self, event):
+        """Pencere genişliği eşiği geçince düzeni değiştirir (yalnızca kök pencere olayları)."""
+        if event.widget is not self:
+            return
+        self._sync_layout(event.width)
 
-        lbl_shortcuts = tk.Label(
-            bottom_frame,
-            text="⌘O Klasör Seç  •  ⌘R Başlat  •  ⌘K Temizle",
-            font=Theme.font_text(9, "normal"),
-            fg=Theme.TEXT_MUTED,
-            bg=Theme.BG_SURFACE
-        )
-        lbl_shortcuts.pack(side="left")
+    def _sync_layout(self, width: Optional[int] = None):
+        """
+        Düzeni gerçek pencere genişliğine eşitler. Pencere henüz çizilmemişken gelen
+        1 px'lik geçici ölçüler yok sayılır; aksi halde 760 px pencere dar düzende kalabilir.
+        """
+        try:
+            if width is None:
+                width = self.winfo_width()
+        except tk.TclError:
+            return
+        if width <= 1:
+            return
+        mode = "narrow" if width < self.NARROW_BREAKPOINT else "wide"
+        if mode != self._layout_mode:
+            self._apply_layout(mode)
 
-        lbl_secure = tk.Label(
-            bottom_frame,
-            text="🔒 %100 Yerel ve Çevrimdışı (Zero-Cloud / Neural Engine) • Ağ bağlantısı gerektirmez.",
-            font=Theme.font_text(9, "italic"),
-            fg=Theme.TEXT_MUTED,
-            bg=Theme.BG_SURFACE
-        )
-        lbl_secure.pack(side="right")
+    def _apply_layout(self, mode: str):
+        """'wide' veya 'narrow' düzenini uygular; aynı widget'lar yeniden yerleştirilir."""
+        self._layout_mode = mode
+        narrow = mode == "narrow"
+
+        # Klasör / buton satırı
+        for w in (self.entry_wrap, self.btn_browse, self.btn_run, self.btn_open_folder):
+            w.grid_forget()
+        for c in range(4):
+            self.controls.columnconfigure(c, weight=0)
+        self.controls.columnconfigure(0, weight=1)
+        if narrow:
+            self.entry_wrap.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+            self.btn_browse.grid(row=0, column=1, sticky="ew")
+            self.btn_run.grid(row=1, column=0, sticky="ew", padx=(0, 6), pady=(6, 0))
+            self.btn_open_folder.grid(row=1, column=1, sticky="ew", pady=(6, 0))
+        else:
+            self.entry_wrap.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+            self.btn_browse.grid(row=0, column=1, padx=(0, 6))
+            self.btn_run.grid(row=0, column=2, padx=(0, 6))
+            self.btn_open_folder.grid(row=0, column=3)
+
+        # İstatistik ızgarası: geniş 8x1, dar 4x2
+        cols = 4 if narrow else 8
+        for c in range(8):
+            self.stats_frame.columnconfigure(c, weight=0, uniform="")
+        for c in range(cols):
+            self.stats_frame.columnconfigure(c, weight=1, uniform="stat")
+        for i, card in enumerate(self._cards):
+            r, c = divmod(i, cols)
+            card.grid(row=r, column=c, sticky="ew",
+                      padx=(0 if c == 0 else 2, 0 if c == cols - 1 else 2), pady=(0 if r == 0 else 4, 0))
+
+        # Durum satırı: geniş yan yana, dar alt alta
+        self.lbl_status.grid_forget()
+        self.progress.grid_forget()
+        self.status_row.columnconfigure(0, weight=1, uniform="")
+        self.status_row.columnconfigure(1, weight=0, uniform="")
+        if narrow:
+            self.lbl_status.grid(row=0, column=0, sticky="ew")
+            self.progress.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        else:
+            self.status_row.columnconfigure(0, weight=3, uniform="st")
+            self.status_row.columnconfigure(1, weight=2, uniform="st")
+            self.lbl_status.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+            self.progress.grid(row=0, column=1, sticky="ew")
+
+        # İkincil metinler yalnızca geniş düzende
+        if narrow:
+            self.lbl_subtitle.grid_remove()
+            self.lbl_secure.pack_forget()
+        else:
+            self.lbl_subtitle.grid()
+            if not self.lbl_secure.winfo_ismapped():
+                self.lbl_secure.pack(side="right")
 
     # ==========================================================================
     # İŞLEVSEL METOTLAR
@@ -1257,7 +1096,7 @@ class UyapRedactorApp(tk.Tk):
                     self.card_files.update_value(f"{md_cnt} ({ocr_cnt} OCR)")
                 elif msg_type == "done":
                     self.is_running = False
-                    self.btn_run.config(state="normal", text="🚀  İzole Temiz Klasör Üret")
+                    self.btn_run.config(state="normal", text=RUN_BUTTON_TEXT)
                     self.btn_open_folder.config(state="normal")
                     summary_text, dest_f = payload if isinstance(payload, tuple) else (payload, self.last_dest_folder)
                     res = messagebox.askyesno(
@@ -1268,7 +1107,7 @@ class UyapRedactorApp(tk.Tk):
                         subprocess.run(["open", dest_f])
                 elif msg_type == "error":
                     self.is_running = False
-                    self.btn_run.config(state="normal", text="🚀  İzole Temiz Klasör Üret")
+                    self.btn_run.config(state="normal", text=RUN_BUTTON_TEXT)
                     messagebox.showerror("Hata Oluştu", payload)
                 elif msg_type == "update_available":
                     info, manual = payload
@@ -1298,7 +1137,7 @@ class UyapRedactorApp(tk.Tk):
                     err_str, manual = payload
                     self.btn_update.config(
                         state="normal",
-                        text=f"🔄 v{APP_VERSION} • Güncelleme Denetle"
+                        text=f"v{APP_VERSION} • Güncelle"
                     )
                     if manual:
                         if "CERTIFICATE_VERIFY_FAILED" in str(err_str):
@@ -1322,7 +1161,7 @@ class UyapRedactorApp(tk.Tk):
                     self.after(250, self.destroy)
                 elif msg_type == "update_install_error":
                     self.is_running = False
-                    self.btn_run.config(state="normal", text="🚀  İzole Temiz Klasör Üret")
+                    self.btn_run.config(state="normal", text=RUN_BUTTON_TEXT)
                     self.btn_update.config(state="normal")
                     messagebox.showerror(
                         "Güncelleme Hatası",
