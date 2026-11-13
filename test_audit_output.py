@@ -425,6 +425,50 @@ class AuditCase(unittest.TestCase):
             self.assertTrue(leak2)
             self.assertGreaterEqual(len(res_leak["leaks"]["tckn"]), 1)
 
+    def test_safety_net_address_patterns_detected_as_person_leaks(self):
+        """Güvenlik ağının hedeflediği 3 adres kalıbı maskesiz bırakıldığında audit SIZINTI bildirir."""
+        leaked = (
+            "Çamlık Mevkii Kavak Sitesi B Blok D:4 Pamukkale/DENİZLİ\n"
+            "Kurtuluş Mh. Atatürk Cd. Nu:15 İzmir\n"
+            'küçüğün "Gül Mahallesi Lale (Gül) Sokak No:6 Çine/AYDIN" olduğu, TMK 411. madde gereğince\n'
+        )
+        src, out = self._case({"a.md": leaked}, {"a.md": leaked})
+        res = A.audit(src, out)
+        self.assertEqual(len(res["leaks"]["addr_kisi"]), 3)
+        _lines, _det, leak = A.summarize(res)
+        self.assertTrue(leak)
+
+    def test_protected_templates_and_legal_lines_not_flagged_as_leaks(self):
+        """Korunacak 4 kalıp (nüfus şablonu, mahkeme/esas, kanun/tarih, muhtarlık) sızıntı sayılmaz."""
+        safe = (
+            "KONYA ili, EMİRGAZİ ilçesi, IŞIKLAR köy/mahallesi, 32 cilt, 19 aile sıra no, 120 sıra no'da nüfusa kayıtlı\n"
+            "Burdur 3. Asliye Hukuk Mah. 2025/133 E.\n"
+            "HMK 107. madde gereğince 12/03/2024 tarihinde 5.000,00 TL ödenmiştir.\n"
+            "Örnek Köyü muhtarlığından alınan yazıda\n"
+        )
+        src, out = self._case({"a.md": safe}, {"a.md": safe})
+        res = A.audit(src, out)
+        self.assertEqual(res["leaks"]["addr_kisi"], [])
+        self.assertEqual(res["leaks"]["addr_kurum"], [])
+        self.assertEqual(res["leaks"]["addr_olay"], [])
+        _lines, _det, leak = A.summarize(res)
+        self.assertFalse(leak)
+
+    def test_unmasked_place_prefix_before_adres_label_is_leak(self):
+        """Taşoluk [ADRES_3] 'Maskesiz yer adı (etiket önünde)' sızıntısı sayılır; bağlam ve kişi adı hariç."""
+        out_text = (
+            "Taşoluk [ADRES_3] / AYDIN\n"
+            "kayıtlı [ADRES_1]\n"
+            "ALİ VELİ\n[ADRES_2]\n"
+        )
+        src, out = self._case({"a.md": out_text}, {"a.md": out_text})
+        res = A.audit(src, out)
+        self.assertEqual(len(res["leaks"]["addr_prefix"]), 1)
+        self.assertIn("Taşoluk [ADRES_3]", res["leaks"]["addr_prefix"][0][2])
+        lines, _det, leak = A.summarize(res)
+        self.assertTrue(leak)
+        self.assertTrue(any("Maskesiz yer adı (etiket önünde): 1" in ln for ln in lines))
+
 
 if __name__ == "__main__":
     unittest.main()

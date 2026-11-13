@@ -73,7 +73,7 @@ class MaskRegistry:
         "mahallesi": "mah", "mahalle": "mah", "mah": "mah", "mh": "mah",
         "caddesi": "cad", "cadde": "cad", "cad": "cad", "cd": "cad",
         "sokağı": "sk", "sokagi": "sk", "sokak": "sk", "sok": "sk", "sk": "sk", "5k": "sk",
-        "numara": "no", "numaralı": "no", "no": "no", "ne": "no",
+        "numara": "no", "numaralı": "no", "no": "no", "ne": "no", "nu": "no",
         "daire": "d", "d": "d", "da": "d", "kat": "k", "k": "k",
     }
 
@@ -122,7 +122,13 @@ class MaskRegistry:
     @classmethod
     def _addr_key(cls, raw: str) -> str:
         toks = re.findall(r'[a-zçğıöşüâîû0-9]+', _tr_lower(raw))
-        toks = [cls._ADDR_ABBR.get(t, t) for t in toks]
+        norm_toks: List[str] = []
+        for idx, t in enumerate(toks):
+            if t == "n" and idx + 1 < len(toks) and toks[idx + 1].isdigit():
+                norm_toks.append("no")
+            else:
+                norm_toks.append(cls._ADDR_ABBR.get(t, t))
+        toks = norm_toks
         # İl/ilçe kuyruğunu at: son sayısal belirteçte (kapı/daire/kat no) kes
         last_num = -1
         for i, t in enumerate(toks):
@@ -1896,6 +1902,448 @@ class UyapRedactor:
             return f"{m.group('head')}{m.group('lead')}{m.group('mlabel')}"
 
         text = p4_tail.sub(repl4_tail, text)
+
+        text, net_count = cls.redact_address_safety_net(text, registry=registry)
+        count += net_count
+
+        return text, count
+
+    # Katman 7z (Son güvenlik ağı): yapısal adres kalıpları ve bağlam koruma kümeleri
+    _SN_LOC_RE = re.compile(
+        r'(?i)(?<![A-Za-zÇĞİÖŞÜçğıöşü])(?:'
+        r'Mahalle(?:s[iİıI])?|Mah\.?|Mh\.?|'
+        r'Köy(?:[üÜ])?|'
+        r'Mevk[iİıI]{1,2}|'
+        r'Mezra(?:s[ıiIİ])?|'
+        r'S[iİıI]tes[iİıI]|'
+        r'Apartman[ıiIİ]?|Apt\.?|'
+        r'Blok|'
+        r'Küme[ \t]+Evler[iİıI]|'
+        r'Tok[iİıI][ \t]+Evler[iİıI]|'
+        r'Bulvar[ıiIİ]?|Bulv\.?|Blv\.?|'
+        r'Cadde(?:s[iİıI])?|Cad\.?|Cd\.?|'
+        r'Sokak|Sokağ[ıiIİ]|Sok\.?|Sk\.?|5k\.?'
+        r')(?![A-Za-zÇĞİÖŞÜçğıöşü])'
+    )
+    _SN_NUM_RE = re.compile(
+        r'(?i)(?:'
+        r'(?<![A-Za-zÇĞİÖŞÜçğıöşü])(?:'
+        r'(?:No|Nu|Numara|(?:[İiIıl]ç[ \t]*)?Kap[ıiIİ](?:[ \t]*No)?|Daire|Kat)[ \t]*[:.]?[ \t]*\d+[A-Za-z]?(?:[ \t]*/[ \t]*[0-9A-Za-z]+)?'
+        r'|[NDK][ \t]*[:.][ \t]*\d+[A-Za-z]?(?:[ \t]*/[ \t]*[0-9A-Za-z]+)?'
+        r')(?![A-Za-zÇĞİÖŞÜçğıöşü])'
+        r'|'
+        r'(?<![\d/])\d{1,4}[ \t]*/[ \t]*\d{1,3}(?![\d/])'
+        r'(?![ \t]*(?:E\b|E\.|Esas|K\.|Karar|say[ıiIİ]l[ıiIİ]\b|oran\w*|hisse\w*|pay\w*))'
+        r')'
+    )
+    _SN_NON_DOOR_PRE_RE = re.compile(
+        r'(?i)(?:evrak|dosya|esas|karar|say[ıiIİ]|dava|belge|protokol|takip|talimat|soruşturma|'
+        r'hazırlık|poliçe|acente|cilt|aile[ \t]*s[ıiIİ]ra|birey[ \t]*s[ıiIİ]ra|s[ıiIİ]ra|hane|'
+        r'sicil|vergi|kimlik|pasaport|ruhsat|plaka|fatura|makbuz|yevmiye|tutanak|rapor|'
+        r'sayfa|madde|f[ıiIİ]kra|bent)[ \t]*$'
+    )
+    _SN_NUFUS_SPAN_RE = re.compile(
+        r'(?i)\bcilt\b|aile[ \t]*s[ıiIİ]ra|\bnk\.?[ \t]*lu\b|\bBSN\b|mah\.?[ \t]*/[ \t]*köy|köy[ \t]*/[ \t]*mahalles[iİıI]'
+    )
+    _SN_EXPLICIT_DOOR_RE = re.compile(
+        r'(?i)(?<![A-Za-zÇĞİÖŞÜçğıöşü])(?:'
+        r'(?:No|Nu|Numara|(?:[İiIıl]ç[ \t]*)?Kap[ıiIİ](?:[ \t]*No)?|Daire|Kat)[ \t]*[:.]?[ \t]*\d'
+        r'|[NDK][ \t]*[:.][ \t]*\d'
+        r')'
+    )
+    _SN_CTX_WORDS = frozenset({
+        "adres", "adresi", "adresinin", "adresinde", "adresine", "adresini", "adresleri", "adresler",
+        "ikamet", "ikametgah", "ikametgâh", "tebligat", "yakalama", "işyeri", "açık", "mernis",
+        "nüfus", "nüfusa", "nüfusunda", "nüfusuna",
+        "kayıtlı", "kayıtlıdır", "doğumlu", "halen", "ve", "ile", "veya", "ya", "da", "de",
+        "olup", "olan", "olduğu", "olması", "eden", "oturan", "oturur", "bulunan", "belirtilen",
+        "yazılı", "bildirilen", "tespit", "edilen", "gösterilen", "geçen", "bulunulan",
+        "küçüğün", "çocuğun", "davacı", "davacının", "davalı", "davalının",
+        "sanık", "sanığın", "şüpheli", "şüphelinin", "müşteki", "müştekinin", "mağdur", "mağdurun",
+        "tanık", "tanığın", "borçlu", "borçlunun", "alacaklı", "alacaklının", "muhatap", "muhatabın",
+        "müvekkil", "müvekkilin", "vekil", "vekili", "avukat", "vasi", "vasisi", "kısıtlı", "kısıtlının",
+        "kayyım", "kayyımın", "şahıs", "şahsın", "kişi", "kişinin", "isimli", "adlı", "taraf",
+        "tarafından", "oğlu", "kızı", "anne", "baba", "doğum", "tarih", "tarihli", "sayılı",
+        "mahkeme", "mahkemesi", "mahkememizin", "mahkemesine", "adliye", "müdürlüğü", "başkanlığı",
+        "karar", "esas", "dosya", "evrak", "tutanak", "rapor", "bilgi", "bilgisi", "il", "ili",
+        "ilçe", "ilçesi", "mahalle", "mahallesi", "köy", "köyü", "sokak", "cadde", "bulvar",
+        "kat", "daire", "blok", "no", "sgk", "ptt", "tc", "tckn", "iban", "hmk", "tmk", "tck",
+        "cmk", "tbk", "iik", "tel", "telefon", "gsm", "cep", "faks", "verildi", "oldu",
+        "mail", "kep", "ek", "sayfa", "saat", "madde", "tl", "eur", "usd", "adet",
+    })
+    _SN_CLAUSE_STOP_WORDS = frozenset({
+        "adresinde", "adresine", "adresinden", "adresini", "adresleri", "ikamet", "oturur",
+        "oturduğu", "olup", "olduğu", "olması", "olduğundan", "bulunduğu", "bulunan",
+        "yaşamadığı", "yaşadığı", "denilerek", "gereğince", "nedeniyle", "sebebiyle",
+        "hakkında", "üzerine", "tarafından", "madde", "maddesi", "maddeleri", "kanun",
+        "hüküm", "hükümleri", "saklı", "muhtarlık", "muhtarlığı", "muhtarlığından",
+        "alınan", "aldığı", "gönderilen", "tarihli", "sayılı", "mahkememiz", "mahkememizin",
+        "mahkemesine", "mahkemesi", "dosyası", "anne", "baba", "doğum", "nüfus", "tc",
+        "tckn", "tel", "telefon", "gsm", "cep", "faks", "mail", "kep", "vekil", "vekili",
+        "müdafi", "müdafii", "baro", "meslek", "suçun", "aranmıyor", "beyan", "tescil",
+        "taşınma", "hmk", "tmk", "tbk", "iik", "tck", "cmk",
+    })
+    _SN_ADDR_KEEP_LOWER = frozenset({"ve", "ile", "mah", "mh", "sk", "sok", "cad", "cd", "blv", "bulv", "apt", "no", "nu", "d", "k", "iç"})
+    _SN_LINK_DEST_RE = re.compile(r'\]\((?:<[^>\n]*>|[^)\n]*)\)')
+    _SN_TAIL_SLASH_RE = re.compile(
+        r'^(?:[ \t]*[,-])?[ \t]*(?:[A-ZÇĞİÖŞÜ][a-zçğıöşü]+[ \t]+)?'
+        r'[A-ZÇĞİÖŞÜa-zçğıöşü]{2,25}[ \t]*/[ \t]*[A-ZÇĞİÖŞÜa-zçğıöşü]{2,25}(?![A-Za-zÇĞİÖŞÜçğıöşü])'
+    )
+    _SN_TAIL_SPACE_RE = re.compile(
+        r'^(?:[ \t]*[,-])?[ \t]*[A-ZÇĞİÖŞÜ][a-zçğıöşü]{2,20}[ \t]+[A-ZÇĞİÖŞÜ]{3,20}(?![A-Za-zÇĞİÖŞÜçğıöşü])'
+    )
+    _SN_TAIL_CITY_RE = re.compile(
+        r'^(?:[ \t]*[,-])?[ \t]*(?P<city>[A-ZÇĞİÖŞÜ][a-zçğıöşü]{2,20}|[A-ZÇĞİÖŞÜ]{3,20})'
+        r'(?=[ \t]+(?:adres\w*|ikamet|oturur|olup|olduğu|olması)\b|[ \t]*(?:["”\)\.,;\-:]|\r?\n|$))'
+    )
+    _SN_NEXTLINE_TAIL_RE = re.compile(
+        r'^[ \t]*\r?\n[ \t]*(?:(?:K|Kat|D|Daire|Blok|İç[ \t]*Kap[ıi](?:[ \t]*No)?)[ \t:.]*[0-9A-Za-z]{1,4}[ \t]+)*'
+        r'(?:[A-ZÇĞİÖŞÜ][a-zçğıöşü]+[ \t]+)?[A-ZÇĞİÖŞÜa-zçğıöşü]{2,25}[ \t]*/[ \t]*[A-ZÇĞİÖŞÜa-zçğıöşü]{2,25}'
+        r'(?=[ \t]+(?:adres\w*|ikamet|oturur|olup|olduğu|olması)\b|[ \t]*(?:["”\)\.,;]|\r?\n|$))'
+    )
+
+    @classmethod
+    def _sn_is_stop_word(cls, tok: str) -> bool:
+        low = _tr_lower(tok.strip(".,;:!?\"'“”()[]"))
+        return low in cls._SN_CLAUSE_STOP_WORDS or low in cls._SN_CTX_WORDS
+
+    @classmethod
+    def _sn_expand_start(cls, text: str, ls: int, anchor_pos: int, min_pos: int) -> int:
+        """(A) belirtecinden önceki en çok 2 yer adı sözcüğünü aralığa alır; bağlam sözcükleri ve
+        noktalama/tırnak/parantez açılışında durur. Satır başında 0 sözcük varsa önceki satır sonuna
+        düşen tek sözcüklü yer adını da bağlar."""
+        pos = anchor_pos
+        words = 0
+        stop_chars = set('":;|/“”()[]*#\r\n!?')
+        while words < 2 and pos > min_pos:
+            j = pos
+            while j > min_pos and text[j - 1] in " \t":
+                j -= 1
+            if j <= min_pos or text[j - 1] in stop_chars or text[j - 1] == ",":
+                break
+            if j > min_pos and text[j - 1] == "-":
+                # "ALİ VELİ - Deneme Mah." gibi ayırıcı tirede dur; bitişik "A-1" içinde devam et
+                if j - 2 >= min_pos and text[j - 2] in " \t":
+                    break
+            k = j
+            while k > min_pos and text[k - 1] not in " \t" and text[k - 1] not in stop_chars and text[k - 1] != ",":
+                k -= 1
+            tok = text[k:j]
+            if not tok:
+                break
+            # Sözcük sonu nokta yalnızca "5." / "123." gibi cadde/sokak numarasıysa adrese dahildir
+            if tok.endswith(".") and not tok[:-1].isdigit():
+                break
+            if re.fullmatch(r'\d{1,2}[./]\d{1,2}[./]\d{2,4}', tok):
+                break
+            low = _tr_lower(tok.rstrip(".,"))
+            if low in cls._SN_CTX_WORDS or low in cls._SN_CLAUSE_STOP_WORDS:
+                break
+            pos = k
+            words += 1
+
+        # Satır başında (önünde hiç sözcük yoksa) önceki satır sonuna taşan tek sözcüklü yer adı
+        if words == 0 and re.fullmatch(r'[ \t#*]*', text[ls:anchor_pos]) and ls > 0:
+            prev_end = ls - 1
+            if prev_end > 0 and text[prev_end - 1] == "\r":
+                prev_end -= 1
+            prev_ls = text.rfind("\n", 0, prev_end) + 1
+            prev_line = text[prev_ls:prev_end]
+            m = re.search(r'(?P<pre>.*?)(?P<w>[A-ZÇĞİÖŞÜ][A-Za-zÇĞİÖŞÜçğıöşü]+)[ \t]*$', prev_line)
+            if m:
+                w = m.group("w")
+                low_w = _tr_lower(w)
+                if low_w not in cls._SN_CTX_WORDS and low_w not in cls._SN_CLAUSE_STOP_WORDS:
+                    # Önceki sözcük de büyük harfli bağlam-dışı sözcükse ("ALİ VELİ\n...") kişi adıdır
+                    pre_m = re.search(r'([A-Za-zÇĞİÖŞÜçğıöşü]+)[ \t]*$', m.group("pre"))
+                    if not (pre_m and pre_m.group(1)[0].isupper() and _tr_lower(pre_m.group(1)) not in cls._SN_CTX_WORDS):
+                        return prev_ls + m.start("w")
+        return pos
+
+    @classmethod
+    def _sn_extend_tail(cls, text: str, pos: int, le: int) -> int:
+        """(B) sonrasında en çok D:/K:/Daire/Kat/İç Kapı No + İlçe/İL ve varsa satır sonu devamını alır."""
+        cur = pos
+        # Ek daire/kat/blok parçaları
+        extra_re = re.compile(
+            r'(?i)^(?:[ \t]*[,/]?[ \t]*(?:'
+            r'(?:[İiIıl]ç[ \t]*Kap[ıi](?:[ \t]*No)?|Kap[ıi][ \t]*No|Daire|Kat|Blok)[ \t]*[:.]?[ \t]*[0-9A-Za-z]{1,4}'
+            r'|[DK][ \t]*[:.][ \t]*[0-9A-Za-z]{1,4}'
+            r')(?:[ \t]*/[ \t]*[0-9A-Za-z]+)?)+'
+        )
+        m_ext = extra_re.match(text[cur:le])
+        if m_ext:
+            cur += m_ext.end()
+
+        seg = text[cur:le]
+        m_tail = cls._SN_TAIL_SLASH_RE.match(seg) or cls._SN_TAIL_SPACE_RE.match(seg)
+        if m_tail:
+            # Yakalanan kelimeler durak sözcüğü değilse ekle
+            tail_words = re.findall(r'[A-Za-zÇĞİÖŞÜçğıöşü]+', m_tail.group(0))
+            if tail_words and not any(_tr_lower(w) in cls._SN_CLAUSE_STOP_WORDS or _tr_lower(w) in cls._SN_CTX_WORDS for w in tail_words):
+                cur += m_tail.end()
+        else:
+            m_city = cls._SN_TAIL_CITY_RE.match(seg)
+            if m_city:
+                c_low = _tr_lower(m_city.group("city"))
+                if c_low not in cls._SN_CLAUSE_STOP_WORDS and c_low not in cls._SN_CTX_WORDS:
+                    cur += m_city.end()
+
+        # Satır sonu devamı ("Burdur\nMerkez/ BURDUR")
+        m_nl = cls._SN_NEXTLINE_TAIL_RE.match(text[cur:])
+        if m_nl and not re.search(cls.MASK_ANY_RE, m_nl.group(0)):
+            cur += m_nl.end()
+        return cur
+
+    @classmethod
+    def _sn_scan_forward(cls, text: str, anchor_start: int, anchor_end: int, le: int, anchor_is_num: bool) -> Optional[int]:
+        """Çapadan satır sonuna dek tarar; (A)+(B) çifti oluşursa güvenli bitiş konumunu döndürür."""
+        saw_num = anchor_is_num
+        saw_loc = not anchor_is_num
+        last_addr_end = anchor_end
+        cur = anchor_end
+        paren_depth = 0
+        lower_run = 0
+        hard_stops = set('"\u201d;!?[\r\n')
+
+        while cur < le:
+            ch = text[cur]
+            if ch in hard_stops:
+                break
+            if ch == "|" and not text.startswith("|¢", cur):
+                break
+            if ch == "(":
+                paren_depth += 1
+                if paren_depth > 1:
+                    return None
+                cur += 1
+                continue
+            if ch == ")":
+                if paren_depth == 0:
+                    break
+                paren_depth -= 1
+                cur += 1
+                continue
+            if ch in " \t":
+                cur += 1
+                continue
+            if ch == ":":
+                # Bir adres belirteci hemen ":" ile bitiyorsa ("Apartmanı: ...") çapa etikettir
+                if not saw_num:
+                    return None
+                break
+            if ch == ",":
+                rest_after = text[cur + 1:le].lstrip(" \t")
+                if not rest_after:
+                    break
+                first_w_m = re.match(r'[A-Za-zÇĞİÖŞÜçğıöşü]+', rest_after)
+                if first_w_m:
+                    fw = first_w_m.group(0)
+                    if _tr_lower(fw) in cls._SN_CLAUSE_STOP_WORDS or _tr_lower(fw) in cls._SN_CTX_WORDS:
+                        break
+                    if fw[0].islower() and not (cls._SN_LOC_RE.match(rest_after) or cls._SN_NUM_RE.match(rest_after)):
+                        break
+                # Virgülden sonra yeni bir (A)/(B) bileşeni yoksa ve saw_num zaten True ise kuyruk kontrolüne geç
+                if saw_num and saw_loc:
+                    ahead = rest_after[:80]
+                    has_more_struct = bool(cls._SN_LOC_RE.search(ahead) or cls._SN_NUM_RE.search(ahead))
+                    if not has_more_struct:
+                        break
+                cur += 1
+                continue
+
+            # Önce (B) veya (A) eşleşmesi kontrolü
+            m_num = cls._SN_NUM_RE.match(text, cur, le)
+            if m_num and not cls._SN_NON_DOOR_PRE_RE.search(text[anchor_start:cur]):
+                saw_num = True
+                cur = m_num.end()
+                last_addr_end = cur
+                lower_run = 0
+                continue
+
+            m_loc = cls._SN_LOC_RE.match(text, cur, le)
+            if m_loc:
+                # "Apartmanı:" gibi etiket başlığıysa dur
+                if cur > anchor_start and text[m_loc.end():m_loc.end() + 1] == ":":
+                    break
+                saw_loc = True
+                cur = m_loc.end()
+                last_addr_end = cur
+                lower_run = 0
+                continue
+
+            # Zaten hem (A) hem (B) görüldüyse: devamında bir (A)/(B) daha yoksa kuyruk uzantısında kes
+            if saw_num and saw_loc and paren_depth == 0:
+                rest_seg = text[cur:le]
+                # Küçük bir ek bileşen veya sonraki (A)/(B) varsa en çok 40 karakter içinde ara
+                m_tail_cand = cls._SN_TAIL_SLASH_RE.match(rest_seg) or cls._SN_TAIL_SPACE_RE.match(rest_seg) or cls._SN_TAIL_CITY_RE.match(rest_seg)
+                if m_tail_cand:
+                    break
+                ahead_chunk = rest_seg.split(",", 1)[0]
+                if not (len(ahead_chunk) <= 45 and (cls._SN_LOC_RE.search(ahead_chunk) or cls._SN_NUM_RE.search(ahead_chunk))):
+                    break
+
+            # Normal sözcük / noktalama adımı
+            m_tok = re.match(r'[^\s,;:"\u201d!?()\[\]|]+', text[cur:le])
+            if not m_tok:
+                cur += 1
+                continue
+            tok = m_tok.group(0)
+            low_tok = _tr_lower(tok.rstrip("."))
+            if paren_depth == 0 and (low_tok in cls._SN_CLAUSE_STOP_WORDS):
+                break
+            if tok.endswith(".") and not tok[:-1].isdigit():
+                if low_tok not in cls._SN_ADDR_KEEP_LOWER:
+                    # Cümle sonu noktası
+                    break
+            if re.fullmatch(r'[a-zçğıöşü]+', tok) and low_tok not in cls._SN_ADDR_KEEP_LOWER:
+                lower_run += 1
+                if not (saw_num and saw_loc) and lower_run >= 3:
+                    return None
+            else:
+                lower_run = 0
+            if not (saw_num and saw_loc) and (cur - anchor_start) > 120:
+                return None
+            cur += len(tok)
+
+        if not (saw_num and saw_loc):
+            return None
+        return cls._sn_extend_tail(text, last_addr_end, le)
+
+    @classmethod
+    def redact_address_safety_net(cls, text: str, registry: Optional[MaskRegistry] = None) -> Tuple[str, int]:
+        """
+        Katman 7z (Son güvenlik ağı): Önceki adres katmanlarından sızan, yapısal olarak açık adrese
+        benzeyen (yerleşim/yol belirteci + kapı/konum numarası içeren) parçaları ve mevcut [ADRES_n]
+        etiketlerinin hemen önündeki/ardındaki açık yer adı artıklarını maskeler.
+        Kurum, olay yeri, HTS/koordinat, nüfus kayıt şablonu ve kaza lejantına dokunmaz.
+        """
+        if not text:
+            return text, 0
+        count = 0
+
+        # 1. Mevcut [ADRES_...] etiketlerinin hemen arkasındaki "/ İL" veya satır-sonu "İlçe/İL" artığı
+        non_city = {"tel", "gsm", "cep", "faks", "tc", "tckn", "iban", "tarih", "saat",
+                    "esas", "karar", "madde", "tl", "eur", "usd", "adet", "no", "sayfa", "ek", "ve", "veya"}
+        after_slash_re = re.compile(
+            r'(?P<lab>' + cls.MASK_ADRES_RE + r')[ \t]*/[ \t]*(?P<city>[A-ZÇĞİÖŞÜ][A-Za-zÇĞİÖŞÜçğıöşü]{1,24})'
+            r'(?![A-Za-zÇĞİÖŞÜçğıöşü]|[ \t]*:)'
+        )
+
+        def repl_after_slash(m: re.Match) -> str:
+            nonlocal count
+            if _tr_lower(m.group("city")) in non_city:
+                return m.group(0)
+            count += 1
+            return m.group("lab")
+
+        text = after_slash_re.sub(repl_after_slash, text)
+
+        after_nl_re = re.compile(
+            r'(?P<lab>' + cls.MASK_ADRES_RE + r')[ \t]*\r?\n[ \t]*'
+            r'(?:(?:K|Kat|D|Daire|Blok|İç[ \t]*Kap[ıi](?:[ \t]*No)?)[ \t:.]*[0-9A-Za-z]{1,4}[ \t]+)*'
+            r'(?:[A-ZÇĞİÖŞÜ][a-zçğıöşü]+[ \t]+)?[A-ZÇĞİÖŞÜa-zçğıöşü]{2,25}[ \t]*/[ \t]*[A-ZÇĞİÖŞÜa-zçğıöşü]{2,25}'
+            r'(?=[ \t]+(?:adres\w*|ikamet|oturur|olup|olduğu|olması)\b|[ \t]*(?:["”\)\.,;]|\r?\n|$))'
+        )
+
+        def repl_after_nl(m: re.Match) -> str:
+            nonlocal count
+            if re.search(cls.MASK_ANY_RE, m.group(0)[len(m.group("lab")):]):
+                return m.group(0)
+            count += 1
+            return m.group("lab")
+
+        text = after_nl_re.sub(repl_after_nl, text)
+
+        # 2. Mevcut [ADRES_...] etiketinin hemen önündeki tek büyük-harf başlangıçlı yer adı ("Taşoluk [ADRES_3]")
+        pre_place_re = re.compile(
+            r'(?P<word>(?:[A-ZÇĞİÖŞÜ][a-zçğıöşü]+|[A-ZÇĞİÖŞÜ]{3,}))[ \t]+(?P<lab>' + cls.MASK_ADRES_RE + r')'
+        )
+
+        def repl_pre_place(m: re.Match) -> str:
+            nonlocal count
+            word = m.group("word")
+            if _tr_lower(word) in cls._SN_CTX_WORDS or _tr_lower(word) in cls._SN_CLAUSE_STOP_WORDS:
+                return m.group(0)
+            ls = text.rfind("\n", 0, m.start("word")) + 1
+            before = text[ls:m.start("word")]
+            prev_m = re.search(r'([A-Za-zÇĞİÖŞÜçğıöşü]+)[ \t]+$', before)
+            if prev_m:
+                pw = prev_m.group(1)
+                if pw[0].isupper() and _tr_lower(pw) not in cls._SN_CTX_WORDS and _tr_lower(pw) not in cls._SN_CLAUSE_STOP_WORDS:
+                    return m.group(0)
+            count += 1
+            return m.group("lab")
+
+        text = pre_place_re.sub(repl_pre_place, text)
+
+        # 3. Yapısal (A)+(B) güvenlik ağı geçişi
+        protected_spans = [(m.start(), m.end()) for m in re.finditer(cls.MASK_ANY_RE, text)]
+        protected_spans.extend((m.start(), m.end()) for m in cls._SN_LINK_DEST_RE.finditer(text))
+
+        def _in_protected(s: int, e: int) -> bool:
+            return any(s < pe and e > ps for ps, pe in protected_spans)
+
+        replacements: List[Tuple[int, int, str]] = []
+        pos = 0
+        n = len(text)
+        last_claimed_end = 0
+
+        while pos < n:
+            le = text.find("\n", pos)
+            if le == -1:
+                le = n
+            line_end = le - 1 if (le > pos and text[le - 1] == "\r") else le
+            line = text[pos:line_end]
+
+            if cls._SN_LOC_RE.search(line) and cls._SN_NUM_RE.search(line):
+                anchors: List[Tuple[int, int, bool]] = []
+                for m in cls._SN_LOC_RE.finditer(line):
+                    s, e = pos + m.start(), pos + m.end()
+                    if not _in_protected(s, e):
+                        anchors.append((s, e, False))
+                for m in cls._SN_NUM_RE.finditer(line):
+                    s, e = pos + m.start(), pos + m.end()
+                    if not _in_protected(s, e) and not cls._SN_NON_DOOR_PRE_RE.search(text[pos:s]):
+                        anchors.append((s, e, True))
+                anchors.sort(key=lambda x: x[0])
+
+                cursor = max(pos, last_claimed_end)
+                for a_s, a_e, is_num in anchors:
+                    if a_s < cursor:
+                        continue
+                    cand_end = cls._sn_scan_forward(text, a_s, a_e, line_end, is_num)
+                    if cand_end is None:
+                        continue
+                    cand_start = cls._sn_expand_start(text, pos, a_s, cursor)
+                    cand = text[cand_start:cand_end].strip()
+                    if not cand or _in_protected(cand_start, cand_end) or re.search(cls.MASK_ANY_RE, cand):
+                        continue
+                    # Nüfus kayıt şablonu aralık içindeyse veya satırda şablon olup kapı numarası yoksa koru
+                    if cls._SN_NUFUS_SPAN_RE.search(cand):
+                        continue
+                    if cls._SN_NUFUS_SPAN_RE.search(line) and not cls._SN_EXPLICIT_DOOR_RE.search(cand):
+                        continue
+                    if cls._skip_address(text, cand_start, cand_end, cand):
+                        continue
+                    replacements.append((cand_start, cand_end, cls._mask("adres", cand, registry)))
+                    count += 1
+                    cursor = cand_end
+                    last_claimed_end = max(last_claimed_end, cand_end)
+
+            pos = le + 1
+
+        if replacements:
+            out_parts: List[str] = []
+            prev_i = 0
+            for rs, re_end, lab in replacements:
+                if rs < prev_i:
+                    continue
+                out_parts.append(text[prev_i:rs])
+                out_parts.append(lab)
+                prev_i = re_end
+            out_parts.append(text[prev_i:])
+            text = "".join(out_parts)
 
         return text, count
 

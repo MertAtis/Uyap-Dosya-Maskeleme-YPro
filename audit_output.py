@@ -29,12 +29,12 @@ from collections import Counter, defaultdict
 from typing import Dict, List, Optional, Tuple
 
 try:
-    from uyap_redactor import UyapRedactor
+    from uyap_redactor import UyapRedactor, _tr_lower
 except ImportError:
     _script_dir = os.path.dirname(os.path.abspath(__file__))
     if _script_dir not in sys.path:
         sys.path.insert(0, _script_dir)
-    from uyap_redactor import UyapRedactor
+    from uyap_redactor import UyapRedactor, _tr_lower
 
 TEXT_EXTS = (".md", ".txt", ".json")
 REPORT_NAME = "DAVA_DÖNÜŞÜM_VE_GÜVENLİK_RAPORU.md"
@@ -283,16 +283,30 @@ PHONE_RE = re.compile(
     r'(?<![\d])(?:(?:\+\s?90|0090)[\s.\-]?)?(?:\(0\)|0)?[\s.\-]?\(?5[0-69]\d\)?[\s.\-]?\d{3}[\s.\-]?\d{2}[\s.\-]?\d{2}(?![\d])'
 )
 
-ADDR_TOKENS = {
-    "mah": re.compile(r'(?i)\b(?:Mah\.|Mh\.|Mahallesi|Mahalle(?:si)?)(?![A-Za-zçğıöşü])'),
-    "sk": re.compile(r'(?i)\b(?:Sk\.|Sok\.|Sokak|Sokağ[ıi])(?![A-Za-zçğıöşü])'),
-    "cad": re.compile(r'(?i)\b(?:Cad\.|Cd\.|Caddesi|Cadde)(?![A-Za-zçğıöşü])'),
-    "bulvar": re.compile(r'(?i)\bBulvar[ıi]'),
-    "no": re.compile(r'(?i)\bNo\s*[:.]?\s*\d|\bN\s*[:.]\s*\d'),
-    "kapi": re.compile(r'(?i)Kap[ıi]\s*No'),
-    "d": re.compile(r'(?<![A-Za-zÇĞİÖŞÜçğıöşü])D\s*[:.]\s*\d'),
-    "k": re.compile(r'(?<![A-Za-zÇĞİÖŞÜçğıöşü])K\s*[:.]\s*\d'),
+ADDR_LOC_TOKENS = {
+    "mah": re.compile(r'(?i)(?<![A-Za-zÇĞİÖŞÜçğıöşü])(?:Mahalle(?:s[iİıI])?|Mah\.?|Mh\.?)(?![A-Za-zÇĞİÖŞÜçğıöşü])'),
+    "sk": re.compile(r'(?i)(?<![A-Za-zÇĞİÖŞÜçğıöşü])(?:Sokak|Sokağ[ıiIİ]|Sok\.?|Sk\.?|5k\.?)(?![A-Za-zÇĞİÖŞÜçğıöşü])'),
+    "cad": re.compile(r'(?i)(?<![A-Za-zÇĞİÖŞÜçğıöşü])(?:Cadde(?:s[iİıI])?|Cad\.?|Cd\.?)(?![A-Za-zÇĞİÖŞÜçğıöşü])'),
+    "bulvar": re.compile(r'(?i)(?<![A-Za-zÇĞİÖŞÜçğıöşü])(?:Bulvar[ıiIİ]?|Bulv\.?|Blv\.?)(?![A-Za-zÇĞİÖŞÜçğıöşü])'),
+    "koy": re.compile(r'(?i)(?<![A-Za-zÇĞİÖŞÜçğıöşü])Köy(?:[üÜ])?(?![A-Za-zÇĞİÖŞÜçğıöşü])'),
+    "mevki": re.compile(r'(?i)(?<![A-Za-zÇĞİÖŞÜçğıöşü])(?:Mevk[iİıI]{1,2}|Mezra(?:s[ıiIİ])?)(?![A-Za-zÇĞİÖŞÜçğıöşü])'),
+    "site": re.compile(
+        r'(?i)(?<![A-Za-zÇĞİÖŞÜçğıöşü])(?:S[iİıI]tes[iİıI]|Apartman[ıiIİ]?|Apt\.?|Blok|'
+        r'Küme[ \t]+Evler[iİıI]|Tok[iİıI][ \t]+Evler[iİıI])(?![A-Za-zÇĞİÖŞÜçğıöşü])'
+    ),
 }
+ADDR_NUM_TOKENS = {
+    "no": re.compile(
+        r'(?i)(?<![A-Za-zÇĞİÖŞÜçğıöşü])(?:(?:No|Nu|Numara)[ \t]*[:.]?[ \t]*\d|N[ \t]*[:.][ \t]*\d)'
+    ),
+    "kapi": re.compile(r'(?i)(?<![A-Za-zÇĞİÖŞÜçğıöşü])(?:[İiIıl]ç[ \t]*)?Kap[ıiIİ](?:[ \t]*No)?[ \t]*[:.]?[ \t]*\d'),
+    "dk": re.compile(r'(?i)(?<![A-Za-zÇĞİÖŞÜçğıöşü])(?:(?:Daire|Kat)[ \t]*[:.]?[ \t]*\d|[DK][ \t]*[:.][ \t]*\d)'),
+    "slash": re.compile(
+        r'(?<![\d/])\d{1,4}[ \t]*/[ \t]*\d{1,3}(?![\d/])'
+        r'(?![ \t]*(?:E\b|E\.|Esas|K\.|Karar|say[ıiIİ]l[ıiIİ]\b|oran\w*|hisse\w*|pay\w*))'
+    ),
+}
+ADDR_TOKENS = {**ADDR_LOC_TOKENS, **ADDR_NUM_TOKENS}
 INSTITUTION_RE = re.compile(
     r'(?i)Bankas[ıi]|Banka\b|Genel\s+Müdürlü|Müdürlü|Adliye|Mahkeme|Noter|Baro|Başkanlığ|'
     r'Başsavcılı|Savcılığ|PTT|Belediye|A\.?\s?Ş\.?|Ltd|Şirket|Şube|Valili|Kaymakaml|Bakanlı|'
@@ -303,15 +317,30 @@ INSTITUTION_RE = re.compile(
 )
 
 LINK_RE = re.compile(r'!?\[([^\]\n]*)\]\((?:<[^>\n]+>|[^)\n]+)\)')
-# "evrak no 4521", "dosya no: 12" gibi belge numarası ifadeleri adres kapı numarası değildir
+# "evrak no 4521", "dosya no: 12", "cilt no: 3" gibi belge/kayıt numarası ifadeleri kapı numarası değildir
 DOC_NO_RE = re.compile(
-    r'(?i)\b(?:evrak|dosya|esas|karar|say[ıi]|dava|belge|protokol|takip|talimat|soruşturma|hazırlık|poliçe|acente)\s+no\b'
+    r'(?i)\b(?:evrak|dosya|esas|karar|say[ıi]|dava|belge|protokol|takip|talimat|soruşturma|hazırlık|'
+    r'poliçe|acente|cilt|aile\s*s[ıi]ra|birey\s*s[ıi]ra|s[ıi]ra|hane|sicil|vergi|kimlik|pasaport|'
+    r'ruhsat|plaka|fatura|makbuz|yevmiye|tutanak|rapor|sayfa|madde)\s+no(?:\s*[:.]?\s*\d+)?\b'
 )
 
 
-PERSON_CUE_RE = re.compile(r'(?i)MERN[İI]S|\badresini\b|yükümlü|\bikamet|\boturur|\bisimli\b')
+PERSON_CUE_RE = re.compile(
+    r'(?i)MERN[İI]S|\badresini(?:n)?\b|yükümlü|\bikamet|\boturur|\bisimli\b|'
+    r'\bküçü(?:k|ğün)\b|\bdaval[ıi]\b|\bdavac[ıi]\b|\bsan[ıi]k\b|\bşüpheli\b|'
+    r'\bmüşteki\b|\bmağdur\b|\btan[ıi]k\b|\bborçlu\b|\balacakl[ıi]\b|'
+    r'\bk[ıi]s[ıi]tl[ıi]\b|\bvasi(?:si)?\b|\bkayy[ıi]m\b'
+)
 
 TEMPLATE_ADDR_RE = re.compile(r'(?i)\(?\s*caddesi\s*/\s*sokağı\s*\)?')
+NUFUS_TEMPLATE_RE = re.compile(
+    r'(?i)\bcilt\b|aile\s*s[ıi]ra|\bnk\.?\s*lu\b|\bBSN\b|mah\.?\s*/\s*köy|köy\s*/\s*mahalles[iİıI]|nüfus(?:a|unda)\s+kay[ıi]tl[ıi]'
+)
+COURT_ESAS_RE = re.compile(
+    r'(?i)(?:Hukuk|Ceza|İcra|Asliye|Sulh|Aile|Tüketici|Ticaret|İdare|Vergi)\s+Mah\.?(?=\s|$)|'
+    r'\b(?:19|20)\d{2}\s*/\s*\d+\s*(?:E\b|E\.|Esas|K\.|Karar)'
+)
+ADDR_PREFIX_RE = re.compile(r'([A-ZÇĞİÖŞÜ][a-zçğıöşü]+|[A-ZÇĞİÖŞÜ]{3,})([ \t]*\r?\n[ \t]*|[ \t]+)\[ADRES_\d+\]')
 
 OLAY_RE = re.compile(
     r'(?i)suçun\s+yeri|olay\s+yeri|kaza\s+yeri|meydana\s+gel|\bönünde\b|kavşağ|sıralarında|'
@@ -347,6 +376,47 @@ def _company_block_above(lines: List[str], i: int, max_up: int = 6) -> bool:
 
 def address_type_count(line: str) -> int:
     return sum(1 for r in ADDR_TOKENS.values() if r.search(line))
+
+
+def _is_nufus_or_court_line(line: str) -> bool:
+    """Nüfus kayıt şablonu veya mahkeme/esas kısaltması satırı mı? (İkamet adresi satırı hariç)."""
+    if UyapRedactor._ADDR_FORM_LEGEND_RE.match(line) and not ADDR_NUM_TOKENS["no"].search(line):
+        return True
+    if COURT_ESAS_RE.search(line) and not any(ADDR_LOC_TOKENS[k].search(line) for k in ("sk", "cad", "bulvar", "koy", "mevki", "site")):
+        return True
+    if NUFUS_TEMPLATE_RE.search(line):
+        # "nüfusa kayıtlı X Köyü X Küme Evleri No: 128 ... ikamet eder" gibi gerçek ikamet adresi hariç
+        has_strong_nufus = bool(re.search(r'(?i)\bcilt\b|aile\s*s[ıi]ra|\bnk\.?\s*lu\b|\bBSN\b|mah\.?\s*/\s*köy|köy\s*/\s*mahalles[iİıI]', line))
+        has_explicit_door = bool(ADDR_NUM_TOKENS["no"].search(line) or ADDR_NUM_TOKENS["kapi"].search(line) or ADDR_NUM_TOKENS["dk"].search(line))
+        if has_strong_nufus or not has_explicit_door:
+            return True
+    return False
+
+
+def _classify_address_line(lines: List[str], i: int, scan_line: str) -> str:
+    """Eşleşen adres satırını redaktörle tutarlı biçimde 'olay', 'kurum' veya 'kisi' sayar."""
+    if len(scan_line) > 200:
+        m_loc = next((m for r in ADDR_LOC_TOKENS.values() for m in [r.search(scan_line)] if m), None)
+        if m_loc:
+            win = scan_line[max(0, m_loc.start() - 80):min(len(scan_line), m_loc.end() + 80)]
+            if OLAY_RE.search(win):
+                return "olay"
+            if PERSON_CUE_RE.search(win):
+                return "kisi"
+            if INSTITUTION_RE.search(win):
+                return "kurum"
+    prev2 = [lines[j] for j in range(i - 1, max(-1, i - 5), -1) if lines[j].strip()][:2]
+    next_line = next((lines[j] for j in range(i + 1, min(len(lines), i + 3)) if lines[j].strip()), "")
+    near = "\n".join(prev2 + [next_line])
+    if OLAY_RE.search(scan_line) or (not PERSON_CUE_RE.search(scan_line) and OLAY_RE.search("\n".join(lines[max(0, i - 1): i]))):
+        return "olay"
+    if PERSON_CUE_RE.search(scan_line):
+        return "kisi"
+    if INSTITUTION_RE.search(scan_line) or INSTITUTION_RE.search(near):
+        return "kurum"
+    if _company_block_above(lines, i):
+        return "kurum"
+    return "kisi"
 
 
 def scan_leaks(rel: str, text: str, known_tckns, known_ibans, out: Dict, check_addr: bool = True):
@@ -385,31 +455,38 @@ def scan_leaks(rel: str, text: str, known_tckns, known_ibans, out: Dict, check_a
     if not check_addr or os.path.basename(rel) == REPORT_NAME:
         return  # aracın kendi raporu veya dosya yolu için adres taraması yapılmaz
     for i, line in enumerate(lines):
-        if MASK_RE.search(line):
-            continue
+        # Satırda başka maske etiketi varsa bile maskesiz kalmış adres parçası taranır
+        scan_line = MASK_RE.sub(" ", line)
         # Dilekçe formu şablon ifadesi "(caddesi / sokağı)" adres değildir
-        line = TEMPLATE_ADDR_RE.sub(" ", line)
+        scan_line = TEMPLATE_ADDR_RE.sub(" ", scan_line)
         # Markdown bağlantıları (yol/dosya adı) ve belge-numarası ifadeleri adres belirteci sayılmaz
-        line = DOC_NO_RE.sub(" ", LINK_RE.sub(lambda m: m.group(1), line))
-        if address_type_count(line) >= 2:
-            prev2 = [lines[j] for j in range(i - 1, max(-1, i - 5), -1) if lines[j].strip()][:2]
-            next_line = next((lines[j] for j in range(i + 1, min(len(lines), i + 3)) if lines[j].strip()), "")
-            near = "\n".join(prev2 + [next_line])
-            if OLAY_RE.search(line) or (not PERSON_CUE_RE.search(line) and OLAY_RE.search("\n".join(lines[max(0, i - 1): i]))):
-                kind = "olay"
-            elif PERSON_CUE_RE.search(line):
-                # MERNİS / "adresini ..." / yükümlü / ikamet: kişi adresi (aynı satırda kurum adı geçse de)
-                kind = "kisi"
-            elif INSTITUTION_RE.search(line) or INSTITUTION_RE.search(near):
-                # Kurum adı aynı satırda, önceki 2 dolu satırda ya da sonraki dolu satırda aranır (kurum adı
-                # adresten önce/sonra alt satıra taşabilir); daha uzak bağlam (belge başlığı vb.) yetmez.
-                kind = "kurum"
-            elif _company_block_above(lines, i):
-                # Şirket adı ile adres arasında yalnız künye satırları (VKN/MERSİS/ticaret sicil/tel/KEP)
-                kind = "kurum"
-            else:
-                kind = "kisi"
-            out["addr_" + kind].append((rel, i + 1, lines[i].strip()))
+        scan_line = DOC_NO_RE.sub(" ", LINK_RE.sub(lambda m: m.group(1), scan_line))
+        if _is_nufus_or_court_line(scan_line):
+            continue
+        has_loc = any(r.search(scan_line) for r in ADDR_LOC_TOKENS.values())
+        has_num = any(r.search(scan_line) for r in ADDR_NUM_TOKENS.values())
+        kind = _classify_address_line(lines, i, scan_line)
+        if not (has_loc and has_num):
+            # Kurum/olay bağlamındaki iki yer/yol belirteçli satır ("PAPATYA MAH. ZAMBAK CAD.", "Ns:12 Test Mah. ... Cad.")
+            loc_cnt = sum(1 for r in ADDR_LOC_TOKENS.values() if r.search(scan_line))
+            if not (loc_cnt >= 2 and kind in ("kurum", "olay")):
+                continue
+        out["addr_" + kind].append((rel, i + 1, lines[i].strip()))
+
+    # Maskesiz yer adı (etiket önünde): "Taşoluk [ADRES_3]" (bağlam sözcükleri ve kişi adı satırları hariç)
+    for m in ADDR_PREFIX_RE.finditer(text):
+        word = m.group(1)
+        if _tr_lower(word) in UyapRedactor._SN_CTX_WORDS or _tr_lower(word) in UyapRedactor._SN_CLAUSE_STOP_WORDS:
+            continue
+        ls = text.rfind("\n", 0, m.start(1)) + 1
+        before = text[ls:m.start(1)]
+        prev_m = re.search(r'([A-Za-zÇĞİÖŞÜçğıöşü]+)[ \t]+$', before)
+        if prev_m:
+            pw = prev_m.group(1)
+            if pw[0].isupper() and _tr_lower(pw) not in UyapRedactor._SN_CTX_WORDS and _tr_lower(pw) not in UyapRedactor._SN_CLAUSE_STOP_WORDS:
+                continue
+        lineno = text.count("\n", 0, m.start(1)) + 1
+        out["addr_prefix"].append((rel, lineno, m.group(0).strip()))
 
 
 MAPPING_RE = re.compile(
@@ -809,7 +886,7 @@ def summarize(res: Dict) -> Tuple[List[str], List[str], bool]:
     L = res["leaks"]
     out_lines, det = [], []
     leak = bool(L["tckn"] or L["tckn_known"] or L["iban"] or L["iban_known"] or L["iban_multiline"]
-                or L["phone"] or L["addr_kisi"])
+                or L["phone"] or L["addr_kisi"] or L["addr_prefix"])
 
     out_lines.append(f"Taranan dosya: {res['files_scanned']} (kaynağı bulunan: {res['files_with_source']})")
     out_lines.append("== A) SIZINTI ==")
@@ -817,7 +894,9 @@ def summarize(res: Dict) -> Tuple[List[str], List[str], bool]:
                       ("tckn_possible", "Olası bölünmüş/OCR TCKN"), ("iban", "Ham IBAN"),
                       ("iban_known", "Kaynak IBAN'ı çıktıda"), ("iban_multiline", "Satırlara bölünmüş IBAN"),
                       ("phone", "Maskesiz cep telefonu"),
-                      ("addr_kisi", "Maskesiz adres (kişi)"), ("addr_kurum", "Maskesiz adres (kurum)"),
+                      ("addr_kisi", "Maskesiz adres (kişi)"),
+                      ("addr_prefix", "Maskesiz yer adı (etiket önünde)"),
+                      ("addr_kurum", "Maskesiz adres (kurum)"),
                       ("addr_olay", "Maskesiz adres (olay yeri)")]:
         items = L[key]
         files = sorted({x[0] for x in items})

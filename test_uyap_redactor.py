@@ -2287,3 +2287,97 @@ class TestKoyAdresi(unittest.TestCase):
         self.assertEqual(self.R(t1), t1)
         t2 = "Örnekyayla Köyü muhtarlığından alınan yazıda"
         self.assertEqual(self.R(t2), t2)
+
+
+class TestAdresGuvenlikAgi(unittest.TestCase):
+    """Katman 7z (Son güvenlik ağı): yapısal adres kalıpları ve korunacak bağlamlar (uydurma veri)."""
+
+    def test_yapisal_adresler_maskelenir(self):
+        cases = [
+            ("Örnek Mah 12 Sk N:5 Merkez/ANKARA", ["Örnek", "ANKARA"], []),
+            (
+                "Deneme Köyü Deneme Küme Evleri No: 7 Burdur Merkez/ BURDUR adresinde oturur.",
+                ["Deneme", "Küme Evleri", "BURDUR"],
+                ["adresinde oturur."],
+            ),
+            (
+                'küçüğün "Gül Mahallesi Lale (Gül) Sokak No:6 Çine/AYDIN" olduğu, TMK 411. madde gereğince',
+                ["Gül Mahallesi", "Çine", "AYDIN"],
+                ['" olduğu, TMK 411. madde'],
+            ),
+            ("Çamlık Mevkii Kavak Sitesi B Blok D:4 Pamukkale/DENİZLİ", ["Çamlık", "Kavak", "DENİZLİ"], []),
+            ("Yeni Mahallesi 1234 Sokak 28/3 Efeler/AYDIN", ["Yeni", "28/3", "AYDIN"], []),
+            ("Kurtuluş Mh. Atatürk Cd. Nu:15 İzmir", ["Kurtuluş", "Atatürk", "İzmir"], []),
+            (
+                "doğumlu, Güneyyayla\nKöyü Güneyyayla Küme Evleri No: 128 Burdur\nMerkez/ BURDUR ikamet eder.",
+                ["Güneyyayla", "128", "BURDUR"],
+                ["doğumlu,", "ikamet eder."],
+            ),
+            (
+                "Apartmanı: Güneş Apt. Kat:3 Daire:7, Bahar Mah. 5. Sok.",
+                ["Güneş", "Daire:7", "Bahar"],
+                ["Apartmanı:"],
+            ),
+        ]
+        for raw, leaks, keeps in cases:
+            out, stats = UyapRedactor.redact_text(raw, registry=MaskRegistry())
+            self.assertGreaterEqual(stats["adres"], 1, raw)
+            self.assertIn("[ADRES_1]", out, raw)
+            for lk in leaks:
+                self.assertNotIn(lk, out, raw)
+            for kp in keeps:
+                self.assertIn(kp, out, raw)
+
+            # Güvenlik ağı tek başına da aynı yapısal adayları yakalamalı ve idempotent olmalı
+            direct_out, direct_cnt = UyapRedactor.redact_address_safety_net(raw, registry=MaskRegistry())
+            self.assertGreaterEqual(direct_cnt, 1, raw)
+            for lk in leaks:
+                self.assertNotIn(lk, direct_out, raw)
+            for kp in keeps:
+                self.assertIn(kp, direct_out, raw)
+            idem_out, idem_cnt = UyapRedactor.redact_address_safety_net(direct_out, registry=MaskRegistry())
+            self.assertEqual(idem_out, direct_out, raw)
+            self.assertEqual(idem_cnt, 0, raw)
+
+    def test_etiket_onunde_kalan_yer_adi_birlestirilir(self):
+        reg = MaskRegistry()
+        out, _ = UyapRedactor.redact_text("Taşoluk [ADRES_3] / AYDIN", registry=reg)
+        self.assertNotIn("Taşoluk", out)
+        self.assertNotIn("AYDIN", out)
+        self.assertIn("[ADRES_3]", out)
+        # Kişi adı satırı etiketle birleştirilmez
+        out_person, _ = UyapRedactor.redact_text("ALİ VELİ [ADRES_3]", registry=MaskRegistry())
+        self.assertIn("ALİ VELİ [ADRES_3]", out_person)
+
+    def test_korunacak_baglamlar_aynen_kalir(self):
+        preserved = [
+            "Burdur Adliyesi, Cumhuriyet Mah. 1234 Sok. No:1 Merkez/BURDUR",
+            "Örnek Bankası A.Ş. Genel Müdürlüğü Levent Mah. Büyükdere Cad. No:201 Şişli/İSTANBUL",
+            "Kaza, Atatürk Cad. No:45 önünde meydana gelmiştir.",
+            "KONYA ili, EMİRGAZİ ilçesi, IŞIKLAR köy/mahallesi, 32 cilt, 19 aile sıra no, 120 sıra no'da nüfusa kayıtlı",
+            "Konya, Emirgazi, Işıklar mah/köy nüfusunda kayıtlı.",
+            "YOLUN SINIFI\n4\n1 Cadde\n4 Devlet yolu\n2 Sokak",
+            "Burdur 3. Asliye Hukuk Mah. 2025/133 E.",
+            "HMK 107. madde gereğince 12/03/2024 tarihinde 5.000,00 TL ödenmiştir.",
+            "420037031084 - opr:Vodafone(LA41) - ÖRNEK MAH. FATIH CAD. NO:124 DENIZLI, 37.771667- 29.072219",
+            "Örnek Köyü muhtarlığından alınan yazıda",
+        ]
+        for text in preserved:
+            out, _ = UyapRedactor.redact_text(text, registry=MaskRegistry())
+            self.assertEqual(out, text, text)
+            direct_out, direct_cnt = UyapRedactor.redact_address_safety_net(text, registry=MaskRegistry())
+            self.assertEqual(direct_out, text, text)
+            self.assertEqual(direct_cnt, 0, text)
+
+    def test_guvenlik_agi_etiket_tutarliligi(self):
+        reg = MaskRegistry()
+        a, _ = UyapRedactor.redact_text("Çamlık Mevkii Kavak Sitesi B Blok D:4 Pamukkale/DENİZLİ", registry=reg)
+        b, _ = UyapRedactor.redact_text("Çamlık Mevkii Kavak Sitesi B Blok D:4 DENİZLİ", registry=reg)
+        self.assertEqual(a, "[ADRES_1]")
+        self.assertEqual(b, "[ADRES_1]")
+
+        reg2 = MaskRegistry()
+        c, _ = UyapRedactor.redact_text("Kurtuluş Mh. Atatürk Cd. No:15 İzmir", registry=reg2)
+        d, _ = UyapRedactor.redact_text("Kurtuluş Mh. Atatürk Cd. Nu:15 İzmir", registry=reg2)
+        self.assertEqual(c, "[ADRES_1]")
+        self.assertEqual(d, "[ADRES_1]")
