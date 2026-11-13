@@ -59,8 +59,8 @@ app = BUNDLE(
     info_plist={
         'CFBundleDisplayName': 'UYAP Maskeleme',
         'CFBundleName': 'UYAP Maskeleme',
-        'CFBundleShortVersionString': '1.4.0',
-        'CFBundleVersion': '9',
+        'CFBundleShortVersionString': '1.4.1',
+        'CFBundleVersion': '10',
         'LSMinimumSystemVersion': '12.0',
         'NSHighResolutionCapable': True,
         'NSRequiresAquaSystemAppearance': True,

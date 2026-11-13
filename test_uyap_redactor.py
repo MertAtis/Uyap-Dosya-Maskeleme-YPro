@@ -2050,3 +2050,79 @@ class TestFixRound2D1D2D3(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMaskedPathLinkRegression(unittest.TestCase):
+    """v1.4.0 çökmesi: maskeli klasör adına giden bağlantılarda 'str' object has no attribute 'search'."""
+
+    def test_links_into_masked_folder_do_not_crash(self):
+        import tempfile, shutil
+        root = tempfile.mkdtemp(prefix="uyap_link_reg_")
+        try:
+            src = os.path.join(root, "Dava")
+            sub = os.path.join(src, "Talimat 0532 000 00 01")
+            os.makedirs(sub)
+            with open(os.path.join(sub, "a.md"), "w", encoding="utf-8") as f:
+                f.write("Deneme belgesi içeriği, yeterince uzun bir metin satırı burada yer alıyor.\n")
+            with open(os.path.join(src, "safahat.md"), "w", encoding="utf-8") as f:
+                f.write("Bkz. [ek](Talimat 0532 000 00 01/a.md) ve [eksik]([TEL_9] yok/b.md)\n")
+            with open(os.path.join(src, "INDEX.md"), "w", encoding="utf-8") as f:
+                f.write("# INDEX\n\n| Dosya | Metin |\n|---|---|\n| [a](Talimat 0532 000 00 01/a.md) | 10 |\n")
+            dest, _stats = UyapRedactor.export_isolated_clean_folder(src, os.path.join(root, "out"))
+            with open(os.path.join(dest, "safahat.md"), encoding="utf-8") as f:
+                saf = f.read()
+            self.assertNotIn("0532", saf)
+            self.assertIn("[TEL_1]/a.md", saf)
+            self.assertTrue(os.path.isfile(os.path.join(dest, "Talimat [TEL_1]", "a.md")))
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+
+class TestFiltrelemeTestFindings(unittest.TestCase):
+    """Gerçek dava klasörü testinde bulunan fazla maskeleme ve yanlış alarm düzeltmeleri (uydurma veri)."""
+
+    def test_kaza_tutanagi_lejanti_adres_degil(self):
+        t = "YOLUN SINIFI\n4\n1 Cadde\n4 Devlet yolu\n2 Sokak\n"
+        self.assertEqual(UyapRedactor.redact_text(t)[0], t)
+
+    def test_sirket_tarafin_adresi_korunur_kisi_maskelenir(self):
+        t = ("**DAVALILAR\t:  1.- **Örnek Sigorta A.Ş, (V.D. No:4567012398); \n"
+             "\t\t İçerenköy Umut Sokak No:10/12 Ataşehir / İstanbul\n"
+             "\t\t   **2.- **Ali Veli (T.C. No: 12345678950),\n"
+             "\t\t Yazır Köyü Küme Evleri No: 382/1 Ağlasun / Burdur\n")
+        out = UyapRedactor.redact_text(t)[0]
+        self.assertIn("İçerenköy Umut Sokak No:10/12", out)
+        self.assertNotIn("Küme Evleri No: 382/1", out)
+        self.assertIn("V.D. No:4567012398", out)
+
+    def test_vergi_kimlik_no_10_hane_korunur_11_hane_maskelenir(self):
+        self.assertIn("1234567890", UyapRedactor.redact_text("**Vergi Kimlik No:** 1234567890")[0])
+        self.assertNotIn("12345678950", UyapRedactor.redact_text("**Vergi Kimlik No:** 12345678950")[0])
+        self.assertNotIn("1234567890", UyapRedactor.redact_text("Kimlik No: 1234567890")[0])
+
+    def test_turevi_olan_html_ve_kucuk_gorsel_islenemeyen_listesinde_degil(self):
+        import tempfile, shutil
+        from PIL import Image
+        root = tempfile.mkdtemp(prefix="uyap_ft_")
+        try:
+            src = os.path.join(root, "Dava")
+            os.makedirs(os.path.join(src, "_kaynak", "06-Mali"))
+            os.makedirs(os.path.join(src, "06-Mali"))
+            os.makedirs(os.path.join(src, "01", "Belge_1"))
+            with open(os.path.join(src, "_kaynak", "06-Mali", "makbuz.html"), "w", encoding="utf-8") as f:
+                f.write("<html><body>makbuz</body></html>")
+            with open(os.path.join(src, "06-Mali", "makbuz.md"), "w", encoding="utf-8") as f:
+                f.write("Vekalet pulu makbuzu metni, yeterince uzun bir deneme satırı burada.\n")
+            with open(os.path.join(src, "01", "Belge_1.md"), "w", encoding="utf-8") as f:
+                f.write("Belge metni ![](Belge_1/gorsel-1.png) yeterince uzun bir deneme satırı burada.\n")
+            Image.new("RGB", (16, 17), "white").save(os.path.join(src, "01", "Belge_1", "gorsel-1.png"))
+            with open(os.path.join(src, "not.html"), "w", encoding="utf-8") as f:
+                f.write("<html>turevsiz</html>")
+            _dest, st = UyapRedactor.export_isolated_clean_folder(src, os.path.join(root, "out"))
+            listed = [p for p, _r in st["unprocessed"]]
+            self.assertFalse(any("makbuz" in p for p in listed), listed)
+            self.assertFalse(any("gorsel-1" in p for p in listed), listed)
+            self.assertTrue(any(p.endswith("not.html") for p in listed), listed)
+            self.assertEqual(st["small_images_skipped"], 1)
+        finally:
+            shutil.rmtree(root, ignore_errors=True)

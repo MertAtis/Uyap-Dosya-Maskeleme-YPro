@@ -217,6 +217,38 @@ class UyapRedactor:
             return cls._LEGACY_MASK[kind]
         return registry.label(kind, raw)
 
+    SMALL_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".tif", ".tiff", ".heic")
+
+    @staticmethod
+    def _is_small_image(path: str, max_area: int = 150_000, min_side: int = 100) -> bool:
+        """Simge/logo/imza boyutundaki görseller (ör. 16×17, 94×29, 375×32) için True."""
+        try:
+            from PIL import Image
+            with Image.open(path) as im:
+                w, h = im.size
+            return w * h < max_area or min(w, h) < min_side
+        except Exception:
+            return False
+
+    @staticmethod
+    def _source_has_md_derivative(full_p: str, src_folder: str) -> bool:
+        """Kaynakta <ad>.md / <ad>.<uzantı>.md türevi (aynı dizinde veya _kaynak/ öneki
+        kaldırılmış karşılığında, ≥50 bayt) varsa True."""
+        rel = os.path.relpath(full_p, src_folder)
+        rels = [rel]
+        if rel.startswith("_kaynak" + os.sep):
+            rels.append(rel[len("_kaynak" + os.sep):])
+        for r in rels:
+            for cand in (os.path.splitext(r)[0] + ".md", r + ".md"):
+                for form in ("NFC", "NFD"):
+                    p = os.path.join(src_folder, unicodedata.normalize(form, cand))
+                    try:
+                        if os.path.isfile(p) and os.path.getsize(p) >= 50:
+                            return True
+                    except OSError:
+                        pass
+        return False
+
     @classmethod
     def _has_mask(cls, s: str, kind_re: Optional[str] = None) -> bool:
         return bool(re.search(kind_re or cls.MASK_ANY_RE, s))
@@ -851,6 +883,11 @@ class UyapRedactor:
             # Eğer numara tarih (12/03/2015) veya yıl/esas formatındaysa (2021/12345678) koru
             if '/' in norm_num and cls._is_date_or_esas_number(raw_num):
                 return m.group(0)
+            # "Vergi Kimlik No: 1234567890": 10 haneli VKN tüzel kişiye aittir, TCKN değildir.
+            # (Gerçek kişinin VKN'si 11 haneli TCKN'sidir; o maskelenmeye devam eder.)
+            if re.search(r'(?i)vergi[\s\*\_]*$', m.string[max(0, m.start() - 15):m.start()]) and \
+                    re.fullmatch(r'\d{10}', norm_num):
+                return m.group(0)
             if sum(c.isdigit() for c in norm_num) >= 5:
                 count += 1
                 return f"{m.group('label')}{cls._mask('tckn', raw_num, registry)}"
@@ -1319,6 +1356,15 @@ class UyapRedactor:
         r'(?i)suçun\s+yeri|olay\s+yeri|kaza\s+yeri|olay(?:ın)?\s+meydana|meydana\s+gel|'
         r'\bönünde\b|kavşağ|sıralarında|trafik\s+kazas'
     )
+    # Tüzel kişi biçimi: taraf satırında geçerse alttaki adres kurum adresidir
+    _ADDR_STRONG_INST_RE = re.compile(
+        r'(?i)\bA\.\s?Ş\b|\bT\.A\.Ş|ltd\.?\s*şti|bankas[ıi]|sigorta|holding|kooperatif|'
+        r'belediye|müdürlü|başkanl[ıi]ğ|vakf[ıi]|derneği'
+    )
+    # Kaza tespit tutanağı lejantı ("1 Cadde", "4 Devlet yolu", "2 Sokak"): ad içermeyen yol türü satırı
+    _ADDR_FORM_LEGEND_RE = re.compile(
+        r'(?i)^\s*\d{0,2}\s*(?:Cadde(?:si)?|Cad\.?|Sokak|Sok\.?|Sk\.?|Bulvar[ıi]?|Mahalle(?:si)?|Mah\.?)\s*(?:\r?\n|$)'
+    )
     # HTS baz istasyonu ve koordinat bağlamı (olay yeri gibi korunur)
     _ADDR_HTS_RE = re.compile(
         r'(?i)(?:\bopr\s*:|\b(?:operat[öo]r|baz(?:\s+istasyon\w*)?|BTS|CGI|hücre\w*|LAC)\b)'
@@ -1384,6 +1430,11 @@ class UyapRedactor:
             return "kurum"
         if prev and cls._ADDR_HTS_RE.search(prev[0]):
             return "olay"
+        # Taraf satırı bir şirket/kurumsa ("DAVALILAR : 1.- X Sigorta A.Ş, (V.D. No: ...)") alttaki
+        # adres kurum adresidir; satırda kişi kimliği (T.C./TCKN) varsa kişi sayılır.
+        if prev and cls._ADDR_STRONG_INST_RE.search(prev[0]) and \
+                not re.search(r'(?i)T\.?\s?C\.?\s*(?:Kimlik|No)|TCKN|\[TCKN_', prev[0]):
+            return "kurum"
         if any(cls._ADDR_PERSON_RE.search(x) for x in prev):
             return "kisi"
         if prev and cls._ADDR_OLAY_RE.search(prev[0]):
@@ -1398,6 +1449,9 @@ class UyapRedactor:
         if cls._looks_like_url_or_email(addr):
             return True
         if cls._ADDR_COORD_RE.search(addr):
+            return True
+        # Form lejantı: ilk satır yalnız "<rakam> Cadde/Sokak" ve hiçbir yerde "No: <rakam>" yok
+        if cls._ADDR_FORM_LEGEND_RE.match(addr) and not re.search(r'(?i)\bNo\s*[:.]?\s*\d', addr):
             return True
         if cls._ADDR_NOT_ADDRESS_RE.search(addr):
             return True
@@ -2425,18 +2479,18 @@ class UyapRedactor:
                         return unicodedata.normalize("NFC", os.path.relpath(abs_p, base_dir).replace("\\", "/"))
 
         # Maske etiketi ([TEL_1], [TCKN_1], ...) taşıyan adayda joker eşleşme dene
-        if cls.MASK_ANY_RE.search(raw_norm):
+        if re.search(cls.MASK_ANY_RE, raw_norm):
             cand_pool: Set[str] = set()
             if path_map:
                 cand_pool.update(unicodedata.normalize("NFC", v.replace("\\", "/")) for v in path_map.values())
             for probe in probe_keys:
-                if not cls.MASK_ANY_RE.search(probe):
+                if not re.search(cls.MASK_ANY_RE, probe):
                     continue
                 parts = [p for p in probe.split("/") if p and p != "."]
                 pat_parts = []
                 for p in parts:
-                    chunks = cls.MASK_ANY_RE.split(p)
-                    masks = cls.MASK_ANY_RE.findall(p)
+                    chunks = re.split(cls.MASK_ANY_RE, p)
+                    masks = re.findall(cls.MASK_ANY_RE, p)
                     if not masks:
                         pat_parts.append(re.escape(p))
                     else:
@@ -2915,6 +2969,7 @@ class UyapRedactor:
             "ocr_converted": 0,
             "udf_converted": 0,
             "office_converted": 0,
+            "small_images_skipped": 0,
             "archive_count": 0,
             "unprocessed": [],
             "index_synced": 0,
@@ -3316,6 +3371,9 @@ class UyapRedactor:
                             ocr_converted_list.append(masked_base_rel)
                             if progress_cb:
                                 progress_cb("ocr", masked_base_rel, grand_stats)
+                    elif ext in cls.SMALL_IMAGE_EXTS and cls._is_small_image(full_p):
+                        # Belgeye gömülü simge/logo/imza görseli: metin beklenmez, listeyi kirletmesin
+                        grand_stats["small_images_skipped"] += 1
                     else:
                         unprocessed_items.append((_masked_rel_path(rel_p), "metin çıkarılamadı"))
                 except Exception as oe:
@@ -3437,6 +3495,10 @@ class UyapRedactor:
                         continue
                     full_p = os.path.join(root, f)
                     rel_p = os.path.relpath(full_p, src_folder)
+                    # Yargı PRO bu dosyanın .md türevini üretmişse (ör. HTML makbuz → .md) içerik
+                    # zaten aktarılmıştır; "işlenemedi" listesine yazmak yanlış alarm olur.
+                    if cls._source_has_md_derivative(full_p, src_folder):
+                        continue
                     reason = f"desteklenmeyen tür ({ext})" if ext else "desteklenmeyen tür (uzantısız)"
                     unprocessed_items.append((rel_p, reason))
 
@@ -3563,6 +3625,7 @@ class UyapRedactor:
             w(f"**Aktarılan metin belgesi (.md):** {gs['md_transferred']} adet\n")
             w(f"**Metne dökülen UYAP UDF belgesi (.udf → .md):** {gs.get('udf_converted', 0)} adet\n")
             w(f"**Office (Word/Excel) belgesi:** {gs.get('office_converted', 0)} adet\n")
+            w(f"**Metin içermeyen küçük görsel (simge/logo/imza, atlandı):** {gs.get('small_images_skipped', 0)} adet\n")
             w(f"**Açılan EYP/ZIP arşivi:** {gs.get('archive_count', 0)} adet\n")
             w(f"**Bu çalıştırmada yerel OCR ile metne dökülen taranmış ek:** {gs['ocr_converted']} adet\n")
             w(f"**OCR'lı (taranmış) evrak:** {gs.get('ocr_present', 0)} adet\n")
@@ -3715,6 +3778,7 @@ def main():
     print(f"📄 Aktarılan .md: {stats['md_transferred']} adet")
     print(f"📝 UDF → metin : {stats.get('udf_converted', 0)} adet")
     print(f"💼 Word/Excel  : {stats.get('office_converted', 0)} adet")
+    print(f"🖼️ Küçük görsel: {stats.get('small_images_skipped', 0)} adet (simge/logo, atlandı)")
     print(f"📦 EYP/ZIP     : {stats.get('archive_count', 0)} arşiv")
     print(f"👁️ Yerel OCR    : {stats['ocr_converted']} adet")
     print(f"🔄 İndeks Senkron: {stats['index_synced']} kayıt")
