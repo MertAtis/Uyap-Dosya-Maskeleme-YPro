@@ -2237,3 +2237,27 @@ class TestAileKlasoruBulgulari(unittest.TestCase):
              "göstermekte olup bu husus dosyaya sunulan ticaret sicil gazetesi ve diğer belgelerle sabit olup davalı "
              "bankanın sorumluluğu bulunmaktadır.")
         self.assertIn("Büyükdere Cad. No:201", self.R(t))
+
+
+class TestAileKlasoruBulgulari2(unittest.TestCase):
+    """v1.4.3 arayüz testinde bulunan: 'N:' kapı no kısaltması ve üst satırda kurum adı olan taraf satırı."""
+
+    R = staticmethod(lambda t: UyapRedactor.redact_text(t)[0])
+
+    def test_N_kisaltmali_kapi_no(self):
+        out = self.R("**DAVALI\t:** ALİ VELİ-12345678950 - Deneme Mah 328 Sk N:9 İncirliova /Aydın")
+        self.assertNotIn("Deneme Mah", out)
+        self.assertIn("Formül: N: 5 adet", self.R("Formül: N: 5 adet"))
+
+    def test_ust_satirda_mahkeme_olan_taraf_satiri_kisi_adresidir(self):
+        t = ("**İHBAR EDEN\t:** AYDIN 1 AİLE MAHKEMESİ \n\n"
+             "**KÜÇÜK\t:** ALİ VELİ - 12345678950 -Deneme Mah 328 Sk N:9  İncirliova/ AYDIN\n"
+             "**KAYYIM ADAYI\t:** VELİ ALİ - 10000000146 -Örnek Mah. Merkez(Örnek) Sk. No:6  Çine/ AYDIN")
+        out = self.R(t)
+        self.assertNotIn("Deneme Mah", out)
+        self.assertNotIn("Örnek Mah", out)
+        self.assertIn("AYDIN 1 AİLE MAHKEMESİ", out)
+
+    def test_adliye_adresi_korunur(self):
+        t = "**İHBAR EDEN\t:** AYDIN 1 AİLE MAHKEMESİ\n**Adres:** Adliye Sarayı Hasanefendi Mah. Adnan Menderes Blv. No:1 Efeler/AYDIN"
+        self.assertIn("Hasanefendi Mah.", self.R(t))

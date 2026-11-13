@@ -288,7 +288,7 @@ ADDR_TOKENS = {
     "sk": re.compile(r'(?i)\b(?:Sk\.|Sok\.|Sokak|Sokağ[ıi])(?![A-Za-zçğıöşü])'),
     "cad": re.compile(r'(?i)\b(?:Cad\.|Cd\.|Caddesi|Cadde)(?![A-Za-zçğıöşü])'),
     "bulvar": re.compile(r'(?i)\bBulvar[ıi]'),
-    "no": re.compile(r'(?i)\bNo\s*[:.]?\s*\d'),
+    "no": re.compile(r'(?i)\bNo\s*[:.]?\s*\d|\bN\s*[:.]\s*\d'),
     "kapi": re.compile(r'(?i)Kap[ıi]\s*No'),
     "d": re.compile(r'(?<![A-Za-zÇĞİÖŞÜçğıöşü])D\s*[:.]\s*\d'),
     "k": re.compile(r'(?<![A-Za-zÇĞİÖŞÜçğıöşü])K\s*[:.]\s*\d'),

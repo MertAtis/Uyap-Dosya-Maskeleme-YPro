@@ -1422,7 +1422,8 @@ class UyapRedactor:
     _ADDR_PERSON_RE = re.compile(
         r'(?i)(?:\b(?:davac[ıi]|daval[ıi]|vekil\s+eden|müvekkil|k[ıi]s[ıi]tl[ıi]|vasi(?:si)?|tan[ıi]k|'
         r'şüpheli|san[ıi]k|müşteki|mağdur|muhatap|al[ıi]c[ıi]|ikamet|oturur|yakalama|müşteri|hükümlü|'
-        r'borçlu|alacakl[ıi]|avukat|kişi|isimli|yükümlü\w*|adresini|şah[ıi]s(?:[ıi]n?|a)?)(?![a-zçğıöşü])|'
+        r'borçlu|alacakl[ıi]|avukat|kişi|isimli|yükümlü\w*|adresini|şah[ıi]s(?:[ıi]n?|a)?|'
+        r'küçü(?:k|ğün)|kayy[ıi]m(?:\s+aday[ıi])?|ihbar\s+olunan|veli(?:si)?|anne(?:si)?|baba(?:s[ıi])?)(?![a-zçğıöşü])|'
         r'\bAv\.|belirtilen\s+\*\*)'
     )
     _ADDR_INST_RE = re.compile(
@@ -1523,6 +1524,10 @@ class UyapRedactor:
             return "kisi"
         if cls._ADDR_OLAY_RE.search(line) or cls._ADDR_HTS_RE.search(line) or cls._ADDR_COORD_RE.search(line):
             return "olay"
+        # Aynı satırda kişi kimlik numarası (maskeli ya da etiketli) varsa satır bir kişiye aittir;
+        # üst satırdaki kurum adı ("İHBAR EDEN: ... MAHKEMESİ") bunu kurum adresi yapmaz.
+        if re.search(r'\[TCKN_(?:\d+|GİZLENDİ)\]|\bTCKN\b|T\.?\s?C\.?\s*(?:Kimlik\s*)?No', line):
+            return "kisi"
         if cls._ADDR_PERSON_RE.search(line):
             return "kisi"
         if cls._ADDR_INST_RE.search(line):
@@ -1706,7 +1711,7 @@ class UyapRedactor:
             r'|[A-ZÇĞİÖŞÜ0-9][A-Za-zÇĞİÖŞÜçğıöşü0-9]*[ \t]+(?=(?:Mahallesi|Mah\.?|Mh\.?)[\s\,\.\^\-]))?'
             r'\b(?:Mahallesi|Mah\.?|Mh\.?|Cadde(?:si)?|Cad\.?|Cd\.?|Sokak|Sokağ[ıi]|Sok\.?|Sk\.?|5k\.?|Bulvar[ıi]|Bulv\.?|Blv\.?|Küme\s*Evler[i]?|Toki\s+Evleri)[\s\,\.\^\-]+'
             r'(?:\|¢|[^\r\n\|]){0,100}?'
-            r'(?:\b(?:No|Ne|[İiIıl]ç\s*Kap[ıi](?:\s*No)?|Kat|K|Daire|D|Blok|Blk|Apt|Apartman[ıi]|Sitesi|Evleri)|\|¢\s*Kap[ıi](?:\s*No)?)(?:[\s\.\-\:\^\/]*[0-9A-Za-z]|\s+No\b)'
+            r'(?:\b(?:No|Ne|N(?=\s*[:.]\s*\d)|[İiIıl]ç\s*Kap[ıi](?:\s*No)?|Kat|K|Daire|D|Blok|Blk|Apt|Apartman[ıi]|Sitesi|Evleri)|\|¢\s*Kap[ıi](?:\s*No)?)(?:[\s\.\-\:\^\/]*[0-9A-Za-z]|\s+No\b)'
             r'(?:\|¢|[^\r\n\|]){0,100}?'
             r'(?:[A-ZÇĞİÖŞÜa-zçğıöşü\s]{2,25}[\/J]\s*[A-ZÇĞİÖŞÜa-zçğıöşü0-9\s\,\.]{2,25})?'
             r')'
@@ -1723,7 +1728,7 @@ class UyapRedactor:
             # kalan cümle korunur ve hukuki ifadeler adresin tamamını "adres değil" saydırmaz.
             rest = ""
             core = re.search(
-                r'(?i)\bNo\s*[:.]?\s*\d+[A-Za-z]?(?:\s*/\s*\d+)?'
+                r'(?i)\b(?:No\s*[:.]?|N\s*[:.])\s*\d+[A-Za-z]?(?:\s*/\s*\d+)?'
                 r'(?:\s*(?:[İiI]ç\s*Kap[ıi](?:\s*No)?|Daire|Kat|D|K|Blok)\s*[:.]?\s*[0-9A-Za-z]{1,4}\b)*'
                 r'(?:\s*,?\s*[A-ZÇĞİÖŞÜa-zçğıöşü]+\s*/\s*[A-ZÇĞİÖŞÜa-zçğıöşü]+'
                 r'|\s+[A-ZÇĞİÖŞÜ][a-zçğıöşü]+\s+[A-ZÇĞİÖŞÜ]{3,}\b)?',
