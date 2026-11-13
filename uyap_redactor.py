@@ -968,7 +968,7 @@ class UyapRedactor:
 
         text = p_inline_named.sub(repl_inline_named, text)
 
-        # 2. Tutanak/Karar başlık satırları: "**BAŞKAN :** Erhan AKMAN  211094"
+        # 2. Tutanak/Karar başlık satırları: "**BAŞKAN :** Ayşe ÖRNEK  123456"
         p3 = re.compile(
             rf'(?im)^(?P<prefix>[\s\*]*{titles}[\s\*]*[:\t][^\r\n\d]*[a-zA-ZçğıöşüÇĞİÖŞÜ\.\s\*]+?)(?<!\d)(?P<sicil>\d{{5,6}})(?!\d)(?P<suffix>[\s\*]*)$'
         )
