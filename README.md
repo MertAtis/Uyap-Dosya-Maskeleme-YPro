@@ -19,15 +19,17 @@
 ## ✨ Öne Çıkan Özellikler
 
 - **🔒 Çevrimdışı Çalışma:** Hiçbir harici API'ye, sunucuya veya buluta veri göndermez. Tüm işlem yerel Python çekirdeği ile RAM üzerinde gerçekleşir.
-- **🛡️ Orijinale Dokunmama (Non-Destructive):** Orijinal `.udf`, `.pdf`, `.tif` dosyalarınıza kesinlikle dokunmaz. Yalnızca makine-okur türev `.md` metinleri üzerinde çalışır.
+- **🛡️ Orijinale Dokunmama (Non-Destructive):** Orijinal `.udf`, `.pdf`, `.doc`, `.docx`, `.xlsx`, `.eyp`, `.zip`, `.tif`/`.tiff`, `.png`/`.jpg`/`.heic` dosyalarınıza kesinlikle dokunmaz. İşlem yalnızca ayrı bir izole çıktı klasörüne maskelenmiş `.md` metinleri üretir.
 - **⚖️ Hukuki Bütünlük:** Olay örgüsü, tarihler, para miktarları, mahkeme esas/karar numaraları, kanun maddeleri, olay yeri, kurum adresleri, anne/baba adları ve taraf ad-soyadları korunacak biçimde tasarlanmıştır. Kural tabanlı maskeleme hatasız değildir; çıktıyı paylaşmadan önce rapordaki OCR uyarılarına göz atın.
 - **📱 Cep Telefonu ve İletişim Koruması:** Müvekkil ve taraf cep telefonlarının tüm Türkiye formatlarını (`05xx`, `+90 5xx`, boşluklu, parantezli) tespit ederek maskeler.
 - **🪪 Kimlik Kartı & MRZ Koruma:** Taranmış evraklardaki kimlik fotokopilerinde yer alan yeni/eski seri numaralarını ve 3 satırlı ICAO/MRZ şeritlerini (`I<TUR...`) kapatır.
 - **🔄 Otomatik INDEX.md Senkronizasyonu:** OCR sonradan tamamlansa dahi `INDEX.md` dosyasını tarayarak güncel `.md` bağlantılarını ve karakter sayılarını otomatik olarak tabloya işler.
 - **🔄 Tek Tıkla Otomatik Güncelleme (Auto-Updater):** Yeni bir sürüm çıktığında uygulama açılışında haber verir; tek tıkla arka planda DMG'yi indirip baştan kurulum gerektirmeden kendini yerinde günceller.
-- **📦 EYP ve Arşiv Desteği:** DYS üzerinden gelen `.eyp` (Elektronik Yazışma Paketleri) arşivlerini otomatik açar ve ekleri metne döker.
-- **👁️ Apple Vision OCR Uyumu:** Taranmış fiziki belgeleri, tebliğ mazbatalarını ve hastane tahlillerini yerel OCR ile metne dönüştürerek maskeler.
+- **📦 EYP ve Arşiv Desteği:** DYS üzerinden gelen `.eyp` (Elektronik Yazışma Paketleri) ve `.zip` arşivlerini güvenli şekilde geçici dizine açar (zip-slip/zip-bomb korumalı); içindeki desteklenen belgeleri `<arşiv> (EYP)` / `<arşiv> (ZIP)` klasörüne metin olarak aktarır ve paket üstverilerini/imza dosyalarını eler.
+- **💼 Word ve Excel Belgesi Desteği:** `.docx`, `.doc` ve `.xlsx` belgelerini çevrimdışı olarak metne / Markdown tablolarına dönüştürüp maskeler.
+- **👁️ Apple Vision OCR Uyumu:** Taranmış `.pdf`, `.tif`/`.tiff`, `.png`, `.jpg`/`.jpeg` ve `.heic` belgelerini yerel OCR ile metne dönüştürerek maskeler.
 - **📝 Doğrudan UYAP UDF Desteği:** Yargı PRO `.md` türevi olmayan çıplak `.udf` dosyaları da doğrudan metne dökülüp maskelenir.
+- **📋 Eksiksiz Raporlama:** Desteklenen türler: `.md`, `.txt`, `.udf`, `.pdf`, `.doc`, `.docx`, `.xlsx`, `.eyp`, `.zip`, `.tif`/`.tiff`, `.png`, `.jpg`/`.jpeg`, `.heic`. İşlenemeyen dosyalar (`desteklenmeyen tür`, `metin çıkarılamadı`, `şifreli` vb.) `DAVA_DÖNÜŞÜM_VE_GÜVENLİK_RAPORU.md` raporda listelenir.
 
 ---
 
@@ -58,11 +60,11 @@ Kullanıcı deneyimini sadeleştirmek ve veri güvenliğini en üst seviyeye ç�
 * **📦 İzole Temiz Dava Klasörü Oluşturma:**  
   Orijinal klasöre ASLA dokunmaz. Seçilen dava klasörünün yanına `<Dava Klasörü> (Maskelenmis AI)` adında izole bir klasör üretir.
 * **📄 İkili Dosya Aktarılmaz:**  
-  Orijinal `.udf`, `.pdf`, `.tif`, `.eyp` veya ikili ekler hedef klasöre KESİNLİKLE kopyalanmaz. Yalnızca maskelenmiş metin `.md` dosyaları aktarılır.
+  Orijinal `.udf`, `.pdf`, `.doc`, `.docx`, `.xlsx`, `.tif`, `.heic`, `.eyp`, `.zip` veya ikili ekler hedef klasöre KESİNLİKLE kopyalanmaz. Yalnızca maskelenmiş metin `.md` dosyaları aktarılır.
 * **👁️ Yerel Apple Vision OCR Motoru:**  
   Taranmış fotokopi ve ekler macOS yerel OCR motoruyla çevrimdışı olarak çözülür ve `.md` formatında temiz klasöre kazandırılır.
 * **🔒 Katmanlı Kişisel Veri Maskelemesi:**  
-  TCKN, cep telefonu, kimlik seri no, MRZ, IBAN, hesap/kart no, sicil no ve kişi adresleri maskelenir. Her çalıştırma `DAVA_DÖNÜŞÜM_VE_GÜVENLİK_RAPORU.md` ile neyin maskelendiğini, neyin bilerek korunduğunu ve bilinen sınırları raporlar.
+  TCKN, cep telefonu, kimlik seri no, MRZ, IBAN, hesap/kart no, sicil no ve kişi adresleri maskelenir. Her çalıştırma `DAVA_DÖNÜŞÜM_VE_GÜVENLİK_RAPORU.md` ile neyin maskelendiğini, neyin bilerek korunduğunu, bilinen sınırları ve işlenemeyen dosyaları raporlar.
 * **🔄 Otomatik INDEX.md Senkronizasyonu:**  
   `INDEX.md` tablosundaki tüm evrak satırları taranarak üretilen `.md` bağlantıları ve güncel karakter sayılarıyla senkronize edilir.
 * **📂 Tek Tıkla Finder'da Açma:**  

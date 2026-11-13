@@ -669,7 +669,7 @@ class TestUyapRedactorApp(unittest.TestCase):
         self.assertEqual(self.app.card_iban.lbl_val.cget("text"), "4")
         self.assertEqual(self.app.card_sicil.lbl_val.cget("text"), "6")
         self.assertEqual(self.app.card_adres.lbl_val.cget("text"), "11")
-        self.assertEqual(self.app.card_files.lbl_val.cget("text"), "15 (0 UDF, 5 OCR)")
+        self.assertEqual(self.app.card_files.lbl_val.cget("text"), "15 (0 UDF, 0 Office, 5 OCR)")
 
         # 5. done mesajı
         self.app.is_running = True
@@ -780,6 +780,35 @@ class TestUyapRedactorApp(unittest.TestCase):
             self.assertEqual(len(done_payloads), 1)
             summary_text, _dest = done_payloads[0]
             self.assertIn("UDF'den Metne Dökülen: 2 adet", summary_text)
+            self.assertIn("Word/Excel Belgesi: 0 adet", summary_text)
+            self.assertIn("Açılan EYP/ZIP Arşivi: 0 adet", summary_text)
+
+    def test_worker_summary_and_log_with_office_archives_and_unprocessed(self):
+        """Özet metninde Word/Excel ve EYP/ZIP satırları, işlenemeyen varsa log'da [İŞLENEMEDİ] bulunur."""
+        with patch.object(gui.UyapRedactor, "export_isolated_clean_folder") as mock_export:
+            mock_export.return_value = (
+                "/tmp/dava (Maskelenmis AI)",
+                {
+                    "md_transferred": 6, "udf_converted": 1, "office_converted": 3,
+                    "archive_count": 2, "ocr_converted": 1, "index_synced": 4, "total": 10,
+                    "unprocessed": [("not.html", "desteklenmeyen tür (.html)")],
+                },
+            )
+            self.app._worker("/tmp/dava")
+
+            messages = []
+            while not self.app.msg_queue.empty():
+                messages.append(self.app.msg_queue.get_nowait())
+
+            done_payloads = [m[1] for m in messages if m[0] == "done"]
+            self.assertEqual(len(done_payloads), 1)
+            summary_text, _dest = done_payloads[0]
+            self.assertIn("Word/Excel Belgesi: 3 adet", summary_text)
+            self.assertIn("Açılan EYP/ZIP Arşivi: 2 adet", summary_text)
+            self.assertIn("İşlenemeyen dosya: 1 (liste raporda)", summary_text)
+
+            log_text = "".join(m[1] for m in messages if m[0] == "log")
+            self.assertIn("⚠️ [İŞLENEMEDİ] not.html — desteklenmeyen tür (.html)", log_text)
 
     def test_check_queue_no_documents_warns_without_asking_finder(self):
         """_check_queue 'no_documents' mesajında showwarning çağırır, askyesno çağırmaz."""
@@ -827,7 +856,7 @@ class TestUyapRedactorApp(unittest.TestCase):
 
             dest = self.app.last_dest_folder
             self.assertTrue(dest and os.path.isdir(dest))
-            self.assertEqual(self.app.card_files.lbl_val.cget("text"), "2 (2 UDF, 0 OCR)")
+            self.assertEqual(self.app.card_files.lbl_val.cget("text"), "2 (2 UDF, 0 Office, 0 OCR)")
 
             doc_mds = []
             for root, _dirs, files in os.walk(dest):

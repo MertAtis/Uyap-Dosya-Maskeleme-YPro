@@ -15,6 +15,7 @@ if current_dir not in sys.path:
     sys.path.insert(0, current_dir)
 
 import audit_output as A  # noqa: E402
+from uyap_redactor import UyapRedactor  # noqa: E402
 
 
 def fake_tckn(first9: str) -> str:
@@ -296,6 +297,133 @@ class AuditCase(unittest.TestCase):
         self.assertEqual(res["unexpected_files"], [])
         self.assertEqual(res["files_with_source"], 1)
         self.assertEqual(res["over"][0][3], T1)
+
+    @staticmethod
+    def _write_minimal_docx(path: str, paragraphs: list) -> None:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        content_types = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Override PartName="/word/document.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+            "</Types>"
+        )
+        p_xml = "".join(f"<w:p><w:r><w:t>{p}</w:t></w:r></w:p>" for p in paragraphs)
+        doc_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            f"<w:body>{p_xml}</w:body></w:document>"
+        )
+        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("[Content_Types].xml", content_types.encode("utf-8"))
+            zf.writestr("word/document.xml", doc_xml.encode("utf-8"))
+
+    def test_docx_source_clean_output_has_no_leaks(self):
+        """Word .docx kaynak + maskeli çıktı: sızıntı 0, beklenmedik 0, files_with_source == 1."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src, out = os.path.join(tmp, "src"), os.path.join(tmp, "out")
+            os.makedirs(out)
+            self._write_minimal_docx(
+                os.path.join(src, "dilekce.docx"),
+                [f"DOSYA NO: 2026/110\nDavacı TCKN: {T1}\nTalep metni."],
+            )
+            with open(os.path.join(out, "dilekce.md"), "w", encoding="utf-8") as f:
+                f.write("DOSYA NO: 2026/110\nDavacı TCKN: [TCKN_1]\nTalep metni.")
+            res = A.audit(src, out)
+            _lines, _det, leak = A.summarize(res)
+            self.assertFalse(leak)
+            self.assertEqual(res["unexpected_files"], [])
+            self.assertEqual(res["files_with_source"], 1)
+
+    def test_eyp_inner_doc_and_unmasked_leak(self):
+        """EYP içi .docx belge -> beklenmedik 0; maskelenmemiş TCKN'li çıktı -> sızıntı >= 1."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src, out = os.path.join(tmp, "src"), os.path.join(tmp, "out")
+            os.makedirs(src)
+            os.makedirs(os.path.join(out, "X (EYP)", "Ekler"))
+            ek_docx = os.path.join(tmp, "ek1.docx")
+            self._write_minimal_docx(ek_docx, [f"DOSYA NO: 2026/111", f"Davacı TCKN: {T1}"])
+            with zipfile.ZipFile(os.path.join(src, "X.eyp"), "w") as zf:
+                zf.write(ek_docx, "Ekler/ek1.docx")
+                zf.writestr("Ekler/tarama.pdf", b"%PDF-1.4 dummy")
+
+            # Temiz çıktı + OCR iç belge
+            with open(os.path.join(out, "X (EYP)", "Ekler", "ek1.md"), "w", encoding="utf-8") as f:
+                f.write("DOSYA NO: 2026/111\nDavacı TCKN: [TCKN_1]")
+            with open(os.path.join(out, "X (EYP)", "Ekler", "tarama.md"), "w", encoding="utf-8") as f:
+                f.write("# tarama.pdf\n\n### Taranmış Belge (Yerel OCR)\n\nOkunan metin.")
+
+            res = A.audit(src, out)
+            _lines, _det, leak = A.summarize(res)
+            self.assertFalse(leak)
+            self.assertEqual(res["unexpected_files"], [])
+            self.assertEqual(res["files_with_source"], 1)
+
+            # Bozuk çıktı (maskesiz TCKN)
+            with open(os.path.join(out, "X (EYP)", "Ekler", "ek1.md"), "w", encoding="utf-8") as f:
+                f.write(f"DOSYA NO: 2026/111\nDavacı TCKN: {T1}")
+            res2 = A.audit(src, out)
+            _lines2, _det2, leak2 = A.summarize(res2)
+            self.assertTrue(leak2)
+            self.assertGreaterEqual(len(res2["leaks"]["tckn"]) + len(res2["leaks"]["tckn_known"]), 1)
+
+    def test_d2_hts_base_station_and_coordinates_not_flagged_as_person_addr(self):
+        """D2: HTS baz istasyonu ve koordinat satırı 'Maskesiz adres (kişi)' sayılmaz."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src_dir, out_dir = os.path.join(tmp, "src"), os.path.join(tmp, "out")
+            os.makedirs(src_dir)
+            os.makedirs(out_dir)
+            txt = (
+                "420037031084 - opr:Vodafone(LA412745O207031084) - ÖRNEK\n"
+                "MAH. FATIH CAD. NO:124 DENIZLI,DENIZLI, 37.771667- 29.072219\n"
+            )
+            with open(os.path.join(src_dir, "hts.md"), "w", encoding="utf-8") as f:
+                f.write(txt)
+            with open(os.path.join(out_dir, "hts.md"), "w", encoding="utf-8") as f:
+                f.write(txt)
+            res = A.audit(src_dir, out_dir)
+            _l, _d, leak = A.summarize(res)
+            self.assertFalse(leak)
+            self.assertEqual(res["leaks"]["addr_kisi"], [])
+            self.assertEqual(len(res["leaks"]["addr_olay"]), 1)
+
+    def test_d3_masked_filenames_matched_without_leak_and_raw_filename_flagged(self):
+        """D3: Maskeli dosya/klasör yolları kaynakla eşleşir; ham TCKN/tel dosya adı sızıntı sayılır."""
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp = os.path.realpath(raw_tmp)
+            src = os.path.join(tmp, "DavaD3Audit")
+            sub = os.path.join(src, "Satıcı 0532 000 00 01 - not")
+            os.makedirs(sub)
+            with open(os.path.join(sub, "a.md"), "w", encoding="utf-8") as f:
+                f.write("Satıcı notu: 0532 000 00 01 numarası ile arandı.\n")
+            with open(os.path.join(src, f"{T1} dilekçe.md"), "w", encoding="utf-8") as f:
+                f.write(f"Davacı TCKN: {T1} talep metni.\n")
+            with open(os.path.join(src, "INDEX.md"), "w", encoding="utf-8") as f:
+                f.write(
+                    "| Tarih | Tür | Kurum | Ek | Kişi | Dosya | Metin |\n"
+                    "|---|---|---|---|---|---|---|\n"
+                    "| 01.02.2026 | Not | — | — | — | — | [↗](<Satıcı 0532 000 00 01 - not/a.md>) (10 karakter) |\n"
+                    f"| 02.02.2026 | Dilekçe | — | — | — | — | [↗](<{T1} dilekçe.md>) (10 karakter) |\n"
+                )
+
+            dest, _stats = UyapRedactor.export_isolated_clean_folder(src)
+            res = A.audit(src, dest)
+            _lines, _det, leak = A.summarize(res)
+            self.assertFalse(leak)
+            self.assertEqual(res["broken_links"], [])
+            self.assertEqual(res["index_mismatch"], [])
+            self.assertEqual(res["unexpected_files"], [])
+            self.assertGreaterEqual(res["files_with_source"], 3)
+
+            # Çıktıda ham TCKN'li dosya adı varsa sızıntı yakalanmalı
+            leak_file = os.path.join(dest, f"{T1}_sizinti.md")
+            with open(leak_file, "w", encoding="utf-8") as f:
+                f.write("Temiz içerik.\n")
+            res_leak = A.audit(src, dest)
+            _l2, _d2, leak2 = A.summarize(res_leak)
+            self.assertTrue(leak2)
+            self.assertGreaterEqual(len(res_leak["leaks"]["tckn"]), 1)
 
 
 if __name__ == "__main__":

@@ -25,9 +25,13 @@ bir klasör üretir. Orijinal dosyalara dokunmaz. Kural tabanlı maskeleme hatas
 """
 
 import os
+import posixpath
 import re
 import shutil
+import stat
+import subprocess
 import sys
+import tempfile
 import unicodedata
 import urllib.parse
 import xml.etree.ElementTree as ET
@@ -231,6 +235,18 @@ class UyapRedactor:
     # Klasör taramalarında atlanacak dizin adları (yalnızca tam ad eşleşmesi)
     SKIP_DIRS = ("_kaynak", ".git", "node_modules")
     SKIP_DIRS_OCR = (".git", "node_modules")
+
+    # Desteklenen belge / arşiv türleri ve arşiv güvenlik sınırları
+    TEXT_DOC_EXTS = (".udf", ".docx", ".doc", ".xlsx")
+    OFFICE_DOC_EXTS = (".docx", ".doc", ".xlsx")
+    OCR_DOC_EXTS = (".pdf", ".tif", ".tiff", ".png", ".jpg", ".jpeg", ".heic")
+    ARCHIVE_EXTS = (".eyp", ".zip")
+    EYP_META_EXTS = (".rels", ".xml", ".psmdcp")
+    IGNORED_SIG_EXTS = (".imz", ".p7s", ".sig", ".cer")
+    IGNORED_BASENAMES = (".DS_Store", "Thumbs.db", "thumbs.db")
+    ARCHIVE_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
+    ARCHIVE_MAX_FILE_BYTES = 500 * 1024 * 1024
+    ARCHIVE_MAX_MEMBERS = 5000
 
     # Yargı PRO manifest JSON dosyaları (değer bazında maskelenerek aktarılır)
     META_JSON_NAMES = ("uyap-project.json", "uyap-evrak-listesi.json")
@@ -725,11 +741,50 @@ class UyapRedactor:
         return known
 
     @classmethod
-    def collect_known_tckns_from_folder(cls, folder: str) -> Set[str]:
+    def _extract_non_ocr_text(cls, fp: str, ext: str) -> str:
+        """Metin tabanlı (.udf/.docx/.doc/.xlsx) veya düz metin (.md/.txt) belgeden ham metin okur."""
+        if ext == ".udf":
+            return cls.extract_udf_raw(fp)
+        if ext in (".docx", ".doc"):
+            return cls.extract_word_raw(fp)
+        if ext == ".xlsx":
+            return cls.extract_xlsx_raw(fp)
+        if ext in (".md", ".txt") or os.path.basename(fp) in cls.META_JSON_NAMES:
+            try:
+                with open(fp, "r", encoding="utf-8", errors="replace") as rf:
+                    return rf.read()
+            except Exception:
+                return ""
+        return ""
+
+    @classmethod
+    def _collect_tckns_from_archive(cls, arc_path: str, known: Set[str], allow_nested_zip: bool = False) -> None:
+        """Arşivi geçici dizine güvenli açarak içindeki metin belgelerinden TCKN toplar ve temizler."""
+        tmp_dir = os.path.realpath(tempfile.mkdtemp(prefix="uyap_arsiv_"))
+        try:
+            extracted = cls._extract_archive_safely(arc_path, tmp_dir)
+            for ef in extracted:
+                ef_base = os.path.basename(ef)
+                ef_ext = os.path.splitext(ef_base)[1].lower()
+                rel_parts = os.path.relpath(ef, tmp_dir).split(os.sep)
+                if "__MACOSX" in rel_parts or ef_base in cls.IGNORED_BASENAMES or ef_base.startswith("._"):
+                    continue
+                if allow_nested_zip and ef_ext == ".zip":
+                    cls._collect_tckns_from_archive(ef, known, allow_nested_zip=False)
+                elif ef_ext in (".md", ".txt") or ef_ext in cls.TEXT_DOC_EXTS:
+                    txt = cls._extract_non_ocr_text(ef, ef_ext)
+                    if txt:
+                        known.update(cls.collect_known_tckns_from_text(txt))
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    @classmethod
+    def collect_known_tckns_from_folder(cls, folder: str, include_archives: bool = True) -> Set[str]:
         """
-        Klasördeki tüm metin dosyalarını tarayarak bilinen TCKN setini (known_tckns) çıkarır.
+        Klasördeki tüm metin dosyalarını (.md/.txt/manifest JSON/.udf/.doc/.docx/.xlsx ve arşiv içi metinler)
+        tarayarak bilinen TCKN setini (known_tckns) çıkarır.
         Eğer hedef klasör '(Maskelenmis AI)' uzantılıysa ve aynı dizinde kaynak klasörü varsa,
-        kök TCKN hafızasını zenginleştirmek için kaynak klasördeki .md dosyalarını da salt-okunur tarar.
+        kök TCKN hafızasını zenginleştirmek için kaynak klasörü de salt-okunur tarar.
         """
         known: Set[str] = set()
         folders_to_scan = [folder]
@@ -744,26 +799,24 @@ class UyapRedactor:
             if not os.path.isdir(scan_dir):
                 continue
             for root, dirs, files in os.walk(scan_dir):
-                if cls._is_skipped_dir(root, scan_dir, cls.SKIP_DIRS):
+                if cls._is_skipped_dir(root, scan_dir, cls.SKIP_DIRS_OCR):
                     dirs[:] = []
                     continue
-                dirs[:] = [d for d in dirs if not cls._is_skipped_dir(os.path.join(root, d), scan_dir, cls.SKIP_DIRS)]
+                dirs[:] = [d for d in dirs if not cls._is_skipped_dir(os.path.join(root, d), scan_dir, cls.SKIP_DIRS_OCR)]
+                in_kaynak = cls._is_skipped_dir(root, scan_dir, ("_kaynak",))
                 for f in files:
-                    if (f.endswith((".md", ".txt")) and not f.endswith(".bak")) or f in cls.META_JSON_NAMES:
-                        fp = os.path.join(root, f)
-                        try:
-                            with open(fp, "r", encoding="utf-8", errors="replace") as rf:
-                                known.update(cls.collect_known_tckns_from_text(rf.read()))
-                        except Exception:
-                            pass
-                    elif f.lower().endswith(".udf"):
-                        fp = os.path.join(root, f)
-                        try:
-                            udf_text = cls.extract_udf_raw(fp)
-                            if udf_text:
-                                known.update(cls.collect_known_tckns_from_text(udf_text))
-                        except Exception:
-                            pass
+                    ext = os.path.splitext(f)[1].lower()
+                    fp = os.path.join(root, f)
+                    if not in_kaynak and ((f.endswith((".md", ".txt")) and not f.endswith(".bak")) or f in cls.META_JSON_NAMES):
+                        txt = cls._extract_non_ocr_text(fp, ext)
+                        if txt:
+                            known.update(cls.collect_known_tckns_from_text(txt))
+                    elif ext in cls.TEXT_DOC_EXTS:
+                        txt = cls._extract_non_ocr_text(fp, ext)
+                        if txt:
+                            known.update(cls.collect_known_tckns_from_text(txt))
+                    elif include_archives and ext in cls.ARCHIVE_EXTS:
+                        cls._collect_tckns_from_archive(fp, known, allow_nested_zip=(ext == ".eyp"))
         return known
 
     @classmethod
@@ -967,42 +1020,125 @@ class UyapRedactor:
         - Uluslararası alan kodlu (+90, 90)
         - Boşluklu, tireli, noktalı, parantezli varyasyonlar
           (0536 260 33 99, 0 (536) 260-33-99, +90 536 260 33 99, (0536) 260 33 99, (536) 260 3399 vb.)
+        Başında 0/+90 olmayan 10 haneli adaylarda bağlam, liste, satır yalnızlığı ve registry doğrulaması yapar.
         Tarihler (05.06.2024), kanun maddeleri (5237), para tutarları (500.000 TL) ve dosya esas numaraları korunur.
         """
-        count = 0
         pattern = re.compile(
             r'(?<!\d)(?:(?:\+?90[\s.-]?)?(?:\(0\)|0)[\s.-]?|\+?90[\s.-]?)?(?:\(?5\d{2}\)?|\(05\d{2}\))[\s.-]?\d{3}[\s.-]?(?:\d{2}[\s.-]?\d{2}|\d{4})(?!\d)'
         )
+        matches = list(pattern.finditer(text))
+        if not matches:
+            return text, 0
 
-        phone_ctx = re.compile(r'(?i)(?:tel|gsm|cep|telefon|irtibat|ileti[şs]im|mobil|hat)\w*[^\r\n\d]{0,25}$')
-        doc_ctx = re.compile(
-            r'(?i)(?:barkod|evrak|belge|dosya|say[ıi]|ref(?:erans)?|takip|işlem|kay[ıi]t|sorgu|dekont|fatura|'
-            r'po[lI]i[cç]e|seri|sipariş|mersis|vergi|vkn|bpm|uets|kep)\w*[^\r\n\d]{0,20}$'
+        # ASLA telefon sayılmayacak önekler (0–40 karakter önce; "abone no/numarası" hariç tutulur,
+        # yalın "abone" telefon bağlamıdır)
+        excl_re = re.compile(
+            r'(?i)(?:\b(?:vergi(?:\s+no)?|vkn|v\.?\s?d\.?|mersis|esas|karar|dosya|evrak|barkod|'
+            r'sicil|iban|hesap|müşteri|po[lI]i[cç]e|sipariş|takip|fatura(?:\s+no)?|seri|'
+            r'abone\s+no|abone\s+numara\w*|belge|say[ıi]|ref(?:erans)?|işlem|sorgu|dekont|'
+            r'bpm|uets|kep|kay[ıi]t\s+no)\b)'
+            r'(?:(?!(?:tel(?:efon)?|gsm|cep|irtibat|ileti[şs]im)\w*)[^\r\n\d]){0,40}$'
         )
+        phone_before_re = re.compile(
+            r'(?i)\b(?:kay[ıi]tl[ıi]\w*|tel(?:efon)?\w*|gsm|cep|hat(?:t[ıi]\w*)?|numara\w*|irtibat\w*|'
+            r'ileti[şs]im\w*|arayan\w*|aranan\w*|hts|abone\w*|mobil)\b'
+        )
+        phone_after_re = re.compile(
+            r'(?i)\b(?:numaral[ıi]|nolu|no\'lu|numaras[ıi]|numaralar[ıi]|hat(?:t[ıi](?:n[ıi]?|n|m|nd[ae])?)?|'
+            r'gsm|telefon\w*|abone\w*|ile\s+görüş\w*|ar[aı]d\w*|mesaj\w*|sms)\b'
+        )
+        known_phones = registry.known_values("telefon", min_len=10) if registry is not None else set()
 
-        def repl(m: re.Match) -> str:
-            nonlocal count
+        n = len(matches)
+        excluded = [False] * n
+        confirmed = [False] * n
+        standalone_bare = [False] * n
+
+        for i, m in enumerate(matches):
             raw = m.group(0)
-            # Ayırıcısız, ön eksiz çıplak 10 hane (5xxxxxxxxx): yalnızca operatör kodu (50x-56x, 59x)
-            # uygunsa ve önünde evrak/barkod/dosya no etiketi yoksa telefon sayılır.
-            if re.fullmatch(r'5\d{9}', raw):
-                before = m.string[max(0, m.start() - 40):m.start()]
-                # "...tespit edilen\n5xxxxxxxxx numaralı telefondan": numaranın hemen ardından
-                # 'telefon/GSM/hat' geliyorsa önceki satırdaki 'kayıt/evrak' sözcüğü etiket sayılmaz.
-                after_phone = re.match(r'(?i)\s*(?:numaral[ıi]|nolu|no\'lu)?\s*(?:cep\s*)?(?:telefon|gsm|hat)', m.string[m.end():m.end() + 40])
-                if after_phone:
-                    count += 1
-                    return cls._mask("telefon", raw, registry)
-                if not phone_ctx.search(before):
-                    if raw[1] not in "0123456" and raw[1] != "9":
-                        return raw
-                    if doc_ctx.search(before):
-                        return raw
-            count += 1
-            return cls._mask("telefon", raw, registry)
+            s, e = m.start(), m.end()
+            # "/" ile bitişik (ör. Esas No: 2025/5321234567) asla telefon değildir
+            if (s > 0 and text[s - 1] == "/") or (e < len(text) and text[e] == "/"):
+                excluded[i] = True
+                continue
+            digits = re.sub(r'\D', '', raw)
+            is_bare10 = (
+                len(digits) == 10
+                and digits.startswith("5")
+                and not raw.lstrip().startswith(("0", "+", "90", "("))
+            )
+            if not is_bare10:
+                confirmed[i] = True
+                continue
 
-        redacted = pattern.sub(repl, text)
-        return redacted, count
+            before40 = text[max(0, s - 40):s]
+            if excl_re.search(before40) or re.match(r'^,\d{2}(?!\d)', text[e:e + 4]):
+                excluded[i] = True
+                continue
+
+            # a) Ardından 0–40 karakter içinde numara/telefon/abone/görüşme bağlamı
+            if phone_after_re.search(text[e:e + 40]):
+                confirmed[i] = True
+                continue
+
+            # b) Önünde 0–60 karakter içinde (aynı satır veya bir önceki satır sonu) kayıtlı/tel bağlamı
+            before60 = text[max(0, s - 60):s]
+            before_ctx = "\n".join(before60.split("\n")[-2:])
+            if phone_before_re.search(before_ctx):
+                confirmed[i] = True
+                continue
+
+            # d) Normalize 10 hane registry'de zaten telefon olarak kayıtlı
+            if digits in known_phones:
+                confirmed[i] = True
+                continue
+
+            # c) Satırda tek başına (yalnız boşluk/|/sekme) — diğer telefon varsa veya valid GSM öneki
+            ls = text.rfind("\n", 0, s) + 1
+            le = text.find("\n", e)
+            if le == -1:
+                le = len(text)
+            if re.fullmatch(r'[ \t|\r]*', text[ls:s]) and re.fullmatch(r'[ \t|\r]*', text[e:le]):
+                standalone_bare[i] = True
+
+            # Kesintisiz 10 haneli geçerli operatör kodu (50x-56x, 59x) önek yasağı yoksa kabul edilir
+            if re.fullmatch(r'5\d{9}', raw) and raw[1] in "01234569":
+                confirmed[i] = True
+
+        # e) Virgül veya "ve" ile ayrılmış listede başka eleman telefon olarak maskelendiyse
+        list_sep_re = re.compile(r'^(?:\s*,\s*|\s+ve\s+)$', re.IGNORECASE)
+        changed = True
+        while changed:
+            changed = False
+            for i in range(n - 1):
+                if excluded[i] or excluded[i + 1]:
+                    continue
+                if confirmed[i] != confirmed[i + 1]:
+                    gap = text[matches[i].end():matches[i + 1].start()]
+                    if list_sep_re.match(gap):
+                        confirmed[i] = True
+                        confirmed[i + 1] = True
+                        changed = True
+
+        # c) Satırda tek başına ve aynı belgede en az bir başka telefon maskesi varsa maskele
+        other_confirmed_cnt = sum(1 for c in confirmed if c)
+        if other_confirmed_cnt >= 1:
+            for i in range(n):
+                if standalone_bare[i] and not excluded[i] and not confirmed[i]:
+                    confirmed[i] = True
+
+        out_parts: List[str] = []
+        last_pos = 0
+        count = 0
+        for i, m in enumerate(matches):
+            if not confirmed[i]:
+                continue
+            out_parts.append(text[last_pos:m.start()])
+            out_parts.append(cls._mask("telefon", m.group(0), registry))
+            last_pos = m.end()
+            count += 1
+        out_parts.append(text[last_pos:])
+        return "".join(out_parts), count
 
     @classmethod
     def redact_sicil(cls, text: str, registry: Optional[MaskRegistry] = None) -> Tuple[str, int]:
@@ -1183,6 +1319,11 @@ class UyapRedactor:
         r'(?i)suçun\s+yeri|olay\s+yeri|kaza\s+yeri|olay(?:ın)?\s+meydana|meydana\s+gel|'
         r'\bönünde\b|kavşağ|sıralarında|trafik\s+kazas'
     )
+    # HTS baz istasyonu ve koordinat bağlamı (olay yeri gibi korunur)
+    _ADDR_HTS_RE = re.compile(
+        r'(?i)(?:\bopr\s*:|\b(?:operat[öo]r|baz(?:\s+istasyon\w*)?|BTS|CGI|hücre\w*|LAC)\b)'
+    )
+    _ADDR_COORD_RE = re.compile(r'\b\d{2}\.\d{4,}\s*[-,;]?\s*\d{2}\.\d{4,}\b')
     # Nüfus kayıt şablonu / mahkeme kısaltması / esas no: kişi adresi değildir
     _ADDR_NOT_ADDRESS_RE = re.compile(
         r'(?i)nüfus|\bcilt\b|aile\s*s[ıi]ra|\bnk\.?\s*lu\b|\bBSN\b|doğumlu|oğlu/k[ıi]z[ıi]|'
@@ -1235,12 +1376,14 @@ class UyapRedactor:
             if pl:
                 prev.append(pl)
             pos = ps - 1
-        if cls._ADDR_OLAY_RE.search(line):
+        if cls._ADDR_OLAY_RE.search(line) or cls._ADDR_HTS_RE.search(line) or cls._ADDR_COORD_RE.search(line):
             return "olay"
         if cls._ADDR_PERSON_RE.search(line):
             return "kisi"
         if cls._ADDR_INST_RE.search(line):
             return "kurum"
+        if prev and cls._ADDR_HTS_RE.search(prev[0]):
+            return "olay"
         if any(cls._ADDR_PERSON_RE.search(x) for x in prev):
             return "kisi"
         if prev and cls._ADDR_OLAY_RE.search(prev[0]):
@@ -1251,8 +1394,10 @@ class UyapRedactor:
 
     @classmethod
     def _skip_address(cls, text: str, start: int, end: int, addr: str) -> bool:
-        """Adres maskelenmemeli mi? (kurum/olay yeri, nüfus şablonu, URL, mahkeme kısaltması)"""
+        """Adres maskelenmemeli mi? (kurum/olay yeri/baz istasyonu, nüfus şablonu, URL, mahkeme kısaltması)"""
         if cls._looks_like_url_or_email(addr):
+            return True
+        if cls._ADDR_COORD_RE.search(addr):
             return True
         if cls._ADDR_NOT_ADDRESS_RE.search(addr):
             return True
@@ -1359,6 +1504,8 @@ class UyapRedactor:
             nonlocal count
             addr = m.group('addr')
             if re.search(mask_adres_re, addr) or cls._looks_like_url_or_email(addr):
+                return m.group(0)
+            if cls._ADDR_COORD_RE.search(addr) or cls._address_owner(m.string, m.start('addr'), m.end('addr')) == "olay":
                 return m.group(0)
             # Adresin kendisi nüfus şablonuysa koru (önek "nüfusa kayıtlı" olabilir; adres kişiseldir)
             if re.search(r'(?i)\bcilt\b|aile\s*s[ıi]ra|\bBSN\b', addr):
@@ -1602,6 +1749,35 @@ class UyapRedactor:
         return t, stats
 
     @classmethod
+    def redact_path_segment(
+        cls,
+        segment: str,
+        known_tckns: Optional[Set[str]] = None,
+        registry: Optional[MaskRegistry] = None,
+        is_file: bool = False,
+    ) -> str:
+        """
+        Dosya veya klasör adı parçasındaki TCKN, telefon, IBAN/kart, hesap ve seri no bilgilerini
+        maskeler (adres kuralı uygulanmaz). Dosya adında son uzantı korunur; '/' ve ':' yerine '-' konur.
+        """
+        if not segment:
+            return segment
+        ext = ""
+        body = segment
+        if is_file:
+            stem, raw_ext = os.path.splitext(segment)
+            if stem and raw_ext:
+                body, ext = stem, raw_ext
+
+        t, _ = cls.redact_iban(body, registry=registry)
+        t, _ = cls.redact_account(t, registry=registry)
+        t, _ = cls.redact_seri_no(t, registry=registry)
+        t, _ = cls.redact_tckn(t, known_tckns=known_tckns, registry=registry)
+        t, _ = cls.redact_phone(t, registry=registry)
+        t = t.replace("/", "-").replace(":", "-")
+        return f"{t}{ext}"
+
+    @classmethod
     def redact_file_to_memory(
         cls,
         file_path: str,
@@ -1618,7 +1794,7 @@ class UyapRedactor:
         return cls.redact_text(content, known_tckns=known_tckns, registry=registry)
 
     @classmethod
-    def extract_pdf_raw(cls, pdf_path: str, max_pages: int = 150) -> str:
+    def extract_pdf_raw(cls, pdf_path: str, max_pages: int = 2000) -> str:
         """PDF'i çevrimdışı olarak HAM (maskesiz) metne dönüştürür; yalnızca bellekte kullanılmalıdır."""
         import tempfile
         try:
@@ -1683,7 +1859,7 @@ class UyapRedactor:
     def extract_and_redact_pdf(
         cls,
         pdf_path: str,
-        max_pages: int = 150,
+        max_pages: int = 2000,
         known_tckns: Optional[Set[str]] = None,
         registry: Optional["MaskRegistry"] = None,
     ) -> Tuple[str, Dict[str, int]]:
@@ -1700,7 +1876,7 @@ class UyapRedactor:
 
     @classmethod
     def extract_image_raw(cls, img_path: str) -> str:
-        """Taranmış görseli Apple Vision OCR ile HAM (maskesiz) metne dönüştürür; yalnızca bellekte kullanılmalıdır."""
+        """Taranmış görseli (.tif/.png/.jpg/.heic) Apple Vision OCR ile HAM (maskesiz) metne dönüştürür; yalnızca bellekte kullanılmalıdır."""
         try:
             import Vision
             from Cocoa import NSURL
@@ -1708,33 +1884,34 @@ class UyapRedactor:
             return ""
 
         pages_content = []
+        ext = os.path.splitext(img_path)[1].lower()
 
-        # Çok sayfalı TIFF kontrolü
-        try:
-            from PIL import Image, ImageSequence
-            import tempfile
-            with Image.open(img_path) as im:
-                frames = [f.copy() for f in ImageSequence.Iterator(im)]
-                if len(frames) > 1:
-                    with tempfile.TemporaryDirectory() as tmpdir:
-                        for pno, frame in enumerate(frames[:60]):
-                            frame_path = os.path.join(tmpdir, f"frame_{pno}.png")
-                            frame.convert("RGB").save(frame_path, "PNG")
-                            url = NSURL.fileURLWithPath_(frame_path)
-                            req_h = Vision.VNImageRequestHandler.alloc().initWithURL_options_(url, None)
-                            req = Vision.VNRecognizeTextRequest.alloc().init()
-                            req.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
-                            req.setUsesLanguageCorrection_(True)
-                            req.setRecognitionLanguages_(['tr-TR', 'en-US'])
-                            succ, _ = req_h.performRequests_error_([req], None)
-                            if succ:
-                                lines = [r.topCandidates_(1)[0].string() for r in req.results()]
-                                if lines:
-                                    pages_content.append(f"### Sayfa {pno + 1} (Yerel OCR)\n\n" + "\n".join(lines))
-        except Exception:
-            pass
+        # Çok sayfalı TIFF kontrolü (.heic doğrudan Vision'a gönderilir, PIL ile açılmaz)
+        if ext != ".heic":
+            try:
+                from PIL import Image, ImageSequence
+                with Image.open(img_path) as im:
+                    frames = [f.copy() for f in ImageSequence.Iterator(im)]
+                    if len(frames) > 1:
+                        with tempfile.TemporaryDirectory() as tmpdir:
+                            for pno, frame in enumerate(frames[:60]):
+                                frame_path = os.path.join(tmpdir, f"frame_{pno}.png")
+                                frame.convert("RGB").save(frame_path, "PNG")
+                                url = NSURL.fileURLWithPath_(frame_path)
+                                req_h = Vision.VNImageRequestHandler.alloc().initWithURL_options_(url, None)
+                                req = Vision.VNRecognizeTextRequest.alloc().init()
+                                req.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
+                                req.setUsesLanguageCorrection_(True)
+                                req.setRecognitionLanguages_(['tr-TR', 'en-US'])
+                                succ, _ = req_h.performRequests_error_([req], None)
+                                if succ:
+                                    lines = [r.topCandidates_(1)[0].string() for r in req.results()]
+                                    if lines:
+                                        pages_content.append(f"### Sayfa {pno + 1} (Yerel OCR)\n\n" + "\n".join(lines))
+            except Exception:
+                pass
 
-        # Tek sayfa doğrudan Vision OCR
+        # Tek sayfa (veya .heic) doğrudan Vision OCR
         if not pages_content:
             try:
                 url = NSURL.fileURLWithPath_(img_path)
@@ -1765,7 +1942,7 @@ class UyapRedactor:
         registry: Optional["MaskRegistry"] = None,
     ) -> Tuple[str, Dict[str, int]]:
         """
-        TIFF, PNG, JPEG formatındaki taranmış evrakları Apple Vision OCR ile
+        TIFF, PNG, JPEG, HEIC formatındaki taranmış evrakları Apple Vision OCR ile
         yerel ve çevrimdışı olarak metne dönüştürür ve maskeler.
         """
         full_raw = cls.extract_image_raw(img_path)
@@ -1805,15 +1982,384 @@ class UyapRedactor:
         return text.strip()
 
     @classmethod
+    def extract_word_raw(cls, file_path: str) -> str:
+        """
+        Word (.docx / .doc) belgesinden HAM (maskesiz) düz metin çıkarır; hata durumunda "" döndürür.
+        Önce macOS yerleşik textutil aracını dener; .docx için başarısız olursa zipfile + XML yedeğini kullanır.
+        """
+        ext = os.path.splitext(file_path)[1].lower()
+        if os.path.isfile("/usr/bin/textutil"):
+            try:
+                proc = subprocess.run(
+                    ["/usr/bin/textutil", "-convert", "txt", "-stdout", file_path],
+                    capture_output=True,
+                    timeout=120,
+                )
+                if proc.returncode == 0 and proc.stdout:
+                    text = proc.stdout.decode("utf-8", errors="replace")
+                    text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+                    if text:
+                        return text
+            except Exception:
+                pass
+
+        if ext != ".docx":
+            return ""
+
+        try:
+            with zipfile.ZipFile(file_path, "r") as zf:
+                if "word/document.xml" not in zf.namelist():
+                    return ""
+                xml_bytes = zf.read("word/document.xml")
+            root = ET.fromstring(xml_bytes)
+        except Exception:
+            return ""
+
+        lines: List[str] = []
+
+        def _collect_inline(node: ET.Element, parts: List[str]) -> None:
+            for child in node:
+                local = child.tag.split("}")[-1]
+                if local == "p":
+                    _flush_paragraph(child)
+                elif local == "t":
+                    if child.text:
+                        parts.append(child.text)
+                elif local == "tab":
+                    parts.append("\t")
+                elif local in ("br", "cr"):
+                    parts.append("\n")
+                else:
+                    _collect_inline(child, parts)
+
+        def _flush_paragraph(p_el: ET.Element) -> None:
+            parts: List[str] = []
+            _collect_inline(p_el, parts)
+            line = "".join(parts).replace("\r\n", "\n").replace("\r", "\n")
+            if line:
+                lines.append(line)
+
+        def _walk(node: ET.Element) -> None:
+            for child in node:
+                local = child.tag.split("}")[-1]
+                if local == "p":
+                    _flush_paragraph(child)
+                else:
+                    _walk(child)
+
+        _walk(root)
+        return "\n".join(lines).strip()
+
+    @classmethod
+    def extract_xlsx_raw(cls, file_path: str) -> str:
+        """
+        Excel (.xlsx) dosyasından yalnız standart kütüphane (zipfile + ElementTree) ile
+        HAM (maskesiz) Markdown tabloları çıkarır. Sayıları bilimsel gösterime çevirmeden
+        XML'deki ham dizeyle korur. Hata durumunda "" döndürür.
+        """
+        try:
+            with zipfile.ZipFile(file_path, "r") as zf:
+                names = set(zf.namelist())
+
+                shared_strings: List[str] = []
+                if "xl/sharedStrings.xml" in names:
+                    ss_root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
+                    for si in ss_root:
+                        if si.tag.split("}")[-1] != "si":
+                            continue
+                        parts: List[str] = []
+                        for ch in si:
+                            clocal = ch.tag.split("}")[-1]
+                            if clocal == "t" and ch.text:
+                                parts.append(ch.text)
+                            elif clocal == "r":
+                                for rch in ch:
+                                    if rch.tag.split("}")[-1] == "t" and rch.text:
+                                        parts.append(rch.text)
+                        shared_strings.append("".join(parts))
+
+                rels: Dict[str, str] = {}
+                if "xl/_rels/workbook.xml.rels" in names:
+                    rels_root = ET.fromstring(zf.read("xl/_rels/workbook.xml.rels"))
+                    for rel in rels_root:
+                        if rel.tag.split("}")[-1] != "Relationship":
+                            continue
+                        rid = rel.attrib.get("Id", "")
+                        target = rel.attrib.get("Target", "")
+                        if rid and target:
+                            if target.startswith("/"):
+                                tpath = target.lstrip("/")
+                            else:
+                                tpath = posixpath.normpath(posixpath.join("xl", target))
+                            rels[rid] = tpath
+
+                sheets: List[Tuple[str, str]] = []
+                if "xl/workbook.xml" in names:
+                    wb_root = ET.fromstring(zf.read("xl/workbook.xml"))
+                    for el in wb_root.iter():
+                        if el.tag.split("}")[-1] != "sheet":
+                            continue
+                        sname = el.attrib.get("name") or "Sayfa"
+                        rid = ""
+                        for ak, av in el.attrib.items():
+                            if ak == "r:id" or ak.endswith("}id"):
+                                rid = av
+                                break
+                        spath = rels.get(rid, "")
+                        if spath and spath in names:
+                            sheets.append((sname, spath))
+
+                if not sheets:
+                    for nm in sorted(names):
+                        if nm.startswith("xl/worksheets/sheet") and nm.endswith(".xml"):
+                            sheets.append((os.path.splitext(os.path.basename(nm))[0], nm))
+
+                if not sheets:
+                    return ""
+
+                def _col_index(ref: str) -> Optional[int]:
+                    letters = ""
+                    for ch in ref:
+                        if ch.isalpha():
+                            letters += ch.upper()
+                        else:
+                            break
+                    if not letters:
+                        return None
+                    idx = 0
+                    for ch in letters:
+                        idx = idx * 26 + (ord(ch) - ord("A") + 1)
+                    return idx - 1
+
+                def _clean_cell(val: str) -> str:
+                    s = val.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+                    s = s.replace("|", "\\|")
+                    return s.strip()
+
+                sheet_blocks: List[str] = []
+                for sname, spath in sheets:
+                    try:
+                        s_root = ET.fromstring(zf.read(spath))
+                    except Exception:
+                        continue
+                    rows: List[Dict[int, str]] = []
+                    max_col = -1
+                    for row_el in s_root.iter():
+                        if row_el.tag.split("}")[-1] != "row":
+                            continue
+                        row_cells: Dict[int, str] = {}
+                        next_col = 0
+                        for c_el in row_el:
+                            if c_el.tag.split("}")[-1] != "c":
+                                continue
+                            c_idx = _col_index(c_el.attrib.get("r", ""))
+                            if c_idx is None:
+                                c_idx = next_col
+                            next_col = c_idx + 1
+                            ctype = c_el.attrib.get("t", "")
+                            v_el = None
+                            is_el = None
+                            for child in c_el:
+                                clocal = child.tag.split("}")[-1]
+                                if clocal == "v":
+                                    v_el = child
+                                elif clocal == "is":
+                                    is_el = child
+                            raw_val = ""
+                            if ctype == "s":
+                                if v_el is not None and v_el.text is not None:
+                                    try:
+                                        si_idx = int(v_el.text.strip())
+                                        if 0 <= si_idx < len(shared_strings):
+                                            raw_val = shared_strings[si_idx]
+                                    except Exception:
+                                        raw_val = ""
+                            elif ctype == "inlineStr":
+                                if is_el is not None:
+                                    iparts: List[str] = []
+                                    for sub in is_el.iter():
+                                        if sub.tag.split("}")[-1] == "t" and sub.text:
+                                            iparts.append(sub.text)
+                                    raw_val = "".join(iparts)
+                            elif ctype == "b":
+                                if v_el is not None and v_el.text is not None:
+                                    raw_val = "TRUE" if v_el.text.strip() == "1" else "FALSE"
+                            else:
+                                if v_el is not None and v_el.text is not None:
+                                    raw_val = v_el.text
+
+                            cleaned = _clean_cell(raw_val)
+                            if cleaned:
+                                row_cells[c_idx] = cleaned
+                                if c_idx > max_col:
+                                    max_col = c_idx
+                        if row_cells:
+                            rows.append(row_cells)
+                            if len(rows) >= 20000:
+                                break
+
+                    if not rows or max_col < 0:
+                        continue
+
+                    ncols = max_col + 1
+                    md_lines = [f"## {sname}", ""]
+                    hdr = [rows[0].get(j, "") for j in range(ncols)]
+                    md_lines.append("| " + " | ".join(hdr) + " |")
+                    md_lines.append("| " + " | ".join("---" for _ in range(ncols)) + " |")
+                    for r in rows[1:]:
+                        vals = [r.get(j, "") for j in range(ncols)]
+                        md_lines.append("| " + " | ".join(vals) + " |")
+                    sheet_blocks.append("\n".join(md_lines))
+
+                if not sheet_blocks:
+                    return ""
+                return f"# {os.path.basename(file_path)}\n\n" + "\n\n".join(sheet_blocks)
+        except Exception:
+            return ""
+
+    @classmethod
+    def _extract_archive_safely(
+        cls,
+        archive_path: str,
+        tmp_dir: str,
+        issues: Optional[List[Tuple[str, str]]] = None,
+    ) -> List[str]:
+        """
+        ZIP / EYP arşivini zip-slip, sembolik bağ, şifreli üye ve zip-bomb korumalarıyla
+        yalnız verilen geçici dizin (tmp_dir) altına çıkarır; çıkarılan dosya yollarını döndürür.
+        """
+        extracted: List[str] = []
+        try:
+            os.makedirs(tmp_dir, exist_ok=True)
+            real_tmp = os.path.realpath(tmp_dir)
+        except Exception:
+            if issues is not None:
+                issues.append(("bozuk", ""))
+            return []
+
+        try:
+            with zipfile.ZipFile(archive_path, "r") as zf:
+                total_bytes = 0
+                member_count = 0
+                for info in zf.infolist():
+                    member_count += 1
+                    if member_count > cls.ARCHIVE_MAX_MEMBERS:
+                        if issues is not None:
+                            issues.append(("çok büyük", ""))
+                        break
+
+                    raw_name = info.filename
+                    if not (info.flag_bits & 0x800):
+                        try:
+                            raw_name = raw_name.encode("cp437").decode("cp857")
+                        except Exception:
+                            pass
+                    raw_name = unicodedata.normalize("NFC", raw_name)
+
+                    if info.is_dir() or raw_name.endswith(("/", "\\")):
+                        continue
+
+                    mode = (info.external_attr >> 16) & 0o170000
+                    if stat.S_ISLNK(mode):
+                        continue
+
+                    if info.flag_bits & 0x1:
+                        if issues is not None:
+                            issues.append(("şifreli", raw_name))
+                        continue
+
+                    norm_slash = raw_name.replace("\\", "/")
+                    if norm_slash.startswith("/") or (
+                        len(norm_slash) >= 2 and norm_slash[1] == ":" and norm_slash[0].isalpha()
+                    ):
+                        continue
+                    parts = [p for p in norm_slash.split("/") if p and p != "."]
+                    if not parts or any(p == ".." for p in parts):
+                        continue
+
+                    dest_candidate = os.path.join(real_tmp, *parts)
+                    real_dest = os.path.realpath(dest_candidate)
+                    if real_dest == real_tmp or not cls._is_inside_path(real_dest, real_tmp):
+                        continue
+
+                    if (
+                        info.file_size > cls.ARCHIVE_MAX_FILE_BYTES
+                        or (total_bytes + info.file_size) > cls.ARCHIVE_MAX_TOTAL_BYTES
+                    ):
+                        if issues is not None:
+                            issues.append(("çok büyük", raw_name))
+                        break
+
+                    os.makedirs(os.path.dirname(real_dest), exist_ok=True)
+                    if os.path.islink(os.path.dirname(real_dest)):
+                        continue
+
+                    written = 0
+                    exceeded = False
+                    try:
+                        with zf.open(info, "r") as src_f, open(real_dest, "wb") as out_f:
+                            while True:
+                                chunk = src_f.read(1024 * 1024)
+                                if not chunk:
+                                    break
+                                written += len(chunk)
+                                if (
+                                    written > cls.ARCHIVE_MAX_FILE_BYTES
+                                    or (total_bytes + written) > cls.ARCHIVE_MAX_TOTAL_BYTES
+                                ):
+                                    exceeded = True
+                                    break
+                                out_f.write(chunk)
+                    except RuntimeError:
+                        try:
+                            if os.path.exists(real_dest):
+                                os.remove(real_dest)
+                        except Exception:
+                            pass
+                        if issues is not None:
+                            issues.append(("şifreli", raw_name))
+                        continue
+                    except Exception:
+                        try:
+                            if os.path.exists(real_dest):
+                                os.remove(real_dest)
+                        except Exception:
+                            pass
+                        continue
+
+                    if exceeded:
+                        try:
+                            if os.path.exists(real_dest):
+                                os.remove(real_dest)
+                        except Exception:
+                            pass
+                        if issues is not None:
+                            issues.append(("çok büyük", raw_name))
+                        break
+
+                    total_bytes += written
+                    extracted.append(real_dest)
+        except Exception:
+            if issues is not None:
+                issues.append(("bozuk", ""))
+            return []
+
+        return extracted
+
+    @classmethod
     def extract_scanned_raw(cls, file_path: str) -> str:
-        """PDF, TIFF/görsel veya UDF dosyasının HAM metnini döndürür (uzantıya göre)."""
+        """PDF, TIFF/görsel, Word/Excel veya UDF dosyasının HAM metnini döndürür (uzantıya göre)."""
         ext = os.path.splitext(file_path)[1].lower()
         if ext == ".udf":
             return cls.extract_udf_raw(file_path)
         if ext == ".pdf":
             return cls.extract_pdf_raw(file_path)
-        if ext in (".tif", ".tiff", ".png", ".jpg", ".jpeg"):
+        if ext in (".tif", ".tiff", ".png", ".jpg", ".jpeg", ".heic"):
             return cls.extract_image_raw(file_path)
+        if ext in (".docx", ".doc"):
+            return cls.extract_word_raw(file_path)
+        if ext == ".xlsx":
+            return cls.extract_xlsx_raw(file_path)
         return ""
 
     @classmethod
@@ -1844,7 +2390,77 @@ class UyapRedactor:
         return cls.redact_text(raw, known_tckns=known_tckns, registry=registry)
 
     @classmethod
-    def sync_index_file(cls, index_path: str) -> int:
+    def _resolve_mapped_rel(
+        cls,
+        raw_rel: str,
+        base_dir: str,
+        dest_root: Optional[str] = None,
+        path_map: Optional[Dict[str, str]] = None,
+    ) -> Optional[str]:
+        """
+        Maskeleme nedeniyle adı değişmiş hedef dosya/klasör yolunu (doğrudan eşleme veya
+        etiket joker eşleşmesiyle) diskteki gerçek göreli yola çözer. Bulunamazsa None döner.
+        """
+        if not path_map and not dest_root:
+            return None
+        root_dir = dest_root or base_dir
+        raw_norm = unicodedata.normalize("NFC", urllib.parse.unquote(raw_rel).replace("\\", "/"))
+        probe_keys = [raw_norm]
+        if base_dir != root_dir:
+            try:
+                rel_from_root = unicodedata.normalize(
+                    "NFC",
+                    os.path.relpath(os.path.normpath(os.path.join(base_dir, raw_norm)), root_dir).replace("\\", "/"),
+                )
+                if not rel_from_root.startswith("../"):
+                    probe_keys.append(rel_from_root)
+            except Exception:
+                pass
+        if path_map:
+            for k in probe_keys:
+                mapped = path_map.get(k)
+                if mapped:
+                    abs_p = os.path.join(root_dir, mapped)
+                    if os.path.isfile(abs_p):
+                        return unicodedata.normalize("NFC", os.path.relpath(abs_p, base_dir).replace("\\", "/"))
+
+        # Maske etiketi ([TEL_1], [TCKN_1], ...) taşıyan adayda joker eşleşme dene
+        if cls.MASK_ANY_RE.search(raw_norm):
+            cand_pool: Set[str] = set()
+            if path_map:
+                cand_pool.update(unicodedata.normalize("NFC", v.replace("\\", "/")) for v in path_map.values())
+            for probe in probe_keys:
+                if not cls.MASK_ANY_RE.search(probe):
+                    continue
+                parts = [p for p in probe.split("/") if p and p != "."]
+                pat_parts = []
+                for p in parts:
+                    chunks = cls.MASK_ANY_RE.split(p)
+                    masks = cls.MASK_ANY_RE.findall(p)
+                    if not masks:
+                        pat_parts.append(re.escape(p))
+                    else:
+                        seg_pat = re.escape(chunks[0])
+                        for j, ch in enumerate(chunks[1:]):
+                            seg_pat += r'[^/]+' + re.escape(ch)
+                        pat_parts.append(seg_pat)
+                rx = re.compile("^" + "/".join(pat_parts) + "$")
+                matches = [
+                    c for c in cand_pool
+                    if rx.match(c) and os.path.isfile(os.path.join(root_dir, c))
+                ]
+                if len(matches) == 1:
+                    abs_p = os.path.join(root_dir, matches[0])
+                    return unicodedata.normalize("NFC", os.path.relpath(abs_p, base_dir).replace("\\", "/"))
+        return None
+
+    @classmethod
+    def sync_index_file(
+        cls,
+        index_path: str,
+        path_map: Optional[Dict[str, str]] = None,
+        dest_root: Optional[str] = None,
+    ) -> int:
         """
         Belirtilen tek bir INDEX.md dosyasını tarayarak 'Metin' sütununu diskteki
         güncel .md dosyaları ve karakter sayılarıyla senkronize eder.
@@ -1917,6 +2533,16 @@ class UyapRedactor:
                                 found_md_abs = cand_abs
                                 break
 
+                        if not found_md_abs and (path_map or dest_root):
+                            for cand in base_candidates:
+                                resolved = cls._resolve_mapped_rel(cand, index_dir, dest_root=dest_root, path_map=path_map)
+                                if resolved:
+                                    cand_abs = os.path.join(index_dir, resolved)
+                                    if os.path.isfile(cand_abs):
+                                        found_md_rel = resolved
+                                        found_md_abs = cand_abs
+                                        break
+
                         if found_md_abs and os.path.isfile(found_md_abs):
                             try:
                                 with open(found_md_abs, "r", encoding="utf-8", errors="replace") as mf:
@@ -1956,6 +2582,18 @@ class UyapRedactor:
                         updated_rows += 1
                         return f"[↗](<{rel}>) ({formatted} karakter)"
                     return m.group(0)
+            if path_map or dest_root:
+                resolved = cls._resolve_mapped_rel(rel, index_dir, dest_root=dest_root, path_map=path_map)
+                if resolved:
+                    fp = os.path.join(index_dir, resolved)
+                    try:
+                        with open(fp, "r", encoding="utf-8", errors="replace") as mf:
+                            cnt = len(mf.read())
+                    except Exception:
+                        return m.group(0)
+                    formatted = f"{cnt:,}".replace(",", ".")
+                    updated_rows += 1
+                    return f"[↗](<{resolved}>) ({formatted} karakter)"
             return m.group(0)
 
         joined = re.sub(r'\[↗\]\(<([^>\n]+)>\) \(([\d.]+) karakter\)', repl_count, joined)
@@ -1972,11 +2610,11 @@ class UyapRedactor:
     # ------------------------------------------------------------------
     # Temiz klasör son işlemleri: kopuk görsel/ikili bağlantılar ve OCR kalite denetimi
     # ------------------------------------------------------------------
-    BINARY_LINK_EXTS = (".pdf", ".udf", ".tif", ".tiff", ".png", ".jpg", ".jpeg", ".gif", ".bmp",
+    BINARY_LINK_EXTS = (".pdf", ".udf", ".tif", ".tiff", ".png", ".jpg", ".jpeg", ".heic", ".gif", ".bmp",
                         ".xlsx", ".xls", ".docx", ".doc", ".html", ".htm", ".eml", ".eyp", ".zip", ".rar",
                         # e-yazışma paketi iç dosyaları (imza/mühür/üstveri): temiz klasöre aktarılmaz
                         ".imz", ".xml", ".psmdcp", ".p7s", ".cer", ".sig")
-    IMAGE_LINK_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff")
+    IMAGE_LINK_EXTS = (".png", ".jpg", ".jpeg", ".heic", ".gif", ".bmp", ".tif", ".tiff")
     OCR_MARKER = "Taranmış Belge (Yerel OCR)"
     OCR_WARNING = (
         "> ⚠️ **OCR UYARISI:** Bu taranmış evrak (muhtemelen el yazısı veya düşük kaliteli tarama) "
@@ -2047,10 +2685,16 @@ class UyapRedactor:
         return sorted(flagged)
 
     @classmethod
-    def rewrite_dropped_links(cls, md_path: str) -> bool:
+    def rewrite_dropped_links(
+        cls,
+        md_path: str,
+        path_map: Optional[Dict[str, str]] = None,
+        dest_root: Optional[str] = None,
+    ) -> bool:
         """
         Temiz klasöre aktarılmayan görsel/ikili dosyalara giden Markdown bağlantılarını düzeltir:
         - OCR metni varsa bağlantıyı o .md'ye çevirir,
+        - dosya/klasör adı maskelemesiyle taşınmış hedefleri günceller,
         - yoksa kopuk bağlantıyı düz metne indirger ("görsel aktarılmadı").
         """
         try:
@@ -2075,6 +2719,10 @@ class UyapRedactor:
             low = target.lower()
             if exists_rel(target) or exists_rel(urllib.parse.unquote(target)):
                 return m.group(0)
+            if path_map or dest_root:
+                resolved = cls._resolve_mapped_rel(target, base_dir, dest_root=dest_root, path_map=path_map)
+                if resolved:
+                    return f"{m.group('img')}[{m.group('alt')}](<{resolved}>)"
             if low.endswith(".md"):
                 # Kaynakta da bulunmayan/aktarılmayan .md hedefi (ör. dava-analiz.md içindeki ölü bağlantı)
                 return "—" if m.group('alt') == "↗" else (m.group('alt') or os.path.basename(target))
@@ -2087,6 +2735,11 @@ class UyapRedactor:
                 if exists_rel(cand):
                     label = alt if alt and alt != "↗" else os.path.basename(target)
                     return f"[{label} (OCR metni)](<{cand}>)"
+                if path_map or dest_root:
+                    resolved = cls._resolve_mapped_rel(cand, base_dir, dest_root=dest_root, path_map=path_map)
+                    if resolved:
+                        label = alt if alt and alt != "↗" else os.path.basename(target)
+                        return f"[{label} (OCR metni)](<{resolved}>)"
             if m.group('img') or low.endswith(cls.IMAGE_LINK_EXTS):
                 return f"[görsel aktarılmadı: {alt or os.path.basename(target)}]"
             if alt == "↗":
@@ -2107,7 +2760,7 @@ class UyapRedactor:
         return False
 
     @classmethod
-    def sync_index_md(cls, folder: str) -> int:
+    def sync_index_md(cls, folder: str, path_map: Optional[Dict[str, str]] = None) -> int:
         """
         Verilen dava klasörü altındaki tüm INDEX.md dosyalarını bularak
         otomatik olarak diskteki .md türevleri ve karakter sayılarıyla senkronize eder.
@@ -2125,7 +2778,7 @@ class UyapRedactor:
             for f in files:
                 if f == "INDEX.md":
                     full_index_path = os.path.join(root, f)
-                    total_updated += cls.sync_index_file(full_index_path)
+                    total_updated += cls.sync_index_file(full_index_path, path_map=path_map, dest_root=folder)
 
         return total_updated
 
@@ -2261,6 +2914,9 @@ class UyapRedactor:
             "md_transferred": 0,
             "ocr_converted": 0,
             "udf_converted": 0,
+            "office_converted": 0,
+            "archive_count": 0,
+            "unprocessed": [],
             "index_synced": 0,
             "total_files": 0,
             "total_work": 0,
@@ -2274,52 +2930,13 @@ class UyapRedactor:
             for k in cls.STAT_KEYS:
                 grand_stats[k] += st.get(k, 0)
 
-        # 0. Klasör genelinde bilinen TCKN setini (known_tckns) topla (2 aşamalı hafıza)
-        known_tckns = cls.collect_known_tckns_from_folder(src_folder)
-        # Tek, yalnızca bellekte tutulan etiket kaydı: tüm belgelerde aynı değer = aynı etiket
-        registry = MaskRegistry(known_tckns)
+        unprocessed_items: List[Tuple[str, str]] = []
+        archive_doc_items: List[Tuple[str, str, str, str, str]] = []
+        archive_tmp_root = os.path.realpath(tempfile.mkdtemp(prefix="uyap_arsiv_"))
 
-        # 1. Mevcut Markdown ve Metin Belgelerini Topla (determinizm için sıralı)
-        md_files = []
-        for root, dirs, files in os.walk(src_folder):
-            if cls._is_skipped_dir(root, src_folder, cls.SKIP_DIRS) or _is_dest_subtree(root):
-                dirs[:] = []
-                continue
-            dirs[:] = sorted(
-                d for d in dirs
-                if not cls._is_skipped_dir(os.path.join(root, d), src_folder, cls.SKIP_DIRS)
-                and not _is_dest_subtree(os.path.join(root, d))
-            )
-            for f in sorted(files):
-                if f.endswith((".md", ".txt")) and not f.endswith(".bak"):
-                    md_files.append(os.path.join(root, f))
-        md_files.sort(key=lambda p: unicodedata.normalize("NFC", os.path.relpath(p, src_folder)))
-
-        grand_stats["total_files"] = len(md_files)
-        grand_stats["total_work"] = len(md_files)
-
-        def _udf_has_derivative(
-            full_p: str, clean_rel: str, target_dest_md: str, check_clean_src: bool = False
-        ) -> bool:
-            """UDF'nin Yargı PRO .md/.udf.md türevinin kaynakta veya hedefte (>=50 bayt) olup olmadığını döndürür."""
-            candidates = [
-                target_dest_md,
-                os.path.join(dest_folder, clean_rel + ".md"),
-                os.path.splitext(full_p)[0] + ".md",
-                full_p + ".md",
-            ]
-            if check_clean_src:
-                clean_no_ext = os.path.splitext(clean_rel)[0]
-                candidates.append(os.path.join(src_folder, clean_no_ext + ".md"))
-                candidates.append(os.path.join(src_folder, clean_rel + ".md"))
-            return any(os.path.exists(c) and os.path.getsize(c) >= 50 for c in candidates)
-
-        def _collect_step2_files(
-            exts: Tuple[str, ...], check_clean_src: bool = False
-        ) -> List[Tuple[str, str, str, str]]:
-            """Adım 2 (ve ön tarama) için taranacak PDF/TIFF/görsel/UDF listesini deterministik sırayla toplar."""
-            items: List[Tuple[str, str, str, str]] = []
-            # Not: Bu tarama _kaynak/ dizinini BİLEREK tarar (orijinal PDF/TIFF/UDF'ler oradadır)
+        try:
+            # 0a. Arşivleri (.eyp / .zip) güvenli şekilde geçici dizine aç
+            archive_sources: List[Tuple[str, str, str]] = []
             for root, dirs, files in os.walk(src_folder):
                 if cls._is_skipped_dir(root, src_folder, cls.SKIP_DIRS_OCR) or _is_dest_subtree(root):
                     dirs[:] = []
@@ -2331,128 +2948,510 @@ class UyapRedactor:
                 )
                 for f in sorted(files):
                     ext = os.path.splitext(f)[1].lower()
-                    if ext not in exts:
+                    if ext in cls.ARCHIVE_EXTS:
+                        full_p = os.path.join(root, f)
+                        rel_p = os.path.relpath(full_p, src_folder)
+                        archive_sources.append((full_p, rel_p, ext))
+            archive_sources.sort(key=lambda x: unicodedata.normalize("NFC", x[1]))
+
+            def _record_archive_issues(
+                arc_rel: str, arc_issues: List[Tuple[str, str]], has_extracted: bool
+            ) -> bool:
+                """Arşiv sorunlarını unprocessed_items'a yazar; arşiv geçersiz/tümüyle şifreli ise False döner."""
+                if any(k == "bozuk" for k, _ in arc_issues):
+                    unprocessed_items.append((arc_rel, "metin çıkarılamadı"))
+                    return False
+                enc_members = [m for k, m in arc_issues if k == "şifreli"]
+                if enc_members:
+                    if not has_extracted:
+                        unprocessed_items.append((arc_rel, "işlenemedi (şifreli)"))
+                        return False
+                    for m in enc_members:
+                        unprocessed_items.append((f"{arc_rel}/{m}" if m else arc_rel, "işlenemedi (şifreli)"))
+                if any(k == "çok büyük" for k, _ in arc_issues):
+                    unprocessed_items.append((arc_rel, "işlenemedi (çok büyük)"))
+                return True
+
+            def _collect_extracted_archive_items(
+                arc_tmp: str,
+                arc_rel: str,
+                arc_dest_rel: str,
+                is_eyp: bool,
+                allow_nested_zip: bool,
+            ) -> None:
+                for ef_path in sorted(
+                    extracted_map[arc_tmp],
+                    key=lambda p: unicodedata.normalize("NFC", os.path.relpath(p, arc_tmp)),
+                ):
+                    inner_rel = unicodedata.normalize("NFC", os.path.relpath(ef_path, arc_tmp))
+                    inner_base = os.path.basename(inner_rel)
+                    inner_ext = os.path.splitext(inner_base)[1].lower()
+                    inner_parts = inner_rel.split(os.sep)
+
+                    if (
+                        "__MACOSX" in inner_parts
+                        or inner_base in cls.IGNORED_BASENAMES
+                        or inner_base.startswith("._")
+                        or inner_ext == ".bak"
+                        or inner_ext in cls.IGNORED_SIG_EXTS
+                    ):
+                        continue
+
+                    if is_eyp and (
+                        inner_base == "[Content_Types].xml"
+                        or "_rels" in inner_parts
+                        or inner_ext in cls.EYP_META_EXTS
+                    ):
+                        continue
+
+                    if inner_ext in cls.ARCHIVE_EXTS:
+                        if allow_nested_zip and inner_ext == ".zip":
+                            n_tmp = os.path.realpath(tempfile.mkdtemp(prefix="narc_", dir=archive_tmp_root))
+                            n_issues: List[Tuple[str, str]] = []
+                            n_extracted = cls._extract_archive_safely(ef_path, n_tmp, issues=n_issues)
+                            n_rel = f"{arc_rel}/{inner_rel}"
+                            if _record_archive_issues(n_rel, n_issues, bool(n_extracted)):
+                                grand_stats["archive_count"] += 1
+                                extracted_map[n_tmp] = n_extracted
+                                n_dest_rel = os.path.join(
+                                    arc_dest_rel, f"{os.path.splitext(inner_rel)[0]} (ZIP)"
+                                )
+                                _collect_extracted_archive_items(
+                                    n_tmp, n_rel, n_dest_rel, is_eyp=False, allow_nested_zip=False
+                                )
+                        else:
+                            unprocessed_items.append((f"{arc_rel}/{inner_rel}", "iç içe arşiv"))
+                        continue
+
+                    if (
+                        inner_ext in (".md", ".txt")
+                        or inner_ext in cls.TEXT_DOC_EXTS
+                        or inner_ext in cls.OCR_DOC_EXTS
+                    ):
+                        out_rel = (
+                            inner_rel
+                            if inner_ext in (".md", ".txt")
+                            else os.path.splitext(inner_rel)[0] + ".md"
+                        )
+                        disp_rel = os.path.join(arc_dest_rel, out_rel)
+                        archive_doc_items.append(
+                            (ef_path, disp_rel, "", inner_ext, f"{arc_rel}/{inner_rel}")
+                        )
+                    else:
+                        reason = (
+                            f"desteklenmeyen tür ({inner_ext})"
+                            if inner_ext
+                            else "desteklenmeyen tür (uzantısız)"
+                        )
+                        unprocessed_items.append((f"{arc_rel}/{inner_rel}", reason))
+
+            extracted_map: Dict[str, List[str]] = {}
+            for full_p, rel_p, ext in archive_sources:
+                clean_rel = rel_p[len("_kaynak/"):] if rel_p.startswith("_kaynak/") else rel_p
+                arc_tag = "(EYP)" if ext == ".eyp" else "(ZIP)"
+                arc_dest_rel = f"{os.path.splitext(clean_rel)[0]} {arc_tag}"
+                arc_sub_tmp = os.path.realpath(tempfile.mkdtemp(prefix="arc_", dir=archive_tmp_root))
+                arc_issues: List[Tuple[str, str]] = []
+                extracted = cls._extract_archive_safely(full_p, arc_sub_tmp, issues=arc_issues)
+                if _record_archive_issues(rel_p, arc_issues, bool(extracted)):
+                    grand_stats["archive_count"] += 1
+                    extracted_map[arc_sub_tmp] = extracted
+                    _collect_extracted_archive_items(
+                        arc_sub_tmp,
+                        rel_p,
+                        arc_dest_rel,
+                        is_eyp=(ext == ".eyp"),
+                        allow_nested_zip=(ext == ".eyp"),
+                    )
+
+            # 0. Klasör genelinde bilinen TCKN setini (known_tckns) topla (2 aşamalı hafıza)
+            known_tckns = cls.collect_known_tckns_from_folder(src_folder, include_archives=False)
+            for ef_path, _, _, inner_ext, _ in archive_doc_items:
+                if inner_ext in (".md", ".txt") or inner_ext in cls.TEXT_DOC_EXTS:
+                    txt = cls._extract_non_ocr_text(ef_path, inner_ext)
+                    if txt:
+                        known_tckns.update(cls.collect_known_tckns_from_text(txt))
+
+            # Tek, yalnızca bellekte tutulan etiket kaydı: tüm belgelerde aynı değer = aynı etiket
+            registry = MaskRegistry(known_tckns)
+
+            # 1. Mevcut Markdown ve Metin Belgelerini Topla (determinizm için sıralı)
+            md_files = []
+            for root, dirs, files in os.walk(src_folder):
+                if cls._is_skipped_dir(root, src_folder, cls.SKIP_DIRS) or _is_dest_subtree(root):
+                    dirs[:] = []
+                    continue
+                dirs[:] = sorted(
+                    d for d in dirs
+                    if not cls._is_skipped_dir(os.path.join(root, d), src_folder, cls.SKIP_DIRS)
+                    and not _is_dest_subtree(os.path.join(root, d))
+                )
+                for f in sorted(files):
+                    if f.endswith((".md", ".txt")) and not f.endswith(".bak"):
+                        md_files.append(os.path.join(root, f))
+            md_files.sort(key=lambda p: unicodedata.normalize("NFC", os.path.relpath(p, src_folder)))
+
+            grand_stats["total_files"] = len(md_files)
+            grand_stats["total_work"] = len(md_files)
+
+            dir_seg_cache: Dict[Tuple[str, str], str] = {}
+            used_dir_names: Dict[str, Dict[str, str]] = {}
+            rel_path_cache: Dict[str, str] = {}
+            used_file_names: Dict[str, Dict[str, str]] = {}
+            path_map: Dict[str, str] = {}
+
+            def _sanitize_seg(seg: str) -> str:
+                seg = seg.replace("/", "-").replace(":", "-").strip()
+                return seg or "belge"
+
+            def _masked_rel_path(rel: str, is_dir: bool = False) -> str:
+                """Göreli klasör/dosya yolundaki kişisel verileri (adres hariç) tutarlı ve çakışmasız maskeler."""
+                rel_nfc = unicodedata.normalize("NFC", rel.replace("\\", "/")).strip("/")
+                if not rel_nfc or rel_nfc == ".":
+                    return ""
+                cache_key = ("D:" if is_dir else "F:") + rel_nfc
+                if cache_key in rel_path_cache:
+                    return rel_path_cache[cache_key]
+
+                parts = [p for p in rel_nfc.split("/") if p and p != "."]
+                masked_parts: List[str] = []
+                parent_key = ""
+                for idx, seg in enumerate(parts):
+                    leaf_file = (not is_dir) and (idx == len(parts) - 1)
+                    if not leaf_file:
+                        d_key = (parent_key, seg)
+                        if d_key in dir_seg_cache:
+                            m_seg = dir_seg_cache[d_key]
+                        else:
+                            cand = _sanitize_seg(
+                                cls.redact_path_segment(seg, known_tckns=known_tckns, registry=registry, is_file=False)
+                            )
+                            used = used_dir_names.setdefault(parent_key, {})
+                            m_seg = cand
+                            n_idx = 2
+                            while m_seg.lower() in used and used[m_seg.lower()] != seg:
+                                m_seg = f"{cand} ({n_idx})"
+                                n_idx += 1
+                            used[m_seg.lower()] = seg
+                            dir_seg_cache[d_key] = m_seg
+                        masked_parts.append(m_seg)
+                        parent_key = "/".join(masked_parts)
+                    else:
+                        cand = _sanitize_seg(
+                            cls.redact_path_segment(seg, known_tckns=known_tckns, registry=registry, is_file=True)
+                        )
+                        stem, ext = os.path.splitext(cand)
+                        if not stem and ext.startswith("."):
+                            stem, ext = ext, ""
+                        used = used_file_names.setdefault(parent_key, {})
+                        m_seg = cand
+                        n_idx = 2
+                        while m_seg.lower() in used and used[m_seg.lower()] != rel_nfc:
+                            m_seg = f"{stem} ({n_idx}){ext}"
+                            n_idx += 1
+                        used[m_seg.lower()] = rel_nfc
+                        masked_parts.append(m_seg)
+
+                result = os.path.join(*masked_parts) if masked_parts else ""
+                rel_path_cache[cache_key] = result
+                path_map[rel_nfc] = result
+                return result
+
+            def _udf_has_derivative(
+                full_p: str, clean_rel: str, target_dest_md: str, check_clean_src: bool = False
+            ) -> bool:
+                """Metin tabanlı (.udf/.docx/.doc/.xlsx) belgenin .md/.<ext>.md türevinin (>=50 bayt) varlığını kontrol eder."""
+                clean_md_nfc = unicodedata.normalize("NFC", (clean_rel + ".md").replace("\\", "/"))
+                mapped_clean_md = rel_path_cache.get("F:" + clean_md_nfc, clean_rel + ".md")
+                candidates = [
+                    target_dest_md,
+                    os.path.join(dest_folder, mapped_clean_md),
+                    os.path.join(dest_folder, clean_rel + ".md"),
+                    os.path.splitext(full_p)[0] + ".md",
+                    full_p + ".md",
+                ]
+                if check_clean_src:
+                    clean_no_ext = os.path.splitext(clean_rel)[0]
+                    candidates.append(os.path.join(src_folder, clean_no_ext + ".md"))
+                    candidates.append(os.path.join(src_folder, clean_rel + ".md"))
+                return any(os.path.exists(c) and os.path.getsize(c) >= 50 for c in candidates)
+
+            def _collect_step2_files(
+                exts: Tuple[str, ...], check_clean_src: bool = False, use_masked_dest: bool = False
+            ) -> List[Tuple[str, str, str, str]]:
+                """Adım 2 (ve ön tarama) için taranacak PDF/TIFF/görsel/UDF/Office listesini deterministik sırayla toplar."""
+                items: List[Tuple[str, str, str, str]] = []
+                # Not: Bu tarama _kaynak/ dizinini BİLEREK tarar (orijinal belgeler oradadır)
+                for root, dirs, files in os.walk(src_folder):
+                    if cls._is_skipped_dir(root, src_folder, cls.SKIP_DIRS_OCR) or _is_dest_subtree(root):
+                        dirs[:] = []
+                        continue
+                    dirs[:] = sorted(
+                        d for d in dirs
+                        if not cls._is_skipped_dir(os.path.join(root, d), src_folder, cls.SKIP_DIRS_OCR)
+                        and not _is_dest_subtree(os.path.join(root, d))
+                    )
+                    for f in sorted(files):
+                        ext = os.path.splitext(f)[1].lower()
+                        if ext not in exts:
+                            continue
+                        full_p = os.path.join(root, f)
+                        rel_p = os.path.relpath(full_p, src_folder)
+                        clean_rel = rel_p[len("_kaynak/"):] if rel_p.startswith("_kaynak/") else rel_p
+                        base_rel = os.path.splitext(clean_rel)[0] + ".md"
+                        out_rel = _masked_rel_path(base_rel) if use_masked_dest else base_rel
+                        if use_masked_dest:
+                            path_map[unicodedata.normalize("NFC", clean_rel.replace("\\", "/"))] = out_rel
+                            if rel_p != clean_rel:
+                                path_map[unicodedata.normalize("NFC", rel_p.replace("\\", "/"))] = out_rel
+                        target_dest_md = os.path.join(dest_folder, out_rel)
+
+                        if ext in cls.TEXT_DOC_EXTS:
+                            if not _udf_has_derivative(full_p, clean_rel, target_dest_md, check_clean_src=check_clean_src):
+                                items.append((full_p, base_rel, target_dest_md, ext))
+                        else:
+                            # Eğer hedef klasörde bu evrakın .md metni henüz yoksa veya 50 karakterden kısaysa
+                            if not os.path.exists(target_dest_md) or os.path.getsize(target_dest_md) < 50:
+                                items.append((full_p, base_rel, target_dest_md, ext))
+                items.sort(key=lambda x: unicodedata.normalize("NFC", x[1]))
+                return items
+
+            pre_text_files = _collect_step2_files(cls.TEXT_DOC_EXTS, check_clean_src=True)
+
+            # 1a. Ön tarama (yalnızca bellekte): bağlamıyla tespit edilen hesap/sicil numaralarını öğren;
+            # böylece aynı numara başka belgede bağlamsız geçtiğinde de aynı etiketle maskelenir.
+            learn = MaskRegistry(known_tckns)
+            for file_path in md_files:
+                try:
+                    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                        cls.redact_text(f.read(), known_tckns=known_tckns, registry=learn)
+                except Exception:
+                    pass
+            for doc_path, _, _, doc_ext in pre_text_files:
+                try:
+                    raw_doc = cls._extract_non_ocr_text(doc_path, doc_ext)
+                    if raw_doc:
+                        cls.redact_text(raw_doc, known_tckns=known_tckns, registry=learn)
+                except Exception:
+                    pass
+            for ef_path, _, _, inner_ext, _ in archive_doc_items:
+                if inner_ext in (".md", ".txt") or inner_ext in cls.TEXT_DOC_EXTS:
+                    try:
+                        raw_arc = cls._extract_non_ocr_text(ef_path, inner_ext)
+                        if raw_arc:
+                            cls.redact_text(raw_arc, known_tckns=known_tckns, registry=learn)
+                    except Exception:
+                        pass
+            registry.seed("hesap", learn.known_values("hesap", min_len=7))
+            registry.seed("sicil", learn.known_values("sicil", min_len=5))
+            del learn
+
+            for file_path in md_files:
+                rel_path = os.path.relpath(file_path, src_folder)
+                masked_rel = _masked_rel_path(rel_path)
+                dest_path = os.path.join(dest_folder, masked_rel)
+                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+
+                try:
+                    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                        content = f.read()
+
+                    redacted_text, stats = cls.redact_text(content, known_tckns=known_tckns, registry=registry)
+                    _add(stats)
+
+                    with open(dest_path, "w", encoding="utf-8") as wf:
+                        wf.write(redacted_text)
+
+                    grand_stats["md_transferred"] += 1
+                    grand_stats["processed_items"] += 1
+                    grand_stats["last_file_stats"] = stats
+                    grand_stats["last_file_path"] = masked_rel
+                    if progress_cb:
+                        progress_cb("md", masked_rel, grand_stats)
+                except Exception as e:
+                    if progress_cb:
+                        progress_cb("error", f"{masked_rel}: {str(e)}", grand_stats)
+
+            # 2. Taranmış Evrakları (PDF/TIFF/HEIC) ve Çıplak UDF/Word/Excel Belgelerini İşle
+            scanned_files = _collect_step2_files(cls.OCR_DOC_EXTS + cls.TEXT_DOC_EXTS, use_masked_dest=True)
+
+            grand_stats["total_work"] = len(md_files) + len(scanned_files) + len(archive_doc_items)
+
+            ocr_converted_list = []
+            for full_p, base_rel, target_dest_md, ext in scanned_files:
+                rel_p = os.path.relpath(full_p, src_folder)
+                masked_base_rel = _masked_rel_path(base_rel)
+                try:
+                    if ext in cls.TEXT_DOC_EXTS:
+                        raw = cls._extract_non_ocr_text(full_p, ext)
+                        if raw:
+                            red_text, p_stats = cls.redact_text(raw, known_tckns=known_tckns, registry=registry)
+                        else:
+                            red_text, p_stats = "", cls._empty_stats()
+                    else:
+                        raw_cache_path = os.path.join(ocr_cache_dir, base_rel) if ocr_cache_dir else None
+                        red_text, p_stats = cls.extract_and_redact_scanned_file(
+                            full_p, known_tckns=known_tckns, registry=registry, raw_cache_path=raw_cache_path
+                        )
+                    grand_stats["processed_items"] += 1
+                    grand_stats["last_file_stats"] = p_stats
+                    grand_stats["last_file_path"] = masked_base_rel
+
+                    if len(red_text.strip()) > 50:
+                        os.makedirs(os.path.dirname(target_dest_md), exist_ok=True)
+                        with open(target_dest_md, "w", encoding="utf-8") as wf:
+                            wf.write(red_text)
+                        _add(p_stats)
+                        grand_stats["md_transferred"] += 1
+                        if ext == ".udf":
+                            grand_stats["udf_converted"] += 1
+                            if progress_cb:
+                                progress_cb("md", masked_base_rel, grand_stats)
+                        elif ext in cls.OFFICE_DOC_EXTS:
+                            grand_stats["office_converted"] += 1
+                            if progress_cb:
+                                progress_cb("md", masked_base_rel, grand_stats)
+                        else:
+                            grand_stats["ocr_converted"] += 1
+                            ocr_converted_list.append(masked_base_rel)
+                            if progress_cb:
+                                progress_cb("ocr", masked_base_rel, grand_stats)
+                    else:
+                        unprocessed_items.append((_masked_rel_path(rel_p), "metin çıkarılamadı"))
+                except Exception as oe:
+                    grand_stats["processed_items"] += 1
+                    unprocessed_items.append((_masked_rel_path(rel_p), "metin çıkarılamadı"))
+                    if progress_cb:
+                        err_label = (
+                            "UDF Hatası"
+                            if ext == ".udf"
+                            else ("Office Hatası" if ext in cls.OFFICE_DOC_EXTS else "OCR Hatası")
+                        )
+                        progress_cb("error", f"{err_label} ({os.path.basename(masked_base_rel)}): {str(oe)}", grand_stats)
+
+            # 2b. Arşiv içi belgeleri işle
+            for ef_path, disp_rel, _unused_target, inner_ext, src_disp_rel in archive_doc_items:
+                masked_disp_rel = _masked_rel_path(disp_rel)
+                target_dest = os.path.join(dest_folder, masked_disp_rel)
+                masked_src_disp_rel = _masked_rel_path(src_disp_rel)
+                try:
+                    if inner_ext in (".md", ".txt"):
+                        with open(ef_path, "r", encoding="utf-8", errors="replace") as rf:
+                            raw_txt = rf.read()
+                        red_text, p_stats = cls.redact_text(raw_txt, known_tckns=known_tckns, registry=registry)
+                        os.makedirs(os.path.dirname(target_dest), exist_ok=True)
+                        with open(target_dest, "w", encoding="utf-8") as wf:
+                            wf.write(red_text)
+                        _add(p_stats)
+                        grand_stats["md_transferred"] += 1
+                        grand_stats["processed_items"] += 1
+                        grand_stats["last_file_stats"] = p_stats
+                        grand_stats["last_file_path"] = masked_disp_rel
+                        if progress_cb:
+                            progress_cb("md", masked_disp_rel, grand_stats)
+                        continue
+
+                    if os.path.exists(target_dest) and os.path.getsize(target_dest) >= 50:
+                        grand_stats["processed_items"] += 1
+                        continue
+
+                    if inner_ext in cls.TEXT_DOC_EXTS:
+                        raw = cls._extract_non_ocr_text(ef_path, inner_ext)
+                        if raw:
+                            red_text, p_stats = cls.redact_text(raw, known_tckns=known_tckns, registry=registry)
+                        else:
+                            red_text, p_stats = "", cls._empty_stats()
+                    else:
+                        raw_cache_path = os.path.join(ocr_cache_dir, disp_rel) if ocr_cache_dir else None
+                        red_text, p_stats = cls.extract_and_redact_scanned_file(
+                            ef_path, known_tckns=known_tckns, registry=registry, raw_cache_path=raw_cache_path
+                        )
+
+                    grand_stats["processed_items"] += 1
+                    grand_stats["last_file_stats"] = p_stats
+                    grand_stats["last_file_path"] = masked_disp_rel
+
+                    if len(red_text.strip()) > 50:
+                        os.makedirs(os.path.dirname(target_dest), exist_ok=True)
+                        with open(target_dest, "w", encoding="utf-8") as wf:
+                            wf.write(red_text)
+                        _add(p_stats)
+                        grand_stats["md_transferred"] += 1
+                        if inner_ext == ".udf":
+                            grand_stats["udf_converted"] += 1
+                            if progress_cb:
+                                progress_cb("md", masked_disp_rel, grand_stats)
+                        elif inner_ext in cls.OFFICE_DOC_EXTS:
+                            grand_stats["office_converted"] += 1
+                            if progress_cb:
+                                progress_cb("md", masked_disp_rel, grand_stats)
+                        else:
+                            grand_stats["ocr_converted"] += 1
+                            ocr_converted_list.append(masked_disp_rel)
+                            if progress_cb:
+                                progress_cb("ocr", masked_disp_rel, grand_stats)
+                    else:
+                        unprocessed_items.append((masked_src_disp_rel, "metin çıkarılamadı"))
+                except Exception as ae:
+                    grand_stats["processed_items"] += 1
+                    unprocessed_items.append((masked_src_disp_rel, "metin çıkarılamadı"))
+                    if progress_cb:
+                        progress_cb("error", f"Arşiv belgesi ({masked_src_disp_rel}): {str(ae)}", grand_stats)
+
+            # 3. Yargı PRO Manifest JSON Dosyalarını Değer Bazında Maskeleyerek Aktar
+            # (AGENTS.md ve kök seviyedeki dosya-bilgileri.md / safahat.md / dava-analiz.md
+            #  1. adımda zaten maskelenerek aktarılır; burada maskesiz kopyalanmaz / çift sayılmaz.)
+            for meta_name in cls.META_JSON_NAMES:
+                meta_src = os.path.join(src_folder, meta_name)
+                masked_meta_name = _masked_rel_path(meta_name)
+                meta_dest = os.path.join(dest_folder, masked_meta_name)
+                if os.path.isfile(meta_src):
+                    try:
+                        j_stats = cls.redact_json_file(meta_src, meta_dest, known_tckns=known_tckns, registry=registry)
+                        _add(j_stats)
+                    except Exception as je:
+                        if progress_cb:
+                            progress_cb("error", f"{masked_meta_name}: {str(je)}", grand_stats)
+
+            # 3b. Kaynak klasörde hiçbir adımda işlenmeyen desteklenmeyen dosyaları topla
+            handled_exts = (".md", ".txt") + cls.TEXT_DOC_EXTS + cls.OCR_DOC_EXTS + cls.ARCHIVE_EXTS
+            for root, dirs, files in os.walk(src_folder):
+                if cls._is_skipped_dir(root, src_folder, cls.SKIP_DIRS_OCR) or _is_dest_subtree(root):
+                    dirs[:] = []
+                    continue
+                dirs[:] = sorted(
+                    d for d in dirs
+                    if not cls._is_skipped_dir(os.path.join(root, d), src_folder, cls.SKIP_DIRS_OCR)
+                    and not _is_dest_subtree(os.path.join(root, d))
+                )
+                for f in sorted(files):
+                    ext = os.path.splitext(f)[1].lower()
+                    if (
+                        f in cls.IGNORED_BASENAMES
+                        or f.startswith("._")
+                        or ext == ".bak"
+                        or ext in cls.IGNORED_SIG_EXTS
+                        or f in cls.META_JSON_NAMES
+                        or ext in handled_exts
+                    ):
                         continue
                     full_p = os.path.join(root, f)
                     rel_p = os.path.relpath(full_p, src_folder)
-                    clean_rel = rel_p[len("_kaynak/"):] if rel_p.startswith("_kaynak/") else rel_p
-                    base_rel = os.path.splitext(clean_rel)[0] + ".md"
-                    target_dest_md = os.path.join(dest_folder, base_rel)
+                    reason = f"desteklenmeyen tür ({ext})" if ext else "desteklenmeyen tür (uzantısız)"
+                    unprocessed_items.append((rel_p, reason))
 
-                    if ext == ".udf":
-                        if not _udf_has_derivative(full_p, clean_rel, target_dest_md, check_clean_src=check_clean_src):
-                            items.append((full_p, base_rel, target_dest_md, ext))
-                    else:
-                        # Eğer hedef klasörde bu evrakın .md metni henüz yoksa veya 50 karakterden kısaysa
-                        if not os.path.exists(target_dest_md) or os.path.getsize(target_dest_md) < 50:
-                            items.append((full_p, base_rel, target_dest_md, ext))
-            items.sort(key=lambda x: unicodedata.normalize("NFC", x[1]))
-            return items
-
-        pre_udf_files = _collect_step2_files((".udf",), check_clean_src=True)
-
-        # 1a. Ön tarama (yalnızca bellekte): bağlamıyla tespit edilen hesap/sicil numaralarını öğren;
-        # böylece aynı numara başka belgede bağlamsız geçtiğinde de aynı etiketle maskelenir.
-        learn = MaskRegistry(known_tckns)
-        for file_path in md_files:
-            try:
-                with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-                    cls.redact_text(f.read(), known_tckns=known_tckns, registry=learn)
-            except Exception:
-                pass
-        for udf_path, _, _, _ in pre_udf_files:
-            try:
-                udf_raw = cls.extract_udf_raw(udf_path)
-                if udf_raw:
-                    cls.redact_text(udf_raw, known_tckns=known_tckns, registry=learn)
-            except Exception:
-                pass
-        registry.seed("hesap", learn.known_values("hesap", min_len=7))
-        registry.seed("sicil", learn.known_values("sicil", min_len=5))
-        del learn
-
-        for file_path in md_files:
-            rel_path = os.path.relpath(file_path, src_folder)
-            dest_path = os.path.join(dest_folder, rel_path)
-            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-
-            try:
-                with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-                    content = f.read()
-
-                redacted_text, stats = cls.redact_text(content, known_tckns=known_tckns, registry=registry)
-                _add(stats)
-
-                with open(dest_path, "w", encoding="utf-8") as wf:
-                    wf.write(redacted_text)
-
-                grand_stats["md_transferred"] += 1
-                grand_stats["processed_items"] += 1
-                grand_stats["last_file_stats"] = stats
-                grand_stats["last_file_path"] = rel_path
-                if progress_cb:
-                    progress_cb("md", rel_path, grand_stats)
-            except Exception as e:
-                if progress_cb:
-                    progress_cb("error", f"{rel_path}: {str(e)}", grand_stats)
-
-        # 2. Taranmış Evrakları (PDF/TIFF) ve Çıplak UYAP UDF Belgelerini İşle
-        scanned_files = _collect_step2_files((".pdf", ".tif", ".tiff", ".png", ".jpg", ".jpeg", ".udf"))
-
-        grand_stats["total_work"] = len(md_files) + len(scanned_files)
-
-        ocr_converted_list = []
-        for full_p, base_rel, target_dest_md, ext in scanned_files:
-            try:
-                if ext == ".udf":
-                    raw = cls.extract_udf_raw(full_p)
-                    if raw:
-                        red_text, p_stats = cls.redact_text(raw, known_tckns=known_tckns, registry=registry)
-                    else:
-                        red_text, p_stats = "", cls._empty_stats()
-                else:
-                    raw_cache_path = os.path.join(ocr_cache_dir, base_rel) if ocr_cache_dir else None
-                    red_text, p_stats = cls.extract_and_redact_scanned_file(
-                        full_p, known_tckns=known_tckns, registry=registry, raw_cache_path=raw_cache_path
-                    )
-                grand_stats["processed_items"] += 1
-                grand_stats["last_file_stats"] = p_stats
-                grand_stats["last_file_path"] = base_rel
-
-                if len(red_text.strip()) > 50:
-                    os.makedirs(os.path.dirname(target_dest_md), exist_ok=True)
-                    with open(target_dest_md, "w", encoding="utf-8") as wf:
-                        wf.write(red_text)
-                    _add(p_stats)
-                    grand_stats["md_transferred"] += 1
-                    if ext == ".udf":
-                        grand_stats["udf_converted"] += 1
-                        if progress_cb:
-                            progress_cb("md", base_rel, grand_stats)
-                    else:
-                        grand_stats["ocr_converted"] += 1
-                        ocr_converted_list.append(base_rel)
-                        if progress_cb:
-                            progress_cb("ocr", base_rel, grand_stats)
-            except Exception as oe:
-                grand_stats["processed_items"] += 1
-                if progress_cb:
-                    err_label = "UDF Hatası" if ext == ".udf" else "OCR Hatası"
-                    progress_cb("error", f"{err_label} ({os.path.basename(full_p)}): {str(oe)}", grand_stats)
-
-        # 3. Yargı PRO Manifest JSON Dosyalarını Değer Bazında Maskeleyerek Aktar
-        # (AGENTS.md ve kök seviyedeki dosya-bilgileri.md / safahat.md / dava-analiz.md
-        #  1. adımda zaten maskelenerek aktarılır; burada maskesiz kopyalanmaz / çift sayılmaz.)
-        for meta_name in cls.META_JSON_NAMES:
-            meta_src = os.path.join(src_folder, meta_name)
-            meta_dest = os.path.join(dest_folder, meta_name)
-            if os.path.isfile(meta_src):
-                try:
-                    j_stats = cls.redact_json_file(meta_src, meta_dest, known_tckns=known_tckns, registry=registry)
-                    _add(j_stats)
-                except Exception as je:
-                    if progress_cb:
-                        progress_cb("error", f"{meta_name}: {str(je)}", grand_stats)
+            seen_unproc: Set[Tuple[str, str]] = set()
+            dedup_unproc: List[Tuple[str, str]] = []
+            for u_rel, u_reason in unprocessed_items:
+                masked_u = _masked_rel_path(u_rel)
+                item = (unicodedata.normalize("NFC", masked_u), u_reason)
+                if item not in seen_unproc:
+                    seen_unproc.add(item)
+                    dedup_unproc.append(item)
+            dedup_unproc.sort(key=lambda x: x[0])
+            grand_stats["unprocessed"] = dedup_unproc
+        finally:
+            shutil.rmtree(archive_tmp_root, ignore_errors=True)
 
         # 4. İkili dosya temizliği (hedef klasördeki olası ikili kalıntıları ve _kaynak dizinini temizle)
         clean_kaynak = os.path.join(dest_folder, "_kaynak")
@@ -2462,7 +3461,10 @@ class UyapRedactor:
         for root, dirs, files in os.walk(dest_folder, topdown=False):
             for f in files:
                 ext = os.path.splitext(f)[1].lower()
-                if ext in (".udf", ".pdf", ".tif", ".tiff", ".eyp", ".zip", ".bak"):
+                if ext in (
+                    ".udf", ".pdf", ".tif", ".tiff", ".png", ".jpg", ".jpeg", ".heic",
+                    ".doc", ".docx", ".xlsx", ".eyp", ".zip", ".bak",
+                ):
                     try:
                         os.remove(os.path.join(root, f))
                     except Exception:
@@ -2500,28 +3502,28 @@ class UyapRedactor:
         # dosya uzunluğunu değiştiren tüm yeniden yazımlar INDEX senkronundan ÖNCE yapılır.
         for p in md_paths:
             if os.path.basename(p) != "INDEX.md":
-                cls.rewrite_dropped_links(p)
+                cls.rewrite_dropped_links(p, path_map=path_map, dest_root=dest_folder)
 
         # 5. INDEX.md karakter sayısı senkronizasyonu (Dosya sütunundaki orijinal bağlantıyı kullanır),
         # ardından INDEX.md'deki aktarılmayan orijinal bağlantıları düz metne çevir (diğer
         # dosyaların uzunluğunu değiştirmez).
-        synced_dest = cls.sync_index_md(dest_folder)
+        synced_dest = cls.sync_index_md(dest_folder, path_map=path_map)
         grand_stats["index_synced"] = synced_dest
         for p in md_paths:
             if os.path.basename(p) == "INDEX.md":
-                cls.rewrite_dropped_links(p)
+                cls.rewrite_dropped_links(p, path_map=path_map, dest_root=dest_folder)
 
         # 6. Dönüşüm ve maskeleme raporu (ham değer içermez)
         grand_stats["mask_occurrences"] = dict(registry.occurrences)
         grand_stats["mask_distinct"] = {k: registry.distinct(k) for k in MaskRegistry.PREFIX}
-        cls._write_report(src_folder, dest_folder, grand_stats)
+        cls._write_report(src_folder, dest_folder, grand_stats, known_tckns=known_tckns, registry=registry)
 
         if grand_stats["md_transferred"] == 0:
             grand_stats["warning_no_documents"] = True
             if progress_cb:
                 progress_cb(
                     "error",
-                    "Kaynak klasörde işlenebilir belge bulunamadı (.md/.txt/.udf/.pdf/.tif). Klasörü kontrol edin.",
+                    "Kaynak klasörde işlenebilir belge bulunamadı (.md/.txt/.udf/.doc/.docx/.xlsx/.eyp/.zip/.pdf/.tif/.heic). Klasörü kontrol edin.",
                     grand_stats,
                 )
 
@@ -2530,7 +3532,14 @@ class UyapRedactor:
     REPORT_NAME = "DAVA_DÖNÜŞÜM_VE_GÜVENLİK_RAPORU.md"
 
     @classmethod
-    def _write_report(cls, src_folder: str, dest_folder: str, gs: Dict) -> None:
+    def _write_report(
+        cls,
+        src_folder: str,
+        dest_folder: str,
+        gs: Dict,
+        known_tckns: Optional[Set[str]] = None,
+        registry: Optional[MaskRegistry] = None,
+    ) -> None:
         """Çıktı klasörüne dürüst bir dönüşüm raporu yazar. Ham kişisel değer YAZMAZ."""
         occ = gs.get("mask_occurrences", {})
         dist = gs.get("mask_distinct", {})
@@ -2542,15 +3551,19 @@ class UyapRedactor:
                                                           "farklı sicil"),
             ("adres", "Açık kişi adresi", "farklı adres (yaklaşık)"),
         ]
+        safe_src_name = cls.redact_path_segment(os.path.basename(src_folder), known_tckns=known_tckns, registry=registry)
+        safe_dest_name = cls.redact_path_segment(os.path.basename(dest_folder), known_tckns=known_tckns, registry=registry)
         report_path = os.path.join(dest_folder, cls.REPORT_NAME)
         with open(report_path, "w", encoding="utf-8") as rf:
             w = rf.write
             w("# Dava Dönüşüm ve Maskeleme Raporu\n\n")
-            w(f"**Kaynak dava klasörü:** {os.path.basename(src_folder)}\n")
-            w(f"**Maskeli klasör:** {os.path.basename(dest_folder)}\n")
+            w(f"**Kaynak dava klasörü:** {safe_src_name}\n")
+            w(f"**Maskeli klasör:** {safe_dest_name}\n")
             w(f"**İşlem tarihi:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             w(f"**Aktarılan metin belgesi (.md):** {gs['md_transferred']} adet\n")
             w(f"**Metne dökülen UYAP UDF belgesi (.udf → .md):** {gs.get('udf_converted', 0)} adet\n")
+            w(f"**Office (Word/Excel) belgesi:** {gs.get('office_converted', 0)} adet\n")
+            w(f"**Açılan EYP/ZIP arşivi:** {gs.get('archive_count', 0)} adet\n")
             w(f"**Bu çalıştırmada yerel OCR ile metne dökülen taranmış ek:** {gs['ocr_converted']} adet\n")
             w(f"**OCR'lı (taranmış) evrak:** {gs.get('ocr_present', 0)} adet\n")
             w(f"**INDEX.md'de güncellenen karakter sayısı:** {gs['index_synced']} satır\n\n")
@@ -2609,6 +3622,14 @@ class UyapRedactor:
             w("- Vergi kimlik no (VKN), plaka, e-posta adresi maskelenmez.\n")
             w("- Bu klasörde orijinal UDF/PDF/TIFF/görsel dosyası yoktur; yalnızca .md metinleri ve maskeli "
               "JSON manifestleri vardır. Aktarılmayan dosyalara giden bağlantılar düz metne çevrildi.\n")
+
+            w("\n## İşlenemeyen dosyalar\n\n")
+            unprocessed = gs.get("unprocessed") or []
+            if unprocessed:
+                for rel_p, reason in unprocessed:
+                    w(f"- {rel_p} — {reason}\n")
+            else:
+                w("Yok.\n")
 
 
 def main():
@@ -2689,12 +3710,15 @@ def main():
 
     print("\n✅ Maskeli klasör oluşturuldu. Otomatik maskeleme hatasız değildir; paylaşmadan önce raporu ve OCR'lı belgeleri gözden geçirin.")
     if stats.get("warning_no_documents"):
-        print("⚠️ Kaynak klasörde işlenebilir belge bulunamadı (.md/.txt/.udf/.pdf/.tif). Klasörü kontrol edin.")
+        print("⚠️ Kaynak klasörde işlenebilir belge bulunamadı (.md/.txt/.udf/.doc/.docx/.xlsx/.eyp/.zip/.pdf/.tif/.heic). Klasörü kontrol edin.")
     print(f"📂 Hedef Klasör : {dest}")
     print(f"📄 Aktarılan .md: {stats['md_transferred']} adet")
     print(f"📝 UDF → metin : {stats.get('udf_converted', 0)} adet")
+    print(f"💼 Word/Excel  : {stats.get('office_converted', 0)} adet")
+    print(f"📦 EYP/ZIP     : {stats.get('archive_count', 0)} arşiv")
     print(f"👁️ Yerel OCR    : {stats['ocr_converted']} adet")
     print(f"🔄 İndeks Senkron: {stats['index_synced']} kayıt")
+    print(f"⚠️ İşlenemeyen : {len(stats.get('unprocessed') or [])} dosya (raporda)")
     print("\n--- GİZLENEN KİŞİSEL VERİLER ---")
     print(f"Maskelenen TCKN          : {stats['tckn']}")
     print(f"Maskelenen Cep Telefonu  : {stats['telefon']}")

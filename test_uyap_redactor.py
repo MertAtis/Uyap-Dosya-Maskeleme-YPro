@@ -5,8 +5,10 @@ UYAP Maskeleme ve İndeks Senkronizasyon Test Paketi (Adversarial Güvenlik & Do
 """
 
 import os
+import re
 import sys
 import tempfile
+import unicodedata
 import unittest
 import zipfile
 
@@ -1550,3 +1552,501 @@ class TestGroupedIbanOcr(unittest.TestCase):
             red, _ = UyapRedactor.redact_text(t)
             self.assertNotIn("TR12", red, t)
         self.assertIn("1.234,56", UyapRedactor.redact_text("DAN TR12345678901234567890123| A\n1.234,56")[0])
+
+
+class TestOfficeArchivesAndNewFormats(unittest.TestCase):
+    """Word (.docx/.doc), Excel (.xlsx), HEIC, EYP/ZIP arşivleri ve işlenemeyen dosya raporu testleri."""
+
+    @staticmethod
+    def _write_minimal_docx(path: str, paragraphs: list) -> None:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        content_types = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Override PartName="/word/document.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+            '</Types>'
+        )
+        p_xml = "".join(
+            f"<w:p><w:r><w:t>{p}</w:t></w:r></w:p>" for p in paragraphs
+        )
+        doc_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            f"<w:body>{p_xml}</w:body></w:document>"
+        )
+        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("[Content_Types].xml", content_types.encode("utf-8"))
+            zf.writestr("word/document.xml", doc_xml.encode("utf-8"))
+
+    @staticmethod
+    def _write_minimal_xlsx(path: str, sheet_name: str, shared: list, rows: list) -> None:
+        """rows: [(cell_ref, cell_type, value), ...] listesi her satır için."""
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        si_xml = "".join(f"<si><t>{s}</t></si>" for s in shared)
+        shared_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            f"{si_xml}</sst>"
+        )
+        wb_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            f'<sheets><sheet name="{sheet_name}" sheetId="1" r:id="rId1"/></sheets>'
+            "</workbook>"
+        )
+        rels_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" '
+            'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+            'Target="worksheets/sheet1.xml"/>'
+            "</Relationships>"
+        )
+        rows_xml = []
+        for idx, r in enumerate(rows, start=1):
+            cells = []
+            for ref, ctype, val in r:
+                t_attr = f' t="{ctype}"' if ctype else ""
+                if ctype == "inlineStr":
+                    cells.append(f'<c r="{ref}" t="inlineStr"><is><t>{val}</t></is></c>')
+                else:
+                    cells.append(f'<c r="{ref}"{t_attr}><v>{val}</v></c>')
+            rows_xml.append(f'<row r="{idx}">{"".join(cells)}</row>')
+        sheet_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            f'<sheetData>{"".join(rows_xml)}</sheetData></worksheet>'
+        )
+        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("xl/sharedStrings.xml", shared_xml.encode("utf-8"))
+            zf.writestr("xl/workbook.xml", wb_xml.encode("utf-8"))
+            zf.writestr("xl/_rels/workbook.xml.rels", rels_xml.encode("utf-8"))
+            zf.writestr("xl/worksheets/sheet1.xml", sheet_xml.encode("utf-8"))
+
+    @staticmethod
+    def _write_fake_udf(path: str, content_text: str) -> None:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        xml_body = (
+            '<?xml version="1.0" encoding="UTF-8" ?>'
+            f'<template format_id="1.8"><content><![CDATA[{content_text}]]></content></template>'
+        )
+        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("content.xml", xml_body.encode("utf-8"))
+
+    def test_docx_extraction_and_redaction(self):
+        """Minimal .docx dosyası okunur, TCKN ve telefon maskelenir, hedefe .docx kopyalanmaz."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "Dava_DOCX")
+            os.makedirs(src)
+            self._write_minimal_docx(
+                os.path.join(src, "dilekce.docx"),
+                [
+                    "DOSYA NO: 2026/400",
+                    f"Davacı TCKN: {T1}",
+                    "Cep Telefonu: 0532 111 22 33 — Mahkemenize arz olunur.",
+                ],
+            )
+            dest, stats = UyapRedactor.export_isolated_clean_folder(src)
+            self.assertEqual(stats["office_converted"], 1)
+            self.assertEqual(stats["md_transferred"], 1)
+            out_md = os.path.join(dest, "dilekce.md")
+            self.assertTrue(os.path.isfile(out_md))
+            self.assertFalse(os.path.exists(os.path.join(dest, "dilekce.docx")))
+            content = open(out_md, encoding="utf-8").read()
+            self.assertNotIn(T1, content)
+            self.assertNotIn("0532 111 22 33", content)
+            self.assertIn("[TCKN_", content)
+            self.assertIn("[TEL_", content)
+
+    def test_doc_extraction_via_textutil(self):
+        """macOS textutil ile üretilen .doc dosyası metne dökülür ve maskelenir."""
+        import subprocess
+        if not os.path.isfile("/usr/bin/textutil"):
+            self.skipTest("textutil mevcut değil")
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "Dava_DOC")
+            os.makedirs(src)
+            txt_p = os.path.join(tmp, "kaynak.txt")
+            doc_p = os.path.join(src, "eski_dilekce.doc")
+            with open(txt_p, "w", encoding="utf-8") as f:
+                f.write(
+                    f"DOSYA NO: 2026/401\nDavacı TCKN: {T1}\n"
+                    "Cep Telefonu: 0532 222 33 44\nTalep dilekçesi metni yeterince uzundur."
+                )
+            proc = subprocess.run(
+                ["/usr/bin/textutil", "-convert", "doc", "-output", doc_p, txt_p],
+                capture_output=True,
+                timeout=30,
+            )
+            if proc.returncode != 0 or not os.path.isfile(doc_p):
+                self.skipTest("textutil .doc üretemedi")
+
+            dest, stats = UyapRedactor.export_isolated_clean_folder(src)
+            self.assertEqual(stats["office_converted"], 1)
+            out_md = os.path.join(dest, "eski_dilekce.md")
+            self.assertTrue(os.path.isfile(out_md))
+            self.assertFalse(os.path.exists(os.path.join(dest, "eski_dilekce.doc")))
+            content = open(out_md, encoding="utf-8").read()
+            self.assertNotIn(T1, content)
+            self.assertIn("[TCKN_", content)
+            self.assertIn("[TEL_", content)
+
+    def test_xlsx_extraction_table_hesap_tckn_and_amount_preserved(self):
+        """Excel .xlsx: Hesap No sütunu [HESAP_, 11 haneli TCKN bilimsel gösterimsiz maskelenir, tutar korunur."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "Dava_XLSX")
+            os.makedirs(src)
+            xlsx_p = os.path.join(src, "dokum.xlsx")
+            shared = ["Hesap No", "TCKN", "Tutar", "1.250,00 TL"]
+            rows = [
+                [("A1", "s", "0"), ("B1", "s", "1"), ("C1", "s", "2")],
+                [("A2", "", "987654321"), ("B2", "", T1), ("C2", "s", "3")],
+            ]
+            self._write_minimal_xlsx(xlsx_p, "Hareketler", shared, rows)
+
+            dest, stats = UyapRedactor.export_isolated_clean_folder(src)
+            self.assertEqual(stats["office_converted"], 1)
+            out_md = os.path.join(dest, "dokum.md")
+            self.assertTrue(os.path.isfile(out_md))
+            content = open(out_md, encoding="utf-8").read()
+            self.assertIn("## Hareketler", content)
+            self.assertIn("[HESAP_", content)
+            self.assertIn("[TCKN_", content)
+            self.assertNotIn("987654321", content)
+            self.assertNotIn(T1, content)
+            self.assertIn("1.250,00 TL", content)
+
+    def test_eyp_extraction_skips_metadata_and_counts_archive(self):
+        """EYP arşivi: içteki .udf/.docx çıkarılır, XML üstverileri unprocessed'a girmez, archive_count==1."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "Dava_EYP")
+            os.makedirs(src)
+            ust_udf = os.path.join(tmp, "ust.udf")
+            ek_docx = os.path.join(tmp, "ek1.docx")
+            self._write_fake_udf(
+                ust_udf,
+                f"ÜST YAZI\nDOSYA NO: 2026/500\nDavacı TCKN: {T1}\n"
+                "Mahkemenize sunulan elektronik yazışma paketi üst yazısıdır.",
+            )
+            self._write_minimal_docx(
+                ek_docx,
+                [
+                    "EK-1 BELGE",
+                    f"İlgili TCKN: {T1}",
+                    "İletişim: 0532 333 44 55 — İşbu ek belge yeterli uzunluktadır.",
+                ],
+            )
+            eyp_p = os.path.join(src, "X.eyp")
+            with zipfile.ZipFile(eyp_p, "w") as zf:
+                zf.write(ust_udf, "UstYazi/ust.udf")
+                zf.write(ek_docx, "Ekler/ek1.docx")
+                zf.writestr("PaketOzeti.xml", b"<ozet/>")
+                zf.writestr("[Content_Types].xml", b"<Types/>")
+                zf.writestr("_rels/.rels", b"<Relationships/>")
+
+            dest, stats = UyapRedactor.export_isolated_clean_folder(src)
+            self.assertEqual(stats["archive_count"], 1)
+            self.assertEqual(stats["udf_converted"], 1)
+            self.assertEqual(stats["office_converted"], 1)
+            self.assertEqual(stats["unprocessed"], [])
+            self.assertTrue(os.path.isfile(os.path.join(dest, "X (EYP)", "UstYazi", "ust.md")))
+            self.assertTrue(os.path.isfile(os.path.join(dest, "X (EYP)", "Ekler", "ek1.md")))
+
+            for root, _d, files in os.walk(dest):
+                for fn in files:
+                    self.assertFalse(fn.lower().endswith((".eyp", ".udf", ".docx")))
+
+    def test_zip_slip_prevented(self):
+        """../kotu.md üyeli zip-slip arşivi kaynak ve hedef dışına dosya yazmaz."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "Dava_ZipSlip")
+            os.makedirs(src)
+            zip_p = os.path.join(src, "tehlike.zip")
+            with zipfile.ZipFile(zip_p, "w") as zf:
+                zf.writestr("../kotu.md", "ZARARLI_ICERIK")
+                zf.writestr("normal.txt", f"DOSYA NO: 2026/600\nTCKN: {T1}\nNormal belge metni burada.")
+
+            dest, stats = UyapRedactor.export_isolated_clean_folder(src)
+            self.assertFalse(os.path.exists(os.path.join(tmp, "kotu.md")))
+            self.assertFalse(os.path.exists(os.path.join(src, "kotu.md")))
+            self.assertFalse(os.path.exists(os.path.join(dest, "kotu.md")))
+            self.assertTrue(os.path.isfile(os.path.join(dest, "tehlike (ZIP)", "normal.txt")))
+
+    def test_encrypted_zip_and_nested_zip_in_unprocessed(self):
+        """Şifreli üye bayraklı zip ve iç içe zip unprocessed listesine doğru nedenlerle eklenir."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "Dava_ArsivSorun")
+            os.makedirs(src)
+
+            enc_zip = os.path.join(src, "sifreli.zip")
+            import io
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w") as zf:
+                zf.writestr("gizli.txt", b"encrypted-bytes")
+            zbytes = bytearray(buf.getvalue())
+            zbytes[6] |= 0x1
+            cd_idx = zbytes.find(b"PK\x01\x02")
+            zbytes[cd_idx + 8] |= 0x1
+            with open(enc_zip, "wb") as f:
+                f.write(zbytes)
+
+            inner_zip = os.path.join(tmp, "ic.zip")
+            with zipfile.ZipFile(inner_zip, "w") as zf:
+                zf.writestr("ic_dosya.txt", "Bu içteki dosya açılmamalıdır.")
+            outer_zip = os.path.join(src, "dis.zip")
+            with zipfile.ZipFile(outer_zip, "w") as zf:
+                zf.write(inner_zip, "ic.zip")
+                zf.writestr("dis_not.txt", f"TCKN: {T1}\nDış arşivdeki normal metin dosyası.")
+
+            dest, stats = UyapRedactor.export_isolated_clean_folder(src)
+            unproc = dict(stats["unprocessed"])
+            self.assertEqual(unproc.get("sifreli.zip"), "işlenemedi (şifreli)")
+            self.assertEqual(unproc.get("dis.zip/ic.zip"), "iç içe arşiv")
+            self.assertTrue(os.path.isfile(os.path.join(dest, "dis (ZIP)", "dis_not.txt")))
+
+    def test_unsupported_type_and_ds_store_filtering(self):
+        """not.html unprocessed'a girer, .DS_Store girmez; raporda listelenir."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "Dava_Desteklenmeyen")
+            os.makedirs(src)
+            with open(os.path.join(src, "belge.md"), "w", encoding="utf-8") as f:
+                f.write(f"DOSYA NO: 2026/700\nTCKN: {T1}\nGeçerli markdown belgesi.")
+            with open(os.path.join(src, "not.html"), "w", encoding="utf-8") as f:
+                f.write("<html><body>Merhaba</body></html>")
+            with open(os.path.join(src, ".DS_Store"), "wb") as f:
+                f.write(b"\x00\x00\x00\x01Bud1")
+
+            dest, stats = UyapRedactor.export_isolated_clean_folder(src)
+            unproc = dict(stats["unprocessed"])
+            self.assertEqual(unproc.get("not.html"), "desteklenmeyen tür (.html)")
+            self.assertNotIn(".DS_Store", unproc)
+            report = open(os.path.join(dest, UyapRedactor.REPORT_NAME), encoding="utf-8").read()
+            self.assertIn("## İşlenemeyen dosyalar", report)
+            self.assertIn("- not.html — desteklenmeyen tür (.html)", report)
+
+    def test_yargipro_derivative_skips_xlsx(self):
+        """a.xlsx + a.xlsx.md (>=50 bayt) varsa a.xlsx ikinci kez işlenmez."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "Dava_XlsxTurev")
+            os.makedirs(src)
+            self._write_minimal_xlsx(
+                os.path.join(src, "a.xlsx"),
+                "Sayfa1",
+                ["XLSX_HAM_ISARETI"],
+                [[("A1", "s", "0")]],
+            )
+            with open(os.path.join(src, "a.xlsx.md"), "w", encoding="utf-8") as f:
+                f.write(
+                    f"# Türev\n\nMD_TUREV_ISARETI TCKN: {T1} "
+                    "Yargı PRO tarafından hazırlanmış en az elli baytlık türev."
+                )
+            dest, stats = UyapRedactor.export_isolated_clean_folder(src)
+            self.assertEqual(stats["office_converted"], 0)
+            self.assertEqual(stats["md_transferred"], 1)
+            self.assertEqual(stats["unprocessed"], [])
+            out_md = open(os.path.join(dest, "a.xlsx.md"), encoding="utf-8").read()
+            self.assertIn("MD_TUREV_ISARETI", out_md)
+            self.assertNotIn("XLSX_HAM_ISARETI", out_md)
+
+    def test_archive_temp_dirs_cleaned_after_export(self):
+        """Export sonrası tempfile.gettempdir() altında yeni 'uyap_arsiv_' dizini kalmaz."""
+        tmp_root = tempfile.gettempdir()
+        before = {d for d in os.listdir(tmp_root) if d.startswith("uyap_arsiv_")}
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "Dava_TmpTemizlik")
+            os.makedirs(src)
+            with zipfile.ZipFile(os.path.join(src, "paket.zip"), "w") as zf:
+                zf.writestr("ek.txt", f"TCKN: {T1}\nGeçici dizin temizlik testi metni.")
+            UyapRedactor.export_isolated_clean_folder(src)
+        after = {d for d in os.listdir(tmp_root) if d.startswith("uyap_arsiv_")}
+        self.assertEqual(after - before, set())
+
+    def test_heic_extraction_via_vision(self):
+        """sips ile üretilen .heic dosyası Vision OCR ile çökmeden işlenir."""
+        import subprocess
+        try:
+            import Vision  # noqa: F401
+        except ImportError:
+            self.skipTest("Apple Vision mevcut değil")
+        if not os.path.isfile("/usr/bin/sips"):
+            self.skipTest("sips mevcut değil")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            png_p = os.path.join(tmp, "ornek.png")
+            heic_p = os.path.join(tmp, "ornek.heic")
+            try:
+                from PIL import Image
+                Image.new("RGB", (200, 100), "white").save(png_p, "PNG")
+            except Exception:
+                self.skipTest("PIL örnek PNG üretemedi")
+
+            proc = subprocess.run(
+                ["/usr/bin/sips", "-s", "format", "heic", png_p, "--out", heic_p],
+                capture_output=True,
+                timeout=30,
+            )
+            if proc.returncode != 0 or not os.path.isfile(heic_p):
+                self.skipTest("sips .heic üretemedi")
+
+            out = UyapRedactor.extract_image_raw(heic_p)
+            self.assertIsInstance(out, str)
+            out2 = UyapRedactor.extract_scanned_raw(heic_p)
+            self.assertIsInstance(out2, str)
+
+    def test_pdf_default_max_pages_is_2000(self):
+        import inspect
+        sig1 = inspect.signature(UyapRedactor.extract_pdf_raw)
+        sig2 = inspect.signature(UyapRedactor.extract_and_redact_pdf)
+        self.assertEqual(sig1.parameters["max_pages"].default, 2000)
+        self.assertEqual(sig2.parameters["max_pages"].default, 2000)
+
+
+class TestFixRound2D1D2D3(unittest.TestCase):
+    """DÜZELTME TURU 2 (D1: çıplak 10 haneli telefon, D2: HTS baz/koordinat, D3: dosya adları)."""
+
+    def test_d1_bare_10digit_phones_masked_and_negatives_preserved(self):
+        """D1: 10 haneli cep numaraları bağlam/liste/satırda yakalanır; VKN/esas/hesap/tutar korunur."""
+        cases = [
+            "Kendi adıma kayıtlı olan 5321234567, 05321234568 numaraları",
+            "(şüpheli X adına kayıtlı),  5329876543 numaralı (Şüpheli Y adına kayıtlı)",
+            "Refik ÖRNEK 5321112233 İlişki Grafiği",
+            "| 5871112233 |\nTel: 05320000001",
+            "Abone görüşmesi 5872223344 ile yapılmıştır.",
+            "5873334455 ve 05320001122 numaraları arandı.",
+        ]
+        for txt in cases:
+            out, cnt = UyapRedactor.redact_phone(txt, MaskRegistry())
+            self.assertGreaterEqual(cnt, 1, f"Maskelenmedi: {txt}")
+            for raw_num in ("5321234567", "05321234568", "5329876543", "5321112233", "5871112233", "5872223344", "5873334455"):
+                self.assertNotIn(raw_num, out, f"Sızıntı ({raw_num}): {out}")
+
+        # Aynı numaranın 3 farklı yazımı aynı registry etiketini almalı
+        reg = MaskRegistry()
+        o1, _ = UyapRedactor.redact_phone("Tel: 5321234567", reg)
+        o2, _ = UyapRedactor.redact_phone("Tel: 05321234567", reg)
+        o3, _ = UyapRedactor.redact_phone("Tel: +90 532 123 45 67", reg)
+        self.assertEqual(o1, "Tel: [TEL_1]")
+        self.assertEqual(o2, "Tel: [TEL_1]")
+        self.assertEqual(o3, "Tel: [TEL_1]")
+
+        # D1(d): registry'de kayıtlı numara bağlamsız 587... olsa da yakalanır
+        reg2 = MaskRegistry()
+        UyapRedactor.redact_phone("Tel: 05874445566", reg2)
+        o_known, c_known = UyapRedactor.redact_phone("Kayıt satırı 5874445566 detay.", reg2)
+        self.assertEqual(c_known, 1)
+        self.assertIn("[TEL_1]", o_known)
+
+        # Negatifler (ASLA telefon sayılmaz)
+        for neg in (
+            "Vergi No: 5321234567",
+            "VKN 5321234567",
+            "Esas No: 2025/5321234567",
+            "evrak no 5321234567",
+            "abone no: 5321234567",
+            "5.321.234.567,00 TL",
+        ):
+            out_n, cnt_n = UyapRedactor.redact_phone(neg, MaskRegistry())
+            self.assertEqual(out_n, neg, f"Yanlış pozitif: {neg}")
+            self.assertEqual(cnt_n, 0)
+
+        # Hesap No: redact_text içinde [HESAP_] olabilir ama ASLA [TEL_] olmamalı
+        out_acc, _ = UyapRedactor.redact_text("Hesap No: 5321234567", registry=MaskRegistry())
+        self.assertNotIn("[TEL_", out_acc)
+
+    def test_d2_hts_base_station_and_coordinates_preserved_but_ikamet_masked(self):
+        """D2: HTS baz istasyonu satırı ve koordinatlar korunur; aynı belgedeki ikamet adresi maskelenir."""
+        doc = (
+            "420037031084 - opr:Vodafone(LA412745O207031084) - ÖRNEK\n"
+            "MAH. FATIH CAD. NO:124 DENIZLI,DENIZLI, 37.771667- 29.072219\n\n"
+            "İkamet adresi: Örnek Mah. Deneme Sok. No:5 D:3 Merkez/ANKARA\n"
+        )
+        out, _ = UyapRedactor.redact_text(doc, registry=MaskRegistry())
+        self.assertIn("opr:Vodafone", out)
+        self.assertIn("MAH. FATIH CAD. NO:124 DENIZLI,DENIZLI, 37.771667- 29.072219", out)
+        self.assertIn("İkamet adresi: [ADRES_1]", out)
+        self.assertNotIn("Deneme Sok.", out)
+
+    def test_d3_filename_and_dirname_pii_masked_with_valid_index_links(self):
+        """D3: Klasör/dosya adındaki telefon ve TCKN maskelenir; INDEX bağlantısı, rapor ve callback temizdir."""
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp = os.path.realpath(raw_tmp)
+            src = os.path.join(tmp, "DavaD3")
+            sub = os.path.join(src, "Satıcı 0532 000 00 01 - not")
+            os.makedirs(sub)
+
+            target_md = os.path.join(sub, "a.md")
+            target_text = "Satıcı ile yapılan görüşme tutanağı metni.\nTelefon: 0532 000 00 01\n"
+            with open(target_md, "w", encoding="utf-8") as f:
+                f.write(target_text)
+
+            tckn_md = os.path.join(src, f"{T1} dilekçe.md")
+            with open(tckn_md, "w", encoding="utf-8") as f:
+                f.write(f"Davacı TCKN: {T1}\nTalep dilekçesi içeriği.\n")
+
+            # Aynı maskeli ada düşen çarpışma dosyaları
+            with open(os.path.join(src, "0532 000 00 01.md"), "w", encoding="utf-8") as f:
+                f.write("İlk numara belgesi.\n")
+            with open(os.path.join(src, "+90 532 000 00 01.md"), "w", encoding="utf-8") as f:
+                f.write("İkinci numara belgesi.\n")
+
+            # İşlenemeyen dosya (dosya yolu rapor/logda maskeli görünmeli)
+            with open(os.path.join(sub, "ek.xyz"), "wb") as f:
+                f.write(b"raw")
+
+            idx_content = (
+                "# Dava İndeksi\n\n"
+                "| Tarih | Tür | Kurum | Ek | Kişi | Dosya | Metin |\n"
+                "|---|---|---|---|---|---|---|\n"
+                "| 01.02.2026 | Not | — | — | — | — | [↗](<Satıcı 0532 000 00 01 - not/a.md>) (10 karakter) |\n"
+                f"| 02.02.2026 | Dilekçe | — | — | — | — | [↗](<{T1} dilekçe.md>) (10 karakter) |\n"
+            )
+            with open(os.path.join(src, "INDEX.md"), "w", encoding="utf-8") as f:
+                f.write(idx_content)
+
+            cb_events = []
+            dest, stats = UyapRedactor.export_isolated_clean_folder(
+                src, progress_cb=lambda k, msg, _gs: cb_events.append((k, msg))
+            )
+
+            # Hiçbir dosya/klasör adında ham telefon veya TCKN kalmamalı
+            all_rels = []
+            for root, dirs, files in os.walk(dest):
+                for name in dirs + files:
+                    p = os.path.join(root, name)
+                    rel = unicodedata.normalize("NFC", os.path.relpath(p, dest))
+                    all_rels.append(rel)
+                    self.assertNotIn("0532 000 00 01", rel)
+                    self.assertNotIn("05320000001", rel)
+                    self.assertNotIn(T1, rel)
+
+            # Beklenen maskeli klasör ve dosyalar diskte mevcut olmalı
+            self.assertTrue(any(re.match(r'^Satıcı \[TEL_\d+\] - not/a\.md$', r) for r in all_rels), all_rels)
+            self.assertTrue(any(re.match(r'^\[TCKN_\d+\] dilekçe\.md$', r) for r in all_rels), all_rels)
+            self.assertTrue(any(re.match(r'^\[TEL_\d+\] \(2\)\.md$', r) for r in all_rels), all_rels)
+
+            # INDEX bağlantısı kopuk olmamalı ve gerçek hedefe işaret etmeli
+            idx_out = open(os.path.join(dest, "INDEX.md"), encoding="utf-8").read()
+            self.assertNotIn("0532 000 00 01", idx_out)
+            self.assertNotIn(T1, idx_out)
+            targets = re.findall(r'\[↗\]\(<([^>]+)>\)', idx_out)
+            self.assertEqual(len(targets), 2)
+            for tgt in targets:
+                self.assertTrue(os.path.isfile(os.path.join(dest, tgt)), f"Kopuk hedef: {tgt}")
+
+            # Rapor, unprocessed ve progress_cb ham PII içermemeli
+            report_out = open(os.path.join(dest, UyapRedactor.REPORT_NAME), encoding="utf-8").read()
+            self.assertNotIn("0532 000 00 01", report_out)
+            self.assertNotIn(T1, report_out)
+            for u_rel, _reason in stats["unprocessed"]:
+                self.assertNotIn("0532 000 00 01", u_rel)
+                self.assertNotIn(T1, u_rel)
+            for _k, msg in cb_events:
+                self.assertNotIn("0532 000 00 01", msg)
+                self.assertNotIn(T1, msg)
+
+
+if __name__ == "__main__":
+    unittest.main()

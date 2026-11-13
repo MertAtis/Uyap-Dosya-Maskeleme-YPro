@@ -37,7 +37,7 @@ from tkinter import ttk, filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
 
 # Uygulama Sürümü ve Otomatik Güncelleme Kaynağı
-APP_VERSION = "1.3.2"
+APP_VERSION = "1.4.0"
 RUN_BUTTON_TEXT = "▶  Başlat"
 GITHUB_REPO = "MertAtis/Uyap-Dosya-Maskeleme-YPro"
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -1285,8 +1285,9 @@ class UyapRedactorApp(_AppBase):
                     self.card_adres.update_value(payload.get("adres", 0))
                     md_cnt = payload.get("md_transferred", 0)
                     udf_cnt = payload.get("udf_converted", 0)
+                    office_cnt = payload.get("office_converted", 0)
                     ocr_cnt = payload.get("ocr_converted", 0)
-                    self.card_files.update_value(f"{md_cnt} ({udf_cnt} UDF, {ocr_cnt} OCR)")
+                    self.card_files.update_value(f"{md_cnt} ({udf_cnt} UDF, {office_cnt} Office, {ocr_cnt} OCR)")
                 elif msg_type == "done":
                     self.is_running = False
                     self.btn_run.config(state="normal", text=RUN_BUTTON_TEXT)
@@ -1600,23 +1601,32 @@ class UyapRedactorApp(_AppBase):
             self.msg_queue.put(("progress", (100, 100)))
             self.msg_queue.put(("stats", final_stats))
 
+            unprocessed = final_stats.get("unprocessed") or []
+            if unprocessed:
+                unproc_logs = "".join(f"⚠️ [İŞLENEMEDİ] {rel_p} — {reason}\n" for rel_p, reason in unprocessed)
+                self.msg_queue.put(("log", unproc_logs))
+
             if final_stats.get("warning_no_documents"):
                 no_doc_msg = (
                     "Seçilen klasörde işlenebilir belge bulunamadı.\n\n"
-                    "Desteklenen türler: .udf, .md, .txt, .pdf, .tif/.tiff, .png/.jpg\n\n"
+                    "Desteklenen türler: .udf, .pdf, .doc/.docx, .xlsx, .eyp, .zip, .tif/.tiff, .jpg/.png/.heic, .md, .txt\n\n"
                     "Lütfen doğru dava klasörünü seçtiğinizden emin olun."
                 )
                 self.msg_queue.put(("log", f"\n⚠️ {no_doc_msg}\n"))
                 self.msg_queue.put(("status", "İşlenebilir belge bulunamadı."))
                 self.msg_queue.put(("no_documents", (no_doc_msg, dest_folder)))
             else:
+                unproc_line = f"⚠️ İşlenemeyen dosya: {len(unprocessed)} (liste raporda)\n" if unprocessed else ""
                 summary_msg = (
                     f"Maskeli klasör oluşturuldu ({elapsed:.1f} sn).\n\n"
                     f"📂 Hedef Klasör: {os.path.basename(dest_folder)}\n"
                     f"📄 Aktarılan .md Belgesi: {final_stats.get('md_transferred', 0)} adet\n"
                     f"📝 UDF'den Metne Dökülen: {final_stats.get('udf_converted', 0)} adet\n"
+                    f"💼 Word/Excel Belgesi: {final_stats.get('office_converted', 0)} adet\n"
+                    f"📦 Açılan EYP/ZIP Arşivi: {final_stats.get('archive_count', 0)} adet\n"
                     f"👁️ Yerel OCR ile Çözülen Taranmış Ek: {final_stats.get('ocr_converted', 0)} adet\n"
-                    f"🔄 İndeks Senkronizasyonu: {final_stats.get('index_synced', 0)} satır güncellendi\n\n"
+                    f"🔄 İndeks Senkronizasyonu: {final_stats.get('index_synced', 0)} satır güncellendi\n"
+                    f"{unproc_line}\n"
                     f"🔒 Gizlenen Kişisel Veriler (Toplam: {final_stats.get('total', 0)}):\n"
                     f"  • TCKN: {final_stats.get('tckn', 0)}\n"
                     f"  • Cep Telefonu: {final_stats.get('telefon', 0)}\n"

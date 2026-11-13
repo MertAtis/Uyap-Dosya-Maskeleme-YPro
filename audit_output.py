@@ -21,7 +21,9 @@ import difflib
 import json
 import os
 import re
+import shutil
 import sys
+import tempfile
 import unicodedata
 from collections import Counter, defaultdict
 from typing import Dict, List, Optional, Tuple
@@ -102,32 +104,155 @@ def exists_nfc_nfd(base_dir: str, rel: str) -> bool:
     return False
 
 
-def find_source_text(src: str, ocr_cache: Optional[str], rel: str) -> Optional[str]:
+def _find_nfc_nfd_file(base_dir: str, rel: str) -> Optional[str]:
+    for form in ("NFC", "NFD"):
+        p = os.path.join(base_dir, unicodedata.normalize(form, rel))
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def _extract_non_ocr_from_base(base_dir: str, rel: str, allow_kaynak: bool = True) -> Optional[str]:
+    """Verilen taban dizinde rel (.md çıktısı) için .udf ve Office (.docx/.doc/.xlsx) kaynaklarını arar."""
+    if not rel.lower().endswith(".md"):
+        return None
+    stem = rel[:-3]
+    prefixes = ("", "_kaynak") if allow_kaynak else ("",)
+
+    # Önce .udf
+    udf_rel = stem + ".udf"
+    for pref in prefixes:
+        cand = os.path.join(pref, udf_rel) if pref else udf_rel
+        p = _find_nfc_nfd_file(base_dir, cand)
+        if p:
+            raw = UyapRedactor.extract_udf_raw(p)
+            return raw if raw else None
+
+    # Sonra Office (.docx, .doc, .xlsx)
+    for ext, fn in (
+        (".docx", UyapRedactor.extract_word_raw),
+        (".doc", UyapRedactor.extract_word_raw),
+        (".xlsx", UyapRedactor.extract_xlsx_raw),
+    ):
+        off_rel = stem + ext
+        for pref in prefixes:
+            cand = os.path.join(pref, off_rel) if pref else off_rel
+            p = _find_nfc_nfd_file(base_dir, cand)
+            if p:
+                raw = fn(p)
+                return raw if raw else None
+    return None
+
+
+def _resolve_archive_inner(
+    src: str, rel: str, archive_cache: Dict[str, str]
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Göreli yoldaki '<ad> (EYP)/' veya '<ad> (ZIP)/' bölümlerini kaynakta açarak
+    (çıkarılan_dizin, iç_göreli_yol) çiftini döndürür.
+    """
+    norm_rel = unicodedata.normalize("NFC", rel)
+    parts = [p for p in norm_rel.replace("\\", "/").split("/") if p]
+    i = 0
+    cur_base = src
+    allow_kaynak = True
+
+    while i < len(parts):
+        found_j = None
+        for j in range(i, len(parts) - 1):
+            if parts[j].endswith(" (EYP)") or parts[j].endswith(" (ZIP)"):
+                found_j = j
+                break
+        if found_j is None:
+            if cur_base == src:
+                return None, None
+            return cur_base, os.path.join(*parts[i:])
+
+        tag = parts[found_j][-6:]
+        arc_ext = ".eyp" if tag == " (EYP)" else ".zip"
+        arc_name = parts[found_j][:-6] + arc_ext
+        sub_rel = os.path.join(*parts[i:found_j], arc_name) if found_j > i else arc_name
+
+        prefixes = ("", "_kaynak") if allow_kaynak else ("",)
+        arc_path = None
+        for pref in prefixes:
+            cand = os.path.join(pref, sub_rel) if pref else sub_rel
+            arc_path = _find_nfc_nfd_file(cur_base, cand)
+            if arc_path:
+                break
+        if not arc_path:
+            return None, None
+
+        cache_key = unicodedata.normalize("NFC", os.path.realpath(arc_path))
+        if cache_key not in archive_cache:
+            tmp_dir = os.path.realpath(tempfile.mkdtemp(prefix="uyap_audit_arsiv_"))
+            archive_cache[cache_key] = tmp_dir
+            UyapRedactor._extract_archive_safely(arc_path, tmp_dir)
+
+        cur_base = archive_cache[cache_key]
+        allow_kaynak = False
+        i = found_j + 1
+
+    return None, None
+
+
+def _is_archive_ocr_source(src: str, rel: str, archive_cache: Dict[str, str]) -> bool:
+    """Arşiv içinden OCR ile üretilmiş (.pdf/.tif/.png/.jpg/.heic) bir belgenin kaynağı arşivde mevcut mu?"""
+    if not src or not rel.lower().endswith(".md"):
+        return False
+    arc_dir, inner_rel = _resolve_archive_inner(src, rel, archive_cache)
+    if not arc_dir or not inner_rel:
+        return False
+    stem = inner_rel[:-3]
+    for ext in UyapRedactor.OCR_DOC_EXTS:
+        if _find_nfc_nfd_file(arc_dir, stem + ext):
+            return True
+    return False
+
+
+def find_source_text(
+    src: str,
+    ocr_cache: Optional[str],
+    rel: str,
+    archive_cache: Optional[Dict[str, str]] = None,
+) -> Optional[str]:
     for base in (src, ocr_cache):
         if not base:
             continue
-        for form in ("NFC", "NFD"):
-            p = os.path.join(base, unicodedata.normalize(form, rel))
-            if os.path.isfile(p):
-                t = read_text(p)
-                if t is None:
-                    return None
-                if rel.endswith(".json"):
-                    # Çıktı JSON'u yeniden biçimlendirildiğinden kaynağı aynı biçime getir
-                    try:
-                        return json.dumps(json.loads(t), ensure_ascii=False, indent=2)
-                    except Exception:
-                        return t
-                return t
-    # Öncelik: önce kaynak metin (.md/.txt/.json) ve OCR önbelleği, en son çıplak/arşiv .udf
-    if src and rel.lower().endswith(".md"):
-        udf_rel = rel[:-3] + ".udf"
-        for candidate in (udf_rel, os.path.join("_kaynak", udf_rel)):
-            for form in ("NFC", "NFD"):
-                p = os.path.join(src, unicodedata.normalize(form, candidate))
-                if os.path.isfile(p):
-                    raw = UyapRedactor.extract_udf_raw(p)
-                    return raw if raw else None
+        p = _find_nfc_nfd_file(base, rel)
+        if p:
+            t = read_text(p)
+            if t is None:
+                return None
+            if rel.endswith(".json"):
+                # Çıktı JSON'u yeniden biçimlendirildiğinden kaynağı aynı biçime getir
+                try:
+                    return json.dumps(json.loads(t), ensure_ascii=False, indent=2)
+                except Exception:
+                    return t
+            return t
+
+    if not src:
+        return None
+
+    # Öncelik: önce mevcut .md/.txt/.json ve OCR önbelleği, sonra .udf, sonra Office (.docx/.doc/.xlsx)
+    direct = _extract_non_ocr_from_base(src, rel, allow_kaynak=True)
+    if direct is not None:
+        return direct
+
+    # Arşiv çıktıları: '<ad> (EYP)/' veya '<ad> (ZIP)/'
+    local_cache = archive_cache if archive_cache is not None else {}
+    try:
+        arc_dir, inner_rel = _resolve_archive_inner(src, rel, local_cache)
+        if arc_dir and inner_rel:
+            p_inner = _find_nfc_nfd_file(arc_dir, inner_rel)
+            if p_inner:
+                return read_text(p_inner)
+            return _extract_non_ocr_from_base(arc_dir, inner_rel, allow_kaynak=False)
+    finally:
+        if archive_cache is None:
+            for d in local_cache.values():
+                shutil.rmtree(d, ignore_errors=True)
     return None
 
 
@@ -173,7 +298,9 @@ TEMPLATE_ADDR_RE = re.compile(r'(?i)\(?\s*caddesi\s*/\s*sokağı\s*\)?')
 
 OLAY_RE = re.compile(
     r'(?i)suçun\s+yeri|olay\s+yeri|kaza\s+yeri|meydana\s+gel|\bönünde\b|kavşağ|sıralarında|'
-    r'trafik\s+kazas|Yer\s*\(Cadde'
+    r'trafik\s+kazas|Yer\s*\(Cadde|'
+    r'\bopr\s*:|\b(?:operat[öo]r|baz(?:\s+istasyon\w*)?|BTS|CGI|hücre\w*|LAC)\b|'
+    r'\b\d{2}\.\d{4,}\s*[-,;]?\s*\d{2}\.\d{4,}\b'
 )
 
 
@@ -181,7 +308,7 @@ def address_type_count(line: str) -> int:
     return sum(1 for r in ADDR_TOKENS.values() if r.search(line))
 
 
-def scan_leaks(rel: str, text: str, known_tckns, known_ibans, out: Dict):
+def scan_leaks(rel: str, text: str, known_tckns, known_ibans, out: Dict, check_addr: bool = True):
     text = strip_hex_tokens(text)
     lines = text.splitlines()
     for m in TCKN_RE.finditer(text):
@@ -214,8 +341,8 @@ def scan_leaks(rel: str, text: str, known_tckns, known_ibans, out: Dict):
             out["iban_known"].append((rel, "TR" + ib))
     for m in PHONE_RE.finditer(text):
         out["phone"].append((rel, m.group(0)))
-    if os.path.basename(rel) == REPORT_NAME:
-        return  # aracın kendi raporu adres örneği içerir; kaynak belge değildir
+    if not check_addr or os.path.basename(rel) == REPORT_NAME:
+        return  # aracın kendi raporu veya dosya yolu için adres taraması yapılmaz
     for i, line in enumerate(lines):
         if MASK_RE.search(line):
             continue
@@ -227,7 +354,7 @@ def scan_leaks(rel: str, text: str, known_tckns, known_ibans, out: Dict):
             prev2 = [lines[j] for j in range(i - 1, max(-1, i - 5), -1) if lines[j].strip()][:2]
             next_line = next((lines[j] for j in range(i + 1, min(len(lines), i + 3)) if lines[j].strip()), "")
             near = "\n".join(prev2 + [next_line])
-            if OLAY_RE.search(line) or OLAY_RE.search("\n".join(lines[max(0, i - 1): i])):
+            if OLAY_RE.search(line) or (not PERSON_CUE_RE.search(line) and OLAY_RE.search("\n".join(lines[max(0, i - 1): i]))):
                 kind = "olay"
             elif PERSON_CUE_RE.search(line):
                 # MERNİS / "adresini ..." / yükümlü / ikamet: kişi adresi (aynı satırda kurum adı geçse de)
@@ -362,6 +489,92 @@ def preserve_view(text: str) -> str:
     return IMAGE_NOTE_RE.sub("", LINK_DEST_RE.sub("](#)", text))
 
 
+def _collect_source_rel_candidates(
+    src: str,
+    ocr_cache: Optional[str],
+    archive_cache: Dict[str, str],
+) -> List[str]:
+    """Kaynak klasördeki (ve arşiv/OCR önbelleğindeki) olası çıktı göreli yollarını toplar."""
+    cands: List[str] = []
+    seen = set()
+
+    def _add_cand(r: str) -> None:
+        nr = unicodedata.normalize("NFC", r.replace("\\", "/"))
+        if nr not in seen:
+            seen.add(nr)
+            cands.append(nr)
+
+    def _walk_dir(base_dir: str, prefix: str = "", allow_kaynak: bool = True, allow_archives: bool = True) -> None:
+        if not base_dir or not os.path.isdir(base_dir):
+            return
+        for root, dirs, files in os.walk(base_dir):
+            rel_root = os.path.relpath(root, base_dir)
+            parts = [] if rel_root == "." else rel_root.split(os.sep)
+            if any(p in UyapRedactor.SKIP_DIRS for p in parts if p != "_kaynak"):
+                dirs[:] = []
+                continue
+            dirs.sort()
+            for f in sorted(files):
+                full_p = os.path.join(root, f)
+                rel_p = unicodedata.normalize("NFC", os.path.relpath(full_p, base_dir))
+                if allow_kaynak and rel_p.startswith("_kaynak/"):
+                    clean_p = rel_p[len("_kaynak/"):]
+                else:
+                    clean_p = rel_p
+                ext = os.path.splitext(f)[1].lower()
+                virt_base = f"{prefix}/{clean_p}" if prefix else clean_p
+                if ext in TEXT_EXTS:
+                    _add_cand(virt_base)
+                elif ext in UyapRedactor.TEXT_DOC_EXTS or ext in UyapRedactor.OCR_DOC_EXTS:
+                    _add_cand(os.path.splitext(virt_base)[0] + ".md")
+                    _add_cand(virt_base + ".md")
+                elif allow_archives and ext in UyapRedactor.ARCHIVE_EXTS:
+                    tag = "(EYP)" if ext == ".eyp" else "(ZIP)"
+                    arc_prefix = f"{os.path.splitext(virt_base)[0]} {tag}"
+                    ck = unicodedata.normalize("NFC", os.path.realpath(full_p))
+                    if ck not in archive_cache:
+                        tmp_d = os.path.realpath(tempfile.mkdtemp(prefix="uyap_audit_cand_"))
+                        archive_cache[ck] = tmp_d
+                        UyapRedactor._extract_archive_safely(full_p, tmp_d)
+                    _walk_dir(archive_cache[ck], prefix=arc_prefix, allow_kaynak=False, allow_archives=(ext == ".eyp"))
+
+    _walk_dir(src, allow_kaynak=True, allow_archives=True)
+    if ocr_cache:
+        _walk_dir(ocr_cache, allow_kaynak=False, allow_archives=False)
+    return cands
+
+
+def _match_masked_source_rel(masked_rel: str, src_candidates: List[str]) -> Optional[str]:
+    """Maske etiketi ([TEL_1], [TCKN_1] vb.) içeren çıktı yolunu jokerle kaynakta tek adaya eşler."""
+    if not MASK_RE.search(masked_rel):
+        return None
+    norm_rel = unicodedata.normalize("NFC", masked_rel.replace("\\", "/"))
+    parts = norm_rel.split("/")
+    pat_parts = []
+    for idx, seg in enumerate(parts):
+        # Çakışma eki " (2)" dosya uzantısından hemen önce veya klasör sonunda olabilir
+        if idx == len(parts) - 1:
+            stem, ext = os.path.splitext(seg)
+            stem_clean = re.sub(r' \(\d+\)$', '', stem)
+            target_seg = stem_clean + ext
+        else:
+            target_seg = re.sub(r' \(\d+\)$', '', seg)
+        chunks = MASK_RE.split(target_seg)
+        masks = MASK_RE.findall(target_seg)
+        if not masks:
+            pat_parts.append(re.escape(target_seg))
+        else:
+            seg_rx = re.escape(chunks[0])
+            for ch in chunks[1:]:
+                seg_rx += r'[^/]+' + re.escape(ch)
+            pat_parts.append(seg_rx)
+    rx = re.compile("^" + "/".join(pat_parts) + "$")
+    matches = [c for c in src_candidates if rx.match(c)]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Ana denetim
 # ---------------------------------------------------------------------------
@@ -378,6 +591,7 @@ def audit(src: str, out: str, ocr_cache: Optional[str] = None) -> Dict:
         "index_mismatch": [],
         "mapping_leak": [],
         "unexpected_files": [],
+        "masked_name_unmatched": [],
         "preserve_total": Counter(),
         "preserve_lost": defaultdict(list),
         "files_scanned": 0,
@@ -398,103 +612,124 @@ def audit(src: str, out: str, ocr_cache: Optional[str] = None) -> Dict:
     # Kaynakta görülen tüm TCKN / IBAN değerleri
     pairs = []
     known_tckns, known_ibans = set(), set()
-    for rel, p in out_files:
-        o = read_text(p) or ""
-        s = find_source_text(src, ocr_cache, rel)
-        pairs.append((rel, p, s, o))
-        if s:
-            t, i = collect_source_ids(s)
-            known_tckns |= t
-            known_ibans |= i
+    archive_cache: Dict[str, str] = {}
+    src_candidates: Optional[List[str]] = None
+    try:
+        for rel, p in out_files:
+            o = read_text(p) or ""
+            orig_rel = rel
+            s = find_source_text(src, ocr_cache, rel, archive_cache=archive_cache)
+            if s is None and MASK_RE.search(rel):
+                if src_candidates is None:
+                    src_candidates = _collect_source_rel_candidates(src, ocr_cache, archive_cache)
+                matched = _match_masked_source_rel(rel, src_candidates)
+                if matched:
+                    orig_rel = matched
+                    s = find_source_text(src, ocr_cache, matched, archive_cache=archive_cache)
+            pairs.append((rel, p, s, o, orig_rel))
+            if s:
+                t, i = collect_source_ids(s)
+                known_tckns |= t
+                known_ibans |= i
 
-    val_to_labels = defaultdict(set)
-    label_to_vals = defaultdict(set)
+        val_to_labels = defaultdict(set)
+        label_to_vals = defaultdict(set)
 
-    for rel, p, s, o in pairs:
-        res["files_scanned"] += 1
-        scan_leaks(rel, o, known_tckns, known_ibans, res["leaks"])
+        for brel in res["binary_files"]:
+            scan_leaks(f"{brel} (dosya adı)", brel.replace(os.sep, "\n"), known_tckns, known_ibans, res["leaks"], check_addr=False)
 
-        # Eşleme tablosu sızıntısı: etiket ile ham değer yan yana
-        if has_mapping_leak(o):
-            res["mapping_leak"].append(rel)
-        if s is None:
-            if os.path.basename(rel) != REPORT_NAME:
-                res["unexpected_files"].append(rel)
-            continue
-        res["files_with_source"] += 1
+        for rel, p, s, o, orig_rel in pairs:
+            res["files_scanned"] += 1
+            scan_leaks(rel, o, known_tckns, known_ibans, res["leaks"])
+            scan_leaks(f"{rel} (dosya adı)", rel.replace(os.sep, "\n"), known_tckns, known_ibans, res["leaks"], check_addr=False)
 
-        # E) Koruma
-        for kind, rx in PRESERVE_RE.items():
-            sv, ov = preserve_view(s), preserve_view(o)
-            sc = Counter(re.sub(r'\s+', ' ', m.group(0)) for m in rx.finditer(sv))
-            oc = Counter(re.sub(r'\s+', ' ', m.group(0)) for m in rx.finditer(ov))
-            res["preserve_total"][kind] += sum(sc.values())
-            for val, n in sc.items():
-                if oc[val] < n:
-                    res["preserve_lost"][kind].append((rel, val, n - oc[val]))
-
-        if s == o:
-            continue
-        s_lines = s.splitlines()
-        o_lines = o.splitlines()
-        sm = difflib.SequenceMatcher(None, s_lines, o_lines, autojunk=False)
-        for tag, i1, i2, j1, j2 in sm.get_opcodes():
-            if tag == "equal":
+            # Eşleme tablosu sızıntısı: etiket ile ham değer yan yana
+            if has_mapping_leak(o):
+                res["mapping_leak"].append(rel)
+            if s is None:
+                if os.path.basename(rel) != REPORT_NAME and not _is_archive_ocr_source(src, orig_rel, archive_cache):
+                    if MASK_RE.search(rel):
+                        res["masked_name_unmatched"].append(rel)
+                    else:
+                        res["unexpected_files"].append(rel)
                 continue
-            if tag == "replace" and (i2 - i1) == (j2 - j1):
-                line_pairs = list(zip(range(i1, i2), range(j1, j2)))
-                leftover = False
-            else:
-                line_pairs = []
-                leftover = True
-                if tag == "replace":
-                    # Satır sayısı farklı: benzerliğe göre eşle, kalanları yutulma say
-                    used = set()
-                    for jj in range(j1, j2):
-                        best, bi = 0.0, None
-                        for ii in range(i1, i2):
-                            if ii in used:
-                                continue
-                            r = difflib.SequenceMatcher(None, s_lines[ii], o_lines[jj]).quick_ratio()
-                            if r > best:
-                                best, bi = r, ii
-                        if bi is not None and best > 0.3:
-                            used.add(bi)
-                            line_pairs.append((bi, jj))
-            for ii, jj in line_pairs:
-                pieces = extract_mask_pieces(s_lines[ii], o_lines[jj])
-                if pieces is None:
-                    pieces = extract_mask_pieces(norm_links(s_lines[ii]), norm_links(o_lines[jj]))
-                if pieces is None:
-                    if MASK_RE.search(o_lines[jj]):
-                        res["unaligned"].append((rel, jj + 1, [s_lines[ii]], [o_lines[jj]]))
+            res["files_with_source"] += 1
+
+            # E) Koruma
+            for kind, rx in PRESERVE_RE.items():
+                sv, ov = preserve_view(s), preserve_view(o)
+                sc = Counter(re.sub(r'\s+', ' ', m.group(0)) for m in rx.finditer(sv))
+                oc = Counter(re.sub(r'\s+', ' ', m.group(0)) for m in rx.finditer(ov))
+                res["preserve_total"][kind] += sum(sc.values())
+                for val, n in sc.items():
+                    if oc[val] < n:
+                        res["preserve_lost"][kind].append((rel, val, n - oc[val]))
+
+            if s == o:
+                continue
+            s_lines = s.splitlines()
+            o_lines = o.splitlines()
+            sm = difflib.SequenceMatcher(None, s_lines, o_lines, autojunk=False)
+            for tag, i1, i2, j1, j2 in sm.get_opcodes():
+                if tag == "equal":
                     continue
-                for label, piece in pieces:
-                    if MASK_RE.fullmatch(piece.strip() or "-"):
-                        continue  # kaynakta zaten maskeli
-                    kind = mask_kind(label)
-                    res["over"].append((rel, jj + 1, label, piece, analysis_flags(piece)))
-                    if is_numbered(label):
-                        nv = norm_value(kind, piece)
-                        # TCKN: checksum'ı tutmayan 11 haneli değerler OCR bozulmasıdır; bilinen TCKN'ye
-                        # bulanık eşleşip aynı etikete bağlanması tasarım gereğidir, çelişki değildir.
-                        if nv and kind == "TCKN" and not is_valid_tckn(nv):
-                            nv = None
-                        if nv:
-                            val_to_labels[(kind, nv)].add(label)
-                            label_to_vals[label].add(nv)
-            if leftover:
-                paired_i = {ii for ii, _ in line_pairs}
-                rest_src = [s_lines[ii] for ii in range(i1, i2) if ii not in paired_i]
-                if rest_src:
-                    res["unaligned"].append((rel, j1 + 1, rest_src, o_lines[j1:j2]))
+                if tag == "replace" and (i2 - i1) == (j2 - j1):
+                    line_pairs = list(zip(range(i1, i2), range(j1, j2)))
+                    leftover = False
+                else:
+                    line_pairs = []
+                    leftover = True
+                    if tag == "replace":
+                        # Satır sayısı farklı: benzerliğe göre eşle, kalanları yutulma say
+                        used = set()
+                        for jj in range(j1, j2):
+                            best, bi = 0.0, None
+                            for ii in range(i1, i2):
+                                if ii in used:
+                                    continue
+                                r = difflib.SequenceMatcher(None, s_lines[ii], o_lines[jj]).quick_ratio()
+                                if r > best:
+                                    best, bi = r, ii
+                            if bi is not None and best > 0.3:
+                                used.add(bi)
+                                line_pairs.append((bi, jj))
+                for ii, jj in line_pairs:
+                    pieces = extract_mask_pieces(s_lines[ii], o_lines[jj])
+                    if pieces is None:
+                        pieces = extract_mask_pieces(norm_links(s_lines[ii]), norm_links(o_lines[jj]))
+                    if pieces is None:
+                        if MASK_RE.search(o_lines[jj]):
+                            res["unaligned"].append((rel, jj + 1, [s_lines[ii]], [o_lines[jj]]))
+                        continue
+                    for label, piece in pieces:
+                        if MASK_RE.fullmatch(piece.strip() or "-"):
+                            continue  # kaynakta zaten maskeli
+                        kind = mask_kind(label)
+                        res["over"].append((rel, jj + 1, label, piece, analysis_flags(piece)))
+                        if is_numbered(label):
+                            nv = norm_value(kind, piece)
+                            # TCKN: checksum'ı tutmayan 11 haneli değerler OCR bozulmasıdır; bilinen TCKN'ye
+                            # bulanık eşleşip aynı etikete bağlanması tasarım gereğidir, çelişki değildir.
+                            if nv and kind == "TCKN" and not is_valid_tckn(nv):
+                                nv = None
+                            if nv:
+                                val_to_labels[(kind, nv)].add(label)
+                                label_to_vals[label].add(nv)
+                if leftover:
+                    paired_i = {ii for ii, _ in line_pairs}
+                    rest_src = [s_lines[ii] for ii in range(i1, i2) if ii not in paired_i]
+                    if rest_src:
+                        res["unaligned"].append((rel, j1 + 1, rest_src, o_lines[j1:j2]))
+    finally:
+        for tmp_d in archive_cache.values():
+            shutil.rmtree(tmp_d, ignore_errors=True)
 
     res["consistency_value_multi_label"] = {k: v for k, v in val_to_labels.items() if len(v) > 1}
     res["consistency_label_multi_value"] = {k: v for k, v in label_to_vals.items() if len(v) > 1}
 
     # D) Bağlantılar ve INDEX
     link_re = re.compile(r'!?\[[^\]\n]*\]\((?:<([^>\n]+)>|([^)\s\n]+))\)')
-    for rel, p, _s, o in pairs:
+    for rel, p, _s, o, orig_rel in pairs:
         if not rel.endswith(".md"):
             continue
         base_dir = os.path.dirname(p)
@@ -507,7 +742,7 @@ def audit(src: str, out: str, ocr_cache: Optional[str] = None) -> Dict:
             if not target:
                 continue
             if not exists_nfc_nfd(base_dir, target):
-                src_dir = os.path.dirname(os.path.join(src, rel))
+                src_dir = os.path.dirname(os.path.join(src, orig_rel))
                 if (target.lower().endswith((".md", ".txt", ".json"))
                         and os.path.isdir(src_dir) and not exists_nfc_nfd(src_dir, target)):
                     res["source_broken_links"].append((rel, target))
@@ -571,7 +806,8 @@ def summarize(res: Dict) -> Tuple[List[str], List[str], bool]:
                      f"INDEX karakter uyuşmazlığı: {len(res['index_mismatch'])}   "
                      f"Eşleme/değer sızdıran dosya: {len(res['mapping_leak'])}   "
                      f"Kaynakta da kopuk metin bağlantısı (sayılmaz): {len(res['source_broken_links'])}   "
-                     f"Kaynağı olmayan beklenmedik dosya: {len(res['unexpected_files'])}")
+                     f"Kaynağı olmayan beklenmedik dosya: {len(res['unexpected_files'])}   "
+                     f"Eşleşmeyen maskeli yol (bilgi): {len(res['masked_name_unmatched'])}")
     for x in res["binary_files"]:
         det.append(f"D\tikili\t{x}")
     for x in res["broken_links"]:
@@ -584,6 +820,8 @@ def summarize(res: Dict) -> Tuple[List[str], List[str], bool]:
         det.append(f"D\tesleme\t{x}")
     for x in res["unexpected_files"]:
         det.append(f"D\tbeklenmedik\t{x}")
+    for x in res["masked_name_unmatched"]:
+        det.append(f"D\tmaskeli-eslesmeyen\t{x}")
     if res["unexpected_files"]:
         out_lines.append(f"    beklenmedik: {', '.join(res['unexpected_files'][:8])}")
 
