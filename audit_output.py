@@ -71,6 +71,14 @@ def ocr_digits(s: str) -> str:
             .replace('O', '0').replace('o', '0'))
 
 
+# 32+ karakterlik onaltılık özetler (sha256 vb., JSON meta verisi): içlerindeki rakam dizileri TCKN/IBAN değildir.
+HEX_TOKEN_RE = re.compile(r'(?<![0-9A-Za-z])(?=[0-9]*[a-fA-F])[0-9a-fA-F]{32,}(?![0-9A-Za-z])')
+
+
+def strip_hex_tokens(text: str) -> str:
+    return HEX_TOKEN_RE.sub(lambda m: " " * len(m.group(0)), text)
+
+
 def read_text(path: str) -> Optional[str]:
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -130,9 +138,21 @@ INSTITUTION_RE = re.compile(
     r'(?i)Bankas[ıi]|Banka\b|Genel\s+Müdürlü|Müdürlü|Adliye|Mahkeme|Noter|Baro|Başkanlığ|'
     r'Başsavcılı|Savcılığ|PTT|Belediye|A\.?\s?Ş\.?|Ltd|Şirket|Şube|Valili|Kaymakaml|Bakanlı|'
     r'Kurumu|Hastane|Üniversite|Odası|Daire\s+Başkan|SGK|Emniyet|Karakol|Jandarma|İcra\s+Dairesi|'
-    r'Vergi\s+Dairesi|Tapu|Nüfus\s+Müdürlü|Hukuk\s+Bürosu|Avukatl[ıi]k\s+Ortakl'
+    r'Vergi\s+Dairesi|Tapu|Nüfus\s+Müdürlü|Hukuk\s+Bürosu|Avukatl[ıi]k\s+Ortakl|'
+    # iş yeri yapıları (redaktör de bunları kurum/iş yeri sayar: _ADDR_INST_RE ile aynı küme)
+    r'\bPlaza\b|\bTowers?\b|\bCenter\b|İş\s+Merkezi|Katılım\s+Bankas|Sigorta|Holding'
 )
 
+LINK_RE = re.compile(r'!?\[([^\]\n]*)\]\((?:<[^>\n]+>|[^)\n]+)\)')
+# "evrak no 4521", "dosya no: 12" gibi belge numarası ifadeleri adres kapı numarası değildir
+DOC_NO_RE = re.compile(
+    r'(?i)\b(?:evrak|dosya|esas|karar|say[ıi]|dava|belge|protokol|takip|talimat|soruşturma|hazırlık|poliçe|acente)\s+no\b'
+)
+
+
+PERSON_CUE_RE = re.compile(r'(?i)MERN[İI]S|\badresini\b|yükümlü|\bikamet|\boturur|\bisimli\b')
+
+TEMPLATE_ADDR_RE = re.compile(r'(?i)\(?\s*caddesi\s*/\s*sokağı\s*\)?')
 
 OLAY_RE = re.compile(
     r'(?i)suçun\s+yeri|olay\s+yeri|kaza\s+yeri|meydana\s+gel|\bönünde\b|kavşağ|sıralarında|'
@@ -145,6 +165,7 @@ def address_type_count(line: str) -> int:
 
 
 def scan_leaks(rel: str, text: str, known_tckns, known_ibans, out: Dict):
+    text = strip_hex_tokens(text)
     lines = text.splitlines()
     for m in TCKN_RE.finditer(text):
         if is_valid_tckn(m.group(0)):
@@ -181,18 +202,50 @@ def scan_leaks(rel: str, text: str, known_tckns, known_ibans, out: Dict):
     for i, line in enumerate(lines):
         if MASK_RE.search(line):
             continue
+        # Dilekçe formu şablon ifadesi "(caddesi / sokağı)" adres değildir
+        line = TEMPLATE_ADDR_RE.sub(" ", line)
+        # Markdown bağlantıları (yol/dosya adı) ve belge-numarası ifadeleri adres belirteci sayılmaz
+        line = DOC_NO_RE.sub(" ", LINK_RE.sub(lambda m: m.group(1), line))
         if address_type_count(line) >= 2:
-            ctx = "\n".join(lines[max(0, i - 2): i + 3])
+            prev2 = [lines[j] for j in range(i - 1, max(-1, i - 5), -1) if lines[j].strip()][:2]
+            next_line = next((lines[j] for j in range(i + 1, min(len(lines), i + 3)) if lines[j].strip()), "")
+            near = "\n".join(prev2 + [next_line])
             if OLAY_RE.search(line) or OLAY_RE.search("\n".join(lines[max(0, i - 1): i])):
                 kind = "olay"
-            elif INSTITUTION_RE.search(ctx):
+            elif PERSON_CUE_RE.search(line):
+                # MERNİS / "adresini ..." / yükümlü / ikamet: kişi adresi (aynı satırda kurum adı geçse de)
+                kind = "kisi"
+            elif INSTITUTION_RE.search(line) or INSTITUTION_RE.search(near):
+                # Kurum adı aynı satırda, önceki 2 dolu satırda ya da sonraki dolu satırda aranır (kurum adı
+                # adresten önce/sonra alt satıra taşabilir); daha uzak bağlam (belge başlığı vb.) yetmez.
                 kind = "kurum"
             else:
                 kind = "kisi"
-            out["addr_" + kind].append((rel, i + 1, line.strip()))
+            out["addr_" + kind].append((rel, i + 1, lines[i].strip()))
+
+
+MAPPING_RE = re.compile(
+    r'(?P<lab>' + MASK_RE.pattern + r')[ \t]*(?:=|:|->|→|\t)[ \t]*(?P<val>(?:TR)?\d{6,})(?!\d)'
+)
+# Etiketin yerine geçtiği değerin biçimi: yalnızca bu uzunlukta bir sayı etiketin hemen yanındaysa
+# eşleme tablosu sayılır (OCR'lı tablo sütunlarındaki ": [TCKN_1] : 12345678 :" gibi bitişik
+# protokol/dosya numaraları ve alt satıra taşan sütun değerleri eşleme değildir).
+_MAPPING_SHAPE = {
+    "TCKN": lambda d: len(d) == 11, "IBAN": lambda d: len(d) == 24, "KART": lambda d: len(d) == 16,
+    "TEL": lambda d: len(d) in (10, 11), "HESAP": lambda d: len(d) >= 10,
+}
+
+
+def has_mapping_leak(text: str) -> bool:
+    for m in MAPPING_RE.finditer(text):
+        shape = _MAPPING_SHAPE.get(mask_kind(m.group("lab")))
+        if shape and shape(re.sub(r"\D", "", m.group("val"))):
+            return True
+    return False
 
 
 def collect_source_ids(text: str) -> Tuple[set, set]:
+    text = strip_hex_tokens(text)
     tckns = set()
     for m in TCKN_RE.finditer(text):
         if is_valid_tckn(m.group(0)):
@@ -281,6 +334,17 @@ PRESERVE_RE = {
 }
 
 
+LINK_DEST_RE = re.compile(r'\]\((?:<[^>\n]*>|[^)\n]*)\)')
+IMAGE_NOTE_RE = re.compile(r'(?m)^> \*\*Görseller:\*\*.*$')
+
+
+def preserve_view(text: str) -> str:
+    """Koruma sayımı için metin: bağlantı hedefleri (yol/dosya adı) ve görsel-klasörü notu hariç.
+    Dosya adlarındaki "(CMK 90)" / "(2024/123)" gibi parçalar belge içeriği değil yol bilgisidir;
+    bağlantı yeniden yazımında (OCR metni / aktarılmadı) hedef değişir ya da kalkar."""
+    return IMAGE_NOTE_RE.sub("", LINK_DEST_RE.sub("](#)", text))
+
+
 # ---------------------------------------------------------------------------
 # Ana denetim
 # ---------------------------------------------------------------------------
@@ -293,6 +357,7 @@ def audit(src: str, out: str, ocr_cache: Optional[str] = None) -> Dict:
         "unaligned": [],       # (rel, out_lineno, src_lines, out_lines)
         "binary_files": [],
         "broken_links": [],
+        "source_broken_links": [],  # kaynakta da kopuk metin bağlantıları (aracın kusuru değil)
         "index_mismatch": [],
         "mapping_leak": [],
         "unexpected_files": [],
@@ -333,7 +398,7 @@ def audit(src: str, out: str, ocr_cache: Optional[str] = None) -> Dict:
         scan_leaks(rel, o, known_tckns, known_ibans, res["leaks"])
 
         # Eşleme tablosu sızıntısı: etiket ile ham değer yan yana
-        if re.search(MASK_RE.pattern + r'\s*(?:=|:|->|→|\t)\s*[A-Z]{0,2}\d{6,}', o):
+        if has_mapping_leak(o):
             res["mapping_leak"].append(rel)
         if s is None:
             if os.path.basename(rel) != REPORT_NAME:
@@ -343,8 +408,9 @@ def audit(src: str, out: str, ocr_cache: Optional[str] = None) -> Dict:
 
         # E) Koruma
         for kind, rx in PRESERVE_RE.items():
-            sc = Counter(re.sub(r'\s+', ' ', m.group(0)) for m in rx.finditer(s))
-            oc = Counter(re.sub(r'\s+', ' ', m.group(0)) for m in rx.finditer(o))
+            sv, ov = preserve_view(s), preserve_view(o)
+            sc = Counter(re.sub(r'\s+', ' ', m.group(0)) for m in rx.finditer(sv))
+            oc = Counter(re.sub(r'\s+', ' ', m.group(0)) for m in rx.finditer(ov))
             res["preserve_total"][kind] += sum(sc.values())
             for val, n in sc.items():
                 if oc[val] < n:
@@ -393,6 +459,10 @@ def audit(src: str, out: str, ocr_cache: Optional[str] = None) -> Dict:
                     res["over"].append((rel, jj + 1, label, piece, analysis_flags(piece)))
                     if is_numbered(label):
                         nv = norm_value(kind, piece)
+                        # TCKN: checksum'ı tutmayan 11 haneli değerler OCR bozulmasıdır; bilinen TCKN'ye
+                        # bulanık eşleşip aynı etikete bağlanması tasarım gereğidir, çelişki değildir.
+                        if nv and kind == "TCKN" and not is_valid_tckn(nv):
+                            nv = None
                         if nv:
                             val_to_labels[(kind, nv)].add(label)
                             label_to_vals[label].add(nv)
@@ -420,7 +490,12 @@ def audit(src: str, out: str, ocr_cache: Optional[str] = None) -> Dict:
             if not target:
                 continue
             if not exists_nfc_nfd(base_dir, target):
-                res["broken_links"].append((rel, target))
+                src_dir = os.path.dirname(os.path.join(src, rel))
+                if (target.lower().endswith((".md", ".txt", ".json"))
+                        and os.path.isdir(src_dir) and not exists_nfc_nfd(src_dir, target)):
+                    res["source_broken_links"].append((rel, target))
+                else:
+                    res["broken_links"].append((rel, target))
         if os.path.basename(rel) == "INDEX.md":
             for m in re.finditer(r'\[↗\]\(<([^>]+)>\)\s*\(([\d.]+)\s*karakter\)', o):
                 target, cnt = m.group(1), int(m.group(2).replace(".", ""))
@@ -478,11 +553,14 @@ def summarize(res: Dict) -> Tuple[List[str], List[str], bool]:
     out_lines.append(f"  İkili dosya: {len(res['binary_files'])}   Kopuk bağlantı: {len(res['broken_links'])}   "
                      f"INDEX karakter uyuşmazlığı: {len(res['index_mismatch'])}   "
                      f"Eşleme/değer sızdıran dosya: {len(res['mapping_leak'])}   "
+                     f"Kaynakta da kopuk metin bağlantısı (sayılmaz): {len(res['source_broken_links'])}   "
                      f"Kaynağı olmayan beklenmedik dosya: {len(res['unexpected_files'])}")
     for x in res["binary_files"]:
         det.append(f"D\tikili\t{x}")
     for x in res["broken_links"]:
         det.append(f"D\tkopuk\t{x[0]}\t{x[1]}")
+    for x in res["source_broken_links"]:
+        det.append(f"D\tkaynakta-kopuk\t{x[0]}\t{x[1]}")
     for x in res["index_mismatch"]:
         det.append(f"D\tindex\t{x}")
     for x in res["mapping_leak"]:

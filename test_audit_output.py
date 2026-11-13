@@ -97,7 +97,7 @@ class AuditCase(unittest.TestCase):
     def test_structure_checks(self):
         idx = "| Dosya | Metin |\n|---|---|\n| x | [↗](<b.md>) (3 karakter) |\n[kopuk](<yok.md>) `[örnek](<göreli yol>)`\n"
         src, out = self._case(
-            {"INDEX.md": idx, "b.md": "12345"},
+            {"INDEX.md": idx, "b.md": "12345", "yok.md": "kaynakta var"},
             {"INDEX.md": idx, "b.md": "12345", "c.pdf": b"%PDF", "esleme.md": "[TCKN_1] = 12345678901"},
         )
         res = A.audit(src, out)
@@ -106,6 +106,107 @@ class AuditCase(unittest.TestCase):
         self.assertEqual(len(res["index_mismatch"]), 1)
         self.assertIn("esleme.md", res["mapping_leak"])
         self.assertIn("esleme.md", res["unexpected_files"])
+
+    # --- Toplu denetimde bulunan yanlış alarm sınıfları (gerekçeli düzeltmeler) ---
+    def test_hex_hash_tokens_are_not_tckn(self):
+        # JSON meta verisindeki sha256 vb. onaltılık özetler rastgele 11 haneli geçerli sayı içerebilir
+        h = "ab" + T1 + "cd" + "e" * 40
+        t = f'{{"sha256": "{h}", "x": 1}}\n'
+        src, out = self._case({"a.md": t}, {"a.md": t})
+        L = A.audit(src, out)["leaks"]
+        self.assertEqual(len(L["tckn"]), 0)
+        self.assertEqual(len(L["tckn_known"]), 0)
+        # Gerçek bir TCKN yine yakalanır
+        t2 = t + f"TCKN {T1}\n"
+        src, out = self._case({"a.md": t2}, {"a.md": t2})
+        self.assertEqual(len(A.audit(src, out)["leaks"]["tckn"]), 1)
+
+    def test_mapping_leak_needs_matching_value_shape_same_line(self):
+        table = ": [TCKN_1] : 12345678 : 12.03.2024 10:30 : SGK\n[ADRES_2]\n: 12345678\n"
+        src, out = self._case({"a.md": table}, {"a.md": table})
+        self.assertEqual(A.audit(src, out)["mapping_leak"], [])
+        real = "[TCKN_1] = " + T1 + "\n"
+        src, out = self._case({"b.md": real}, {"b.md": real})
+        self.assertEqual(A.audit(src, out)["mapping_leak"], ["b.md"])
+        real2 = "[IBAN_1]: " + IBAN + "\n"
+        src, out = self._case({"b.md": real2}, {"b.md": real2})
+        self.assertEqual(A.audit(src, out)["mapping_leak"], ["b.md"])
+
+    def test_preservation_ignores_link_targets_and_image_note(self):
+        s = ("| [(Ek 1)DİĞER (2024/123).tif](<(Ek 1)DİĞER (2024/123).tif>) | [↗](<(Ek 1)DİĞER (2024/123).pdf>) |\n"
+             "> **Görseller:** Bu belgedeki 2 görsel `Yakalama (CMK 90)/` klasörüne çıkarıldı.\n")
+        o = ("| [(Ek 1)DİĞER (2024/123).tif (OCR metni)](<(Ek 1)DİĞER (2024/123).md>) | — |\n"
+             "> **Görseller:** güvenlik gereği aktarılmadı.\n")
+        src, out = self._case({"a.md": s}, {"a.md": o})
+        res = A.audit(src, out)
+        self.assertEqual(sum(x[2] for x in res["preserve_lost"]["esas_yil"]), 0)
+        self.assertEqual(sum(x[2] for x in res["preserve_lost"]["kanun"]), 0)
+        # İçerikteki kayıp yine görülür
+        s2, o2 = "Karar 12.03.2024 verildi\n", "Karar [ADRES_1] verildi\n"
+        src, out = self._case({"a.md": s2}, {"a.md": o2})
+        self.assertTrue(A.audit(src, out)["preserve_lost"]["tarih"])
+
+    def test_form_template_phrase_is_not_address(self):
+        t = "Tebligatın yapılacağı (caddesi / sokağı) ile açık adres bildirilmelidir.\n"
+        src, out = self._case({"a.md": t}, {"a.md": t})
+        L = A.audit(src, out)["leaks"]
+        self.assertEqual(len(L["addr_kisi"]) + len(L["addr_kurum"]) + len(L["addr_olay"]), 0)
+
+    def test_consistency_ignores_invalid_ocr_variants_of_same_label(self):
+        # Aynı etiket: geçerli TCKN + onun OCR bozulmuş (geçersiz) varyantı -> çelişki değil
+        bad = T1[:-1] + str((int(T1[-1]) + 1) % 10)
+        s = f"A {T1}\nB {bad}\n"
+        o = "A [TCKN_1]\nB [TCKN_1]\n"
+        src, out = self._case({"a.md": s}, {"a.md": o})
+        self.assertFalse(A.audit(src, out)["consistency_label_multi_value"])
+        # İki farklı geçerli TCKN aynı etikette -> çelişki
+        t2 = fake_tckn("234567891")
+        s = f"A {T1}\nB {t2}\n"
+        src, out = self._case({"a.md": s}, {"a.md": o})
+        self.assertTrue(A.audit(src, out)["consistency_label_multi_value"])
+
+    def test_link_broken_in_source_too_is_not_counted(self):
+        # Kaynakta da bulunmayan .md hedefi: aracın değil kaynağın kusuru (ayrı raporlanır)
+        s = "[Tensip](<01/yok.md>) ve [var](<b.md>)\n"
+        src, out = self._case({"dava.md": s, "b.md": "x"}, {"dava.md": s})
+        res = A.audit(src, out)
+        self.assertEqual([x[1] for x in res["broken_links"]], ["b.md"])
+        self.assertEqual([x[1] for x in res["source_broken_links"]], ["01/yok.md"])
+
+    def test_person_address_not_hidden_by_distant_institution_context(self):
+        # MERNİS satırı: iki satır yukarıda "Genel Müdürlüğü" geçse de kişi adresidir
+        t = ("Bilginin Alındığı Kurum İçişleri Bakanlığı Nüfus Genel Müdürlüğü\n\n"
+             "**MERNİS (Yurtiçi) Adres Bilgisi** Mahalle :TESTTEPE MAH. Cd./Sk./Bul./Mev :DENEME CAD. Kapı No :12/3 İlçe :MERKEZ\n")
+        src, out = self._case({"a.md": t}, {"a.md": t})
+        L = A.audit(src, out)["leaks"]
+        self.assertEqual(len(L["addr_kisi"]), 1)
+        # Kurum adı aynı satırda veya hemen önceki satırda ise kurum
+        t2 = "Örnek Bankası A.Ş. Genel Müdürlüğü\nÇam Mah. Tersane Cad. No:15 Pendik\n"
+        src, out = self._case({"b.md": t2}, {"b.md": t2})
+        L = A.audit(src, out)["leaks"]
+        self.assertEqual((len(L["addr_kisi"]), len(L["addr_kurum"])), (0, 1))
+        # "adresini ..." ifadesi kişi adresidir, aynı satırda müdürlük geçse de
+        t3 = 'Serbestlik Müdürlüğü aracılığıyla; adresini "Şehit Kuzey Sok. Testtepe Mah. No:12 Silivri"\n'
+        src, out = self._case({"c.md": t3}, {"c.md": t3})
+        self.assertEqual(len(A.audit(src, out)["leaks"]["addr_kisi"]), 1)
+
+    def test_business_building_next_line_and_two_lines_up_context_is_kurum(self):
+        cases = {
+            "a.md": "**Adres : **Test Mahallesi, Gül Caddesi, Örnek Plaza, No:12, BUCAK/BURDUR.\n",
+            "b.md": "PAPATYA MAH. ZAMBAK CAD.\nMİLLİ EĞİTİM MÜDÜRLÜĞÜ NO: 3 BURDUR\n",
+            "c.md": "ÖRNEK KATILIM BANKASI A.Ş\nBurdur Subesi\nNs:12 Test Mahallesi Menekşe Caddesi\n",
+        }
+        for name, t in cases.items():
+            src, out = self._case({name: t}, {name: t})
+            L = A.audit(src, out)["leaks"]
+            self.assertEqual((len(L["addr_kisi"]), len(L["addr_kurum"])), (0, 1), name)
+
+    def test_event_description_with_evrak_no_in_link_is_not_address(self):
+        t = ("| 12.03.2024 | Lalezar Mahallesi Uygulama Noktasında aracı durduruldu. | "
+             "[Kolluk (OCR metni)](<_ilgili/x/Kolluk_12.md>) (12.03.2024, evrak no 4521) |\n")
+        src, out = self._case({"a.md": t}, {"a.md": t})
+        L = A.audit(src, out)["leaks"]
+        self.assertEqual(len(L["addr_kisi"]) + len(L["addr_kurum"]) + len(L["addr_olay"]), 0)
 
     def test_stdout_has_no_raw_values_and_exit_code(self):
         t = f"TCKN {T1} IBAN {IBAN}\n"

@@ -29,6 +29,7 @@ import re
 import shutil
 import sys
 import unicodedata
+import urllib.parse
 from datetime import datetime
 from collections import Counter
 from typing import Callable, Dict, List, Optional, Set, Tuple
@@ -377,14 +378,15 @@ class UyapRedactor:
         Katman 2: TR ile başlayan IBAN numaralarını ve 16 haneli banka/kredi kartı
         numaralarını maskeler.
         - Boşluklu, bitişik, OCR kaynaklı (l/I/O/^) bozulmalı veya sonuna tekil OCR
-          harfi ([A-Za-z]?) yapışmış 24 haneli IBAN'ları yakalar.
+          harfi ([A-Za-z]?) yapışmış 24 haneli IBAN'ları yakalar; OCR'ın eklediği 1-2 fazla
+          bitişik hane (24-26 rakam) de IBAN sayılır.
         - Etiketli kart numaralarını (KART NO: ..., KREDİ KARTI NO: ...) ve
           bağımsız 16 haneli Luhn algoritmasından geçen Visa/Mastercard ([45]\\d{15})
           numaralarını yakalar.
         """
         count = 0
         pattern = re.compile(
-            r'(?im)(?:^|(?<=[\s\*\_\(\[\"\'\:\-\^\|])|(?<=^[Il1\|])|(?<=[\s\(\:][Il1\|]))T[RA][ \t\^\.\-]*(?:[0-9lIOoSB][ \t\^\.\-]*){23}[0-9lIOoSB](?:[A-Za-z](?![A-Za-z0-9]))?(?![0-9])'
+            r'(?im)(?:^|(?<=[\s\*\_\(\[\"\'\:\-\^\|])|(?<=^[Il1\|])|(?<=[\s\(\:][Il1\|]))[Tİ][RA][ \t\^\.\-]*(?:[0-9lIOoSB][ \t\^\.\-]*){23}[0-9lIOoSB](?:[0-9]{1,2})?(?:[A-Za-z](?![A-Za-z0-9]))?(?![0-9])'
         )
 
         def repl(m: re.Match) -> str:
@@ -397,6 +399,35 @@ class UyapRedactor:
             return raw
 
         redacted = pattern.sub(repl, text)
+
+        # 2A-2. Dörtlü gruplarla yazılmış IBAN: satır sonunda bölünmüş veya OCR'ın 1-4 hane
+        # eksik okuduğu biçimler ("TR12 3456 7890 1234\n5678 9012", "TR12 ... 9012 3:")
+        p_grouped = re.compile(
+            r'(?<![A-Za-z0-9])TR\d{2}(?:[ \t]+\d{4}){2}(?:(?:[ \t]+|[ \t]*\r?\n[ \t]*)\d{1,4}(?![\d.]))+'
+        )
+
+        def repl_grouped(m: re.Match) -> str:
+            nonlocal count
+            raw = m.group(0)
+            if sum(c.isdigit() for c in raw) < 18:
+                return raw
+            count += 1
+            return cls._mask("iban", raw, registry)
+
+        redacted = p_grouped.sub(repl_grouped, redacted)
+
+        # 2A-3. OCR'ın hane düşürdüğü/eklediği IBAN: "TR" + 18-26 rakam, en çok 2 tek boşlukla
+        p_ocr_len = re.compile(r'(?<![A-Za-z0-9])TR\d{2}\d+(?: \d+){0,2}(?![\d.,]\d)')
+
+        def repl_ocr_len(m: re.Match) -> str:
+            nonlocal count
+            raw = m.group(0)
+            if not 18 <= sum(c.isdigit() for c in raw) <= 26:
+                return raw
+            count += 1
+            return cls._mask("iban", raw, registry)
+
+        redacted = p_ocr_len.sub(repl_ocr_len, redacted)
 
         # 2B-1. Etiketli 16 haneli Kredi / ATM Kartı Numarası
         p_card_labeled = re.compile(
@@ -647,13 +678,19 @@ class UyapRedactor:
         text = p.sub(repl, text)
         return text, count
 
+    # Bağımsız 11 haneli sayı: harf/rakam bitişikliği ve "rakam.rakam" / "rakam/rakam" (tarih, ondalık,
+    # yıl/esas) biçimleri dışlanır; cümle sonu noktası ("NUMARASI:123....") veya "123.../Ad" izin verilir.
+    _TCKN_STANDALONE_RE = re.compile(
+        r'(?<![A-Za-z0-9])(?<!\d[\./])[1-9]\d{10}(?![A-Za-z0-9])(?![\./]\d)'
+    )
+
     @classmethod
     def collect_known_tckns_from_text(cls, text: str) -> Set[str]:
         """Metin içindeki geçerli (Mod-10) veya açık etiketli 11 haneli TCKN'leri toplar."""
         known: Set[str] = set()
 
         # 1. Geçerli (Mod-10/11) 11 haneli TCKN'ler
-        for m in re.finditer(r'(?<![A-Za-z0-9\./])[1-9]\d{10}(?![A-Za-z0-9\./])', text):
+        for m in re.finditer(cls._TCKN_STANDALONE_RE, text):
             val = m.group(0)
             if cls.is_valid_tckn(val):
                 known.add(val)
@@ -758,6 +795,32 @@ class UyapRedactor:
 
         text = p_labeled.sub(repl_labeled, text)
 
+        # 1A-1b. OCR bozulmalı etiket ve/veya ayırıcılı rakamlar (tam 11 hane):
+        #  - 'T.C.' yerine 'I.C.' / 'Q.C.' / 'G.c.' / '1.C.' gibi okunan etiketler (numara noktaya bitişik),
+        #  - 'TC Kiırılik No.' / 'Krmlik No;' gibi bozulmuş 'Kimlik No' etiketleri,
+        #  - 'TC KİMLİK NO......:' gibi nokta dizili etiketler, rakamlar arasında boşluk/nokta/^ bulunan değerler.
+        p_labeled_ocr = re.compile(
+            r'(?i)(?P<label>(?:(?<![A-Za-z0-9])[A-Za-z0-9]\.[ \t]?C\.'
+            r'|\bT\.?\s*C\.?\s*(?:\(\^\)\s*)?K[^\W\d_]{1,8}(?:\s*\(\^\)\s*)?\s*No(?:su|\.lu)?'
+            r'|\b(?:TCKN|YKN|K[İIÍ]ML[İIÍ]K\s*(?:NO(?:SU)?|NUMARASI))'
+            r'|\bT\.?\s*(?:\(\^\)\s*)?C\.?(?:\s*(?:KN|Kimlik(?:\s*No(?:su|\.lu|marası)?)?))?)'
+            r'[\s\*\_\.\-:;,]*)'
+            r'(?P<num>[0-9lIOoJ|](?:[ \t\.\^]*[0-9lIOoJ|]){10})(?![0-9A-Za-z])'
+        )
+
+        def repl_labeled_ocr(m: re.Match) -> str:
+            nonlocal count
+            raw_num = m.group('num')
+            if re.match(r'\d{1,2}[./]\d{1,2}[./]\d{4}', raw_num) or cls._is_date_or_esas_number(raw_num):
+                return m.group(0)
+            norm = re.sub(r'\D', '', cls._normalize_ocr_digits(raw_num))
+            if len(norm) != 11 or norm[0] == '0':
+                return m.group(0)
+            count += 1
+            return f"{m.group('label')}{cls._mask('tckn', raw_num, registry)}"
+
+        text = p_labeled_ocr.sub(repl_labeled_ocr, text)
+
         # 1A-2. Sayı önce, etiket sonra gelen durumlar (9-13 hane; örn: "12345678901 T.C'nolu")
         # Etiketten sonra harf gelmemeli: "TCK 141", "TCMB kuru", "TCDD" etiket sayılmaz.
         p_num_first = re.compile(
@@ -814,7 +877,7 @@ class UyapRedactor:
         text = p_ocr_split.sub(repl_ocr_split, text)
 
         # 1B-2. 11 haneli bağımsız sayılar (Mod-10/11 doğrulaması VEYA bilinen TCKN ile Hamming mesafesi <= 2)
-        p_standalone = re.compile(r'(?<![A-Za-z0-9\./])[1-9]\d{10}(?![A-Za-z0-9\./])')
+        p_standalone = cls._TCKN_STANDALONE_RE
 
         def repl_standalone(m: re.Match) -> str:
             nonlocal count
@@ -852,6 +915,9 @@ class UyapRedactor:
                 nonlocal count
                 raw = m.group('num')
                 if cls._has_mask(raw):
+                    return raw
+                # Yıl/esas ("2023/12345") ve tarih biçimleri bilinen TCKN soneki/öneki ile tesadüfen çakışabilir
+                if cls._is_date_or_esas_number(raw):
                     return raw
                 # Tarih (08.10.2021) veya para tutarlarını asla bozmamak için kontrol
                 norm = cls._normalize_ocr_digits(raw)
@@ -911,6 +977,12 @@ class UyapRedactor:
             # uygunsa ve önünde evrak/barkod/dosya no etiketi yoksa telefon sayılır.
             if re.fullmatch(r'5\d{9}', raw):
                 before = m.string[max(0, m.start() - 40):m.start()]
+                # "...tespit edilen\n5xxxxxxxxx numaralı telefondan": numaranın hemen ardından
+                # 'telefon/GSM/hat' geliyorsa önceki satırdaki 'kayıt/evrak' sözcüğü etiket sayılmaz.
+                after_phone = re.match(r'(?i)\s*(?:numaral[ıi]|nolu|no\'lu)?\s*(?:cep\s*)?(?:telefon|gsm|hat)', m.string[m.end():m.end() + 40])
+                if after_phone:
+                    count += 1
+                    return cls._mask("telefon", raw, registry)
                 if not phone_ctx.search(before):
                     if raw[1] not in "0123456" and raw[1] != "9":
                         return raw
@@ -1087,7 +1159,8 @@ class UyapRedactor:
     _ADDR_PERSON_RE = re.compile(
         r'(?i)(?:\b(?:davac[ıi]|daval[ıi]|vekil\s+eden|müvekkil|k[ıi]s[ıi]tl[ıi]|vasi(?:si)?|tan[ıi]k|'
         r'şüpheli|san[ıi]k|müşteki|mağdur|muhatap|al[ıi]c[ıi]|ikamet|oturur|yakalama|müşteri|hükümlü|'
-        r'borçlu|alacakl[ıi]|avukat|kişi|şahs[ıi]n?)(?![a-zçğıöşü])|\bAv\.)'
+        r'borçlu|alacakl[ıi]|avukat|kişi|isimli|yükümlü\w*|adresini|şah[ıi]s(?:[ıi]n?|a)?)(?![a-zçğıöşü])|'
+        r'\bAv\.|belirtilen\s+\*\*)'
     )
     _ADDR_INST_RE = re.compile(
         r'(?i)bankas[ıi]|\bbanka\b|bankac[ıi]l[ıi]k|\bA\.\s?Ş\b|\bT\.A\.Ş|genel\s+müdürlü|'
@@ -1107,6 +1180,31 @@ class UyapRedactor:
         r'(?:Hukuk|Ceza|İcra|Asliye|Sulh|Aile|Tüketici|Ticaret|İdare|Vergi)\s+Mah\.?(?=\s|$)|'
         r'\b(?:19|20)\d{2}\s*/\s*\d+\s*(?:E\b|E\.|Esas|K\.|Karar)'
     )
+
+    _ADDR_LEGAL_RE = re.compile(
+        r"(?i)\b(?:HMK|TMK|TBK|İİK|IIK|TCK|CMK)\b|\bmadde(?:si|leri|ler)?\b|\bhüküm(?:leri|ler)?\b|"
+        r"\bsaklı\b|\bgereğince\b"
+    )
+
+    _TABLE_DATE_RE = re.compile(
+        r'\d{1,2}[./]\d{1,2}[./]\d{4}(?:[ \t]*(?:\(\^\)[ \t]*)?\d{1,2}[:.]\d{2})?'
+    )
+
+    @classmethod
+    def _split_after_last_date(cls, val: str) -> Optional[Tuple[str, str]]:
+        """
+        OCR tablo satırı ("AD SOYAD : 12345678 : 12.03.2025 10:30 : 1234 SK. XYZ MAH.5/6"): son tarih/saatten
+        sonraki adres kısmını ayırır. (korunacak_baş, maskelenecek_adres); tarih yoksa None,
+        tarihten sonra adres kalmadıysa ("", "") döner.
+        """
+        dates = list(cls._TABLE_DATE_RE.finditer(val))
+        if not dates:
+            return None
+        rest = val[dates[-1].end():]
+        rest_clean = rest.lstrip(' \t:')
+        if len(rest_clean) < 5:
+            return "", ""
+        return val[:dates[-1].end()] + rest[:len(rest) - len(rest_clean)], rest_clean
 
     @classmethod
     def _address_owner(cls, text: str, start: int, end: int) -> str:
@@ -1147,6 +1245,9 @@ class UyapRedactor:
         if cls._looks_like_url_or_email(addr):
             return True
         if cls._ADDR_NOT_ADDRESS_RE.search(addr):
+            return True
+        # Kanun/madde atıfı içeren hukuki ifade adres değildir ("Tebligat Adresi: HMK'nın 100. maddeleri ...")
+        if cls._ADDR_LEGAL_RE.search(addr):
             return True
         # "Asliye Hukuk Mah." gibi kısaltmada "Mah." öncesi kelime eşleşmeye girmemiş olabilir
         before = text[max(0, start - 30):start]
@@ -1195,8 +1296,16 @@ class UyapRedactor:
                 return m.group(0)
             if cls._skip_address(m.string, m.start('addr'), m.end('addr'), addr_val):
                 return m.group(0)
+            # Tablo satırı ("Adres : AD SOYAD : 12345678 : 12.03.2025 10:30 : 1234 SK. XYZ MAH.5/6"):
+            # tarih/saat ve önceki sütunlar korunur, yalnızca son tarihten sonraki kısım maskelenir.
+            head = ""
+            split = cls._split_after_last_date(addr_val)
+            if split is not None:
+                if not split[1]:
+                    return m.group(0)
+                head, addr_val = split
             count += 1
-            return f"{m.group('pre') or ''}{m.group('label')}{cls._mask('adres', addr_val, registry)}"
+            return f"{m.group('pre') or ''}{m.group('label')}{head}{cls._mask('adres', addr_val, registry)}"
 
         text = p1.sub(repl1, text)
 
@@ -1216,9 +1325,16 @@ class UyapRedactor:
                 return m.group(0)
             if cls._address_owner(m.string, m.start('addr'), m.end('addr')) != "kisi":
                 return m.group(0)
-            count += 1
             lead = re.match(r'[ \t#\*]*', addr).group(0)
-            return f"{m.group('label')}{lead}{cls._mask('adres', addr[len(lead):], registry)}"
+            body = addr[len(lead):]
+            head = ""
+            split = cls._split_after_last_date(body)
+            if split is not None:
+                if not split[1]:
+                    return m.group(0)
+                head, body = split
+            count += 1
+            return f"{m.group('label')}{lead}{head}{cls._mask('adres', body, registry)}"
 
         text = p1b.sub(repl1b, text)
 
@@ -1242,11 +1358,29 @@ class UyapRedactor:
 
         text = p2.sub(repl2, text)
 
+        # 3d. MERNİS tablo satırı: "Mahalle :XXX MAH. Cd./Sk./Bul./Mev :YYY CAD. Kapı No :12/3 İlçe :ZZZ İl :ANTALYA"
+        p3d = re.compile(
+            r'(?i)(?P<label>\bMahalle[ \t]*:[ \t]*)'
+            r'(?P<addr>[^\r\n:]{2,60}?[ \t]+Cd\.?[ \t]*/[ \t]*Sk\.?[ \t]*/[ \t]*Bul\.?[ \t]*/[ \t]*Mev[ \t]*:[^\r\n:]{1,100}?'
+            r'[ \t]+Kap[ıi][ \t]*No[ \t]*:[ \t]*\S+(?:[ \t]+İlçe[ \t]*:[ \t]*[^\r\n:]+?)?'
+            r'(?:[ \t]+İl[ \t]*:[ \t]*[A-ZÇĞİÖŞÜa-zçğıöşü]+)?)'
+            r'(?=[ \t]+(?:Beyan|Tescil|Taşınma)|[ \t]*(?:\r|\n|$))'
+        )
+
+        def repl3d(m: re.Match) -> str:
+            nonlocal count
+            if re.search(cls.MASK_ANY_RE, m.group('addr')):
+                return m.group(0)
+            count += 1
+            return f"{m.group('label')}{cls._mask('adres', m.group('addr'), registry)}"
+
+        text = p3d.sub(repl3d, text)
+
         # 3. Genel Yapısal Açık Adres Kalıbı (K:/D:/Blok/Toki/Apt ve OCR 5k./Ne:/|¢ Kapı varyasyonları dahil)
         p3 = re.compile(
-            r'(?i)(?P<lead>(?:^|(?<=[\s\|\#\:;\,\.\^\(\-\/])))'
+            r'(?i)(?P<lead>(?:^|(?<=[\s\|\#\:;\,\.\^\(\-\/\*"“”])))'
             r'(?P<addr>'
-            r'(?:(?:^|(?<=[\r\n\|\#\:;\,\.\^\(\-\/]))[ \t]*(?:[A-ZÇĞİÖŞÜa-zçğıöşü0-9]+\s+){1,2})?'
+            r'(?:(?:^|(?<=[\r\n\|\#\:;\,\.\^\(\-\/\*"“”]))[ \t]*(?:[A-ZÇĞİÖŞÜa-zçğıöşü0-9]+[ \t]+){1,2})?'
             r'\b(?:Mahallesi|Mah\.?|Mh\.?|Cadde(?:si)?|Cad\.?|Cd\.?|Sokak|Sokağ[ıi]|Sok\.?|Sk\.?|5k\.?|Bulvar[ıi]|Bulv\.?|Blv\.?|Küme\s*Evler[i]?|Toki\s+Evleri)[\s\,\.\^\-]+'
             r'(?:\|¢|[^\r\n\|]){0,100}?'
             r'(?:\b(?:No|Ne|[İiIıl]ç\s*Kap[ıi](?:\s*No)?|Kat|K|Daire|D|Blok|Blk|Apt|Apartman[ıi]|Sitesi|Evleri)|\|¢\s*Kap[ıi](?:\s*No)?)(?:[\s\.\-\:\^\/]*[0-9A-Za-z]|\s+No\b)'
@@ -1263,10 +1397,68 @@ class UyapRedactor:
                 return m.group(0)
             if cls._skip_address(m.string, m.start('addr'), m.end('addr'), addr):
                 return m.group(0)
+            # "12.03.2025YENİ MAH. ..." / "12.03.2025 YENİ MAH. ...": tarihin yılı adrese dahil edilmez
+            keep = ""
+            if re.search(r'\d{1,2}[./]\d{1,2}[./]$', m.string[max(0, m.start('addr') - 8):m.start('addr')]):
+                ym = re.match(r'(?:19|20)\d{2}(?:[ \t]+)?', addr)
+                if ym:
+                    keep, addr = ym.group(0), addr[ym.end():]
+                    if not addr.strip():
+                        return m.group(0)
             count += 1
-            return f"{m.group('lead')}{cls._mask('adres', addr, registry)}"
+            return f"{m.group('lead')}{keep}{cls._mask('adres', addr, registry)}"
 
         text = p3.sub(repl3, text)
+
+        # 3b. Mah. + Sk./Cad. + kapı "5 / 6" biçimi ("No:" etiketsiz) ve ters sıra ("1234 SK. TESTTEPE MAH. 5/6")
+        _W = r'[A-ZÇĞİÖŞÜa-zçğıöşü0-9\.]'
+        _STREET = r'(?:Sk|Sok|Sokak|Sokağ[ıi]|Cad|Cd|Cadde|Caddesi|Bulv|Blv|Bulvar[ıi])'
+        _MAH = r'(?:Mah|Mh|Mahallesi)'
+        _GAP = r'[ \t\^]'
+        p3b = re.compile(
+            r'(?i)(?<![A-ZÇĞİÖŞÜa-zçğıöşü0-9])(?P<addr>'
+            rf'(?:{_W}+{_GAP}+){{1,2}}{_MAH}\.?{_GAP}*(?:{_W}+{_GAP}+){{0,3}}?{_STREET}\.?{_GAP}*\d{{1,4}}(?:{_GAP}*/{_GAP}*\d{{1,3}})?'
+            rf'(?:{_GAP}+[A-ZÇĞİÖŞÜa-zçğıöşü]+(?:{_GAP}*[-/]{_GAP}*[A-ZÇĞİÖŞÜa-zçğıöşü]+)?)?'
+            r'|'
+            rf'(?:\d{{1,5}}[,\.]?{_GAP}+)?(?:{_W}+{_GAP}+){{0,1}}{_STREET}\.?{_GAP}+(?:[A-ZÇĞİÖŞÜa-zçğıöşü]+{_GAP}+){{1,2}}{_MAH}\.?[ \t\.\^]*\d{{1,4}}(?:{_GAP}*/{_GAP}*\d{{1,3}})?'
+            r')'
+        )
+
+        def repl3b(m: re.Match) -> str:
+            nonlocal count
+            addr = m.group('addr')
+            if re.search(cls.MASK_ANY_RE, addr):
+                return m.group(0)
+            if cls._skip_address(m.string, m.start('addr'), m.end('addr'), addr):
+                return m.group(0)
+            count += 1
+            return cls._mask('adres', addr, registry)
+
+        text = p3b.sub(repl3b, text)
+
+        # 3c. İki satıra (başlık/paragraf) bölünmüş adres: ilk satırda Mah.+Sk./Cad. (numarasız), devam satırında "No:"
+        # ("## Testtepe Mahallesi Şehit Kuzey Sokak Lale\n\n## Sitesi Köşkleri No.12 Ac Merkez/ BURDUR").
+        # Her iki satır da aynı etiketle maskelenir.
+        p3c = re.compile(
+            r'(?im)(?:^|(?<=["“”:;]))(?P<lead1>[ \t#\*]*)(?P<a1>(?=[^\r\n]*\b(?:Mahallesi|Mah\.?|Mh\.?)(?![A-Za-zçğıöşü]))'
+            r'[^\r\n"“”:;\d]*?\b(?:Sokak|Sokağ[ıi]|Sok\.?|Sk\.?|Cadde(?:si)?|Cad\.?|Bulvar[ıi])(?![A-Za-zçğıöşü])[^\r\n\d]*)[ \t]*\r?\n'
+            r'(?P<gap>(?:[ \t]*\r?\n){0,2})'
+            r'(?P<lead2>[ \t#\*]*)(?P<a2>[^\r\n]*?\b(?:No|[NVMW][oea])[ \t]*[:.][ \t]*[0-9A-Za-z][^\r\n]*?)'
+            r'(?=[ \t]+(?:adres\w*|ikamet|oturur|Tel\b|GSM\b)|[ \t]*$)'
+        )
+
+        def repl3c(m: re.Match) -> str:
+            nonlocal count
+            joined_addr = m.group('a1') + " " + m.group('a2')
+            if re.search(cls.MASK_ANY_RE, joined_addr):
+                return m.group(0)
+            if cls._skip_address(m.string, m.start('a1'), m.end('a2'), joined_addr):
+                return m.group(0)
+            count += 1
+            lab = cls._mask('adres', joined_addr, registry)
+            return f"{m.group('lead1')}{lab}\n{m.group('gap')}{m.group('lead2')}{lab}"
+
+        text = p3c.sub(repl3c, text)
 
         # 4. Kapalı Tebligat ve İki Satıra Bölünmüş Dilekçe Adresleri devam satırı temizliği
         # (Örn: "[ADRES_1]\nK:2 D:40 Burdur Merkez/ BURDUR" -> devam satırı silinir, aynı etiket kalır)
@@ -1297,6 +1489,13 @@ class UyapRedactor:
 
         text = p4_orphan.sub(repl4_orphan, text)
 
+        # 4b2. Tek başına kalmış "No:9 İç Kapı No:3 Bucak/BURDUR" devam satırı (üstte maske olmasa da adrestir)
+        p4_orphan2 = re.compile(
+            r'(?im)^(?P<lead>[ \t]*)(?P<cont>(?:No|Kap[ıi]\s*No)[ \t:.]*\d+[ \t]+[İiIıl]ç\s*Kap[ıi](?:\s*No)?[ \t:.]*\d+'
+            r'[ \t]+[A-ZÇĞİÖŞÜa-zçğıöşü ]{2,30}/[ \t]*[A-ZÇĞİÖŞÜa-zçğıöşü]{2,20})[ \t]*$'
+        )
+        text = p4_orphan2.sub(repl4_orphan, text)
+
         # 4c. "[ADRES_1]\nİç Kapı No: 2 Örnekçay / Antalya Tel: ..." — devam satırı aynı etiketle maskelenir
         p4_cont = re.compile(
             r'(?im)(?P<masked>(?P<mlabel>' + mask_adres_re + r')[ \t]*\r?\n)(?P<lead>[ \t]*)'
@@ -1311,6 +1510,14 @@ class UyapRedactor:
 
         text = p4_cont.sub(repl4_cont, text)
 
+        # 4c2. OCR'ın "No"yu "Vo/Ne" okuduğu devam satırı: "[ADRES_1]\nVo:19 AC Silivri /ISTANBUL" olarak ... — aynı etiket
+        p4_cont2 = re.compile(
+            r'(?im)(?P<masked>(?P<mlabel>' + mask_adres_re + r')[ \t]*\r?\n)(?P<lead>[ \t]*)'
+            r'(?P<cont>[NVMW][oea][ \t]*[:.][ \t]*[0-9A-Za-z]{1,4}(?:[ \t]+[A-Za-zÇĞİÖŞÜçğıöşü]{1,5})?'
+            r'[ \t]+[A-ZÇĞİÖŞÜa-zçğıöşü ]{2,30}[ \t]*/[ \t]*[A-ZÇĞİÖŞÜa-zçğıöşü]{2,20})(?=["”\)\.,;]|[ \t]|$)'
+        )
+        text = p4_cont2.sub(repl4_cont, text)
+
         # 4d. OCR tablosundan dağılmış adres: "[ADRES_1] / iç Kapı No / DENEME SK. / 28" — aynı etiket
         p4_ocr = re.compile(
             r'(?m)(?P<head>(?P<mlabel>' + mask_adres_re + r')[ \t]*\r?\n(?:[ \t]*[İiIıl]ç\s*Kap[ıi](?:\s*No)?[ \t:]*\r?\n)?)'
@@ -1324,6 +1531,21 @@ class UyapRedactor:
             return f"{m.group('head')}{m.group('mlabel')}"
 
         text = p4_ocr.sub(repl4_ocr, text)
+
+        # 4e. Maskeli adres satırından sonra (arada en çok 1 boş satır) gelen ve kapı numarası +
+        # "İlçe/İL" taşıyan devam satırı: "[ADRES_1]\n\n## Sitesi Köşkleri No.12 Ac Merkez/ BURDUR" — aynı etiket
+        p4_tail = re.compile(
+            r'(?m)(?P<head>(?P<mlabel>' + mask_adres_re + r')[ \t]*\r?\n(?:[ \t]*\r?\n)?)(?P<lead>[ \t#\*]*)'
+            r'(?P<cont>(?![^\r\n]*' + mask_adres_re + r')[^\r\n]{0,60}?\b(?:No|[NVMW][oea])[ \t]*[:.][ \t]*\d[^\r\n]{0,40}?'
+            r'[A-ZÇĞİÖŞÜa-zçğıöşü]{2,25}[ \t]*/[ \t]*[A-ZÇĞİÖŞÜa-zçğıöşü]{2,20})[ \t\.]*$'
+        )
+
+        def repl4_tail(m: re.Match) -> str:
+            nonlocal count
+            count += 1
+            return f"{m.group('head')}{m.group('lead')}{m.group('mlabel')}"
+
+        text = p4_tail.sub(repl4_tail, text)
 
         return text, count
 
@@ -1708,7 +1930,9 @@ class UyapRedactor:
     # Temiz klasör son işlemleri: kopuk görsel/ikili bağlantılar ve OCR kalite denetimi
     # ------------------------------------------------------------------
     BINARY_LINK_EXTS = (".pdf", ".udf", ".tif", ".tiff", ".png", ".jpg", ".jpeg", ".gif", ".bmp",
-                        ".xlsx", ".xls", ".docx", ".doc", ".html", ".htm", ".eml", ".eyp", ".zip", ".rar")
+                        ".xlsx", ".xls", ".docx", ".doc", ".html", ".htm", ".eml", ".eyp", ".zip", ".rar",
+                        # e-yazışma paketi iç dosyaları (imza/mühür/üstveri): temiz klasöre aktarılmaz
+                        ".imz", ".xml", ".psmdcp", ".p7s", ".cer", ".sig")
     IMAGE_LINK_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff")
     OCR_MARKER = "Taranmış Belge (Yerel OCR)"
     OCR_WARNING = (
@@ -1806,7 +2030,12 @@ class UyapRedactor:
             if re.match(r'(?i)^(?:https?|mailto|file):', target) or target.startswith("#"):
                 return m.group(0)
             low = target.lower()
-            if not low.endswith(cls.BINARY_LINK_EXTS) or exists_rel(target):
+            if exists_rel(target) or exists_rel(urllib.parse.unquote(target)):
+                return m.group(0)
+            if low.endswith(".md"):
+                # Kaynakta da bulunmayan/aktarılmayan .md hedefi (ör. dava-analiz.md içindeki ölü bağlantı)
+                return "—" if m.group('alt') == "↗" else (m.group('alt') or os.path.basename(target))
+            if not low.endswith(cls.BINARY_LINK_EXTS):
                 return m.group(0)
             alt = m.group('alt')
             if alt == "↗":  # INDEX tablosundaki "Dosya" sütunu: orijinal aktarılmadı (metin "Metin" sütununda)

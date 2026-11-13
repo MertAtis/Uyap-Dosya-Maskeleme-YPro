@@ -1093,5 +1093,239 @@ class TestOcrCacheAndIndex(unittest.TestCase):
             self.assertIn("(1.234 karakter)", open(idx, encoding="utf-8").read())
 
 
+# ---------------------------------------------------------------------------
+# Toplu gerçek-klasör denetiminden çıkan kalıplar (tüm değerler UYDURMADIR)
+# ---------------------------------------------------------------------------
+class TestBatchAuditFixes(unittest.TestCase):
+
+    def test_iban_with_extra_ocr_digit_masked(self):
+        reg = MaskRegistry()
+        out = red("EFT HESAP-TR1200064000001123456789012 ALAC AD: Ali Veli", reg)
+        self.assertNotIn("1200064000001123456789012", out)
+        self.assertIn("[IBAN_1]", out)
+        out2 = red("Hesap/K.Kart No\nTR1200064000001123456789012\nAlici : Ali", reg)
+        self.assertIn("[IBAN_1]", out2)
+        # 27 haneli uzun sayı IBAN sayılmaz (tamamen bitişik)
+        self.assertIn("120006400000112345678901234", red("TR120006400000112345678901234"))
+
+    def test_tckn_ocr_ic_label_adjacent(self):
+        for text in (f"Ali VELI (I.C.{T1}) isimli", f"Ali (Q.C.{T1}) x", f"X (G.c.{T1[0]} {T1[1:5]} {T1[5:]}) y",
+                     f"B (T.C.{T1[:8]}^ {T1[8:]}) ve", f"Y (1.C.{T1})"):
+            out = red(text, MaskRegistry())
+            self.assertNotIn(T1, out, text)
+            self.assertNotIn(T1[:8], out, text)
+            self.assertIn("[TCKN_1]", out, text)
+
+    def test_standalone_tckn_next_to_period_or_slash(self):
+        cases = [
+            f"## NUMARASI:{T1}.\n\n## ILGILI",
+            f"okuryazar bildiren {T1}.T.C. kimlik SEDA ÖRNEK",
+            f"Konu : {T1}/Deniz ÖRNEK",
+            f"Ad/TCKN: Deniz ÖRNEK/{T1}",
+        ]
+        for text in cases:
+            out = red(text, MaskRegistry())
+            self.assertNotIn(T1, out, text)
+        # Ondalık/tarih benzeri: önünde rakam+nokta varsa korunur
+        self.assertIn(T1, red(f"tutar 3.{T1} TL benzeri"))
+
+    def test_labeled_tckn_dots_and_single_spaced_digits(self):
+        spaced = " ".join(T1)
+        dotted = f"{T1[0]}.{T1[1:4]}.{T1[4:6]}.{T1[6:9]}.{T1[9]}.{T1[10]}."
+        for text in (f"## TC KİMLİK NO......: {spaced}\n## ADI", f"kimlik bilgilerinden (TC: {dotted})"):
+            out = red(text, MaskRegistry())
+            self.assertIn("[TCKN_1]", out, text)
+            self.assertNotIn(T1[:5], out.replace(" ", "").replace(".", ""), text)
+
+    def test_labeled_tckn_ocr_garbled_label(self):
+        cases = [
+            f"oturur. TC (^) Kiırılik No.{T1[:2]} {T1[2:]} : Av. X",
+            f"oturur, TC Kinılik No.{T1} : Av. X",
+            f"oturur. TC Krmlik No;{T1} : Av. X",
+            f"oturur, TC Kırnlik (^) No:{T1} ı Av. X",
+        ]
+        for text in cases:
+            out = red(text, MaskRegistry())
+            self.assertIn("[TCKN_1]", out, text)
+            self.assertNotIn(T1[2:], out, text)
+
+    def test_ocr_ir_prefix_iban_and_caret_between_t_and_c(self):
+        out = red("size İR12 0006 4000 0011 2345 6789 01 Ben", MaskRegistry())
+        self.assertIn("[IBAN_1]", out)
+        out = red(f"Emre Ç ELİK T. (^) C. {' '.join(T1[:3])} {T1[3:7]} {T1[7:10]} {T1[10]}) Tutanağın", MaskRegistry())
+        self.assertIn("[TCKN_1]", out)
+        self.assertNotIn(T1[3:7], out)
+
+    def test_fuzzy_known_tckn_does_not_mask_esas_number(self):
+        text = f"Kocaeli Cumhuriyet Başsavcılığı 2023/1{T1[-4:]} Sor. Silifke 2022/345 Sor."
+        out = red(text, MaskRegistry(), known={T1})
+        self.assertIn(f"2023/1{T1[-4:]}", out)
+        self.assertNotIn("[TCKN_", out)
+
+    def test_phone_after_newline_with_telefon_after(self):
+        text = "Sistem ve kayıtlarımızdan tespit edilen\n5321234567 numaralı telefondan şahsın babası ile"
+        out = red(text)
+        self.assertNotIn("5321234567", out)
+
+    def test_address_does_not_swallow_date_year(self):
+        cases = [
+            "## 12.03.2025YENİ MAH. DENEME SK. NO:5 İÇ KAPI NO:3 ÖRNEKÇAY / İSTANBUL",
+            ": Adapazari → 12.03.2025\nGöktepe mah. no.5 Adapcre/Solanga\n: 12",
+            "Tarih 12.03.2025 Test Mah. Deneme Sk. No:5 Merkez/Burdur",
+        ]
+        for text in cases:
+            out = red(text, MaskRegistry())
+            self.assertIn("12.03.2025", out, text)
+
+    def test_legal_boilerplate_after_tebligat_adresi_is_kept(self):
+        text = ("Muhatap Adı, Soyadı ve Elektronik Tebligat Adresi: HMK'nın 100, 101, 102. "
+                "maddeleri hükümleri saklı kalmak şartıyla,")
+        out = red(text, MaskRegistry())
+        self.assertIn("HMK'nın 100, 101, 102.", out)
+        self.assertNotIn("[ADRES_", out)
+
+    def test_hospital_row_keeps_dates_and_masks_address(self):
+        text = ("Hasta Ad Protokol No Taburcu Tarihi Adres : ALİ VELİ : 12345678 : 12.03.2025 10:30 : "
+                "1234 SK. TESTTEPE MAH.5/6 Telefon")
+        out = red(text, MaskRegistry())
+        self.assertIn("12.03.2025", out)
+        self.assertNotIn("TESTTEPE", out)
+        self.assertIn("[ADRES_", out)
+
+    def test_hospital_label_on_previous_line_keeps_dates(self):
+        text = ("Hasta Ad\nProtokol No\nTaburcu Tarihi\nAdres\n"
+                ": ALİ VELİ : 12345678 : 12.03.2025 10:30 : 1234 SK. TESTTEPE MAH.5/6\nTelefon")
+        out = red(text, MaskRegistry())
+        self.assertIn("12.03.2025 10:30", out)
+        self.assertIn("12345678", out)
+        self.assertNotIn("TESTTEPE", out)
+        self.assertIn("[ADRES_", out)
+
+    def test_address_split_across_heading_lines_masked(self):
+        cases = [
+            "## Testtepe Mahallesi Şehit Kuzey Sokak Lale\n\n## Sitesi Köşkleri No.12 Ac Merkez/ BURDUR\n",
+            "Testtepe Mahallesi Şehit Kuzey Sokak Lale\nSitesi Köşkleri No: 12 Ac Merkez/ Burdur\n12.03.2025\n",
+            'sundugu 12/03/2025 tarihli dilekçesi ile "Şehit Kuzey Sok. Testtepe Mah. Gül\n'
+            'Sitesi Köşkleri No:12 AC Örnekçay /İSTANBUL adresinde ikamet edecegini beyan etmiş olup.\n',
+        ]
+        for text in cases:
+            out = red(text, MaskRegistry())
+            self.assertNotIn("Testtepe", out, text)
+            self.assertNotIn("Köşkleri", out, text)
+            self.assertIn("[ADRES_1]", out, text)
+
+    def test_split_address_second_line_ocr_no_variant(self):
+        text = ('dilekçesinde: adresini "Şehit Kuzey Sok. Testtepe Mah. Lale Sitesi Köşkleri\n'
+                'Vo:f9 AC Silivri /ISTANBUL" olarak değiştirdiğini belirterek')
+        out = red(text, MaskRegistry())
+        self.assertNotIn("Testtepe", out)
+        self.assertNotIn("Silivri", out)
+        self.assertIn("olarak değiştirdiğini belirterek", out)
+
+    def test_split_address_keeps_surrounding_sentence(self):
+        text = ('sundugu 12/03/2025 tarihli dilekçesi ile "Şehit Kuzey Sok. Testtepe Mah. Gül\n'
+                'Sitesi Köşkleri No:12 AC Örnekçay /İSTANBUL adresinde ikamet edecegini beyan etmiş olup.\n')
+        out = red(text, MaskRegistry())
+        self.assertIn("sundugu 12/03/2025 tarihli dilekçesi ile", out)
+        self.assertIn("adresinde ikamet edecegini beyan etmiş olup.", out)
+
+    def test_mernis_table_address_masked(self):
+        text = ("**MERNİS (Yurtiçi) Adres Bilgisi** Mahalle :TESTTEPE MAH. Cd./Sk./Bul./Mev :DENEME CAD. "
+                "Kapı No :12/3 İlçe :MERKEZ İl :ANTALYA Beyan Tarihi:01/02/2020,Tescil Tarihi:01/02/2020")
+        out = red(text, MaskRegistry())
+        self.assertNotIn("TESTTEPE", out)
+        self.assertNotIn("DENEME", out)
+        self.assertIn("[ADRES_1]", out)
+        self.assertIn("Beyan Tarihi:01/02/2020", out)
+
+    def test_person_address_next_to_institution_words_is_masked(self):
+        cases = [
+            ('Yükümlünün Silivri Denetimli Serbestlik Müdürlüğü aracılığıyla sunduğu 12.03.2025 tarihli '
+             'dilekçesinde; adresini "Şehit Kuzey Sok. Testtepe Mah. Gül\nSitesi No:12 AC Örnekçay /İSTANBUL '
+             'adresinde ikamet edeceğini beyan etmiş olup.\n', "Testtepe"),
+            ("İlgi sayılı yazı gereği evrakta belirtilen ** Testtepe Mah. Şehit Kuzey Sk. No:9A  Silivri/ İSTANBUL "
+             "**adresleri jandarma komutanlığımız sorumluluk alanında bulunmadığı", "Testtepe"),
+        ]
+        for text, raw in cases:
+            out = red(text, MaskRegistry())
+            self.assertNotIn(raw, out, text)
+
+    def test_orphan_ic_kapi_continuation_masked(self):
+        text = "ALİ VELİ, MEHMET Oğlu\nNo:9 Iç Kapı No:3 Bucak/BURDUR\nSuç tarihi"
+        out = red(text, MaskRegistry())
+        self.assertNotIn("Bucak/BURDUR", out)
+        self.assertIn("[ADRES_", out)
+
+    def test_mah_sk_with_slash_door_number_masked(self):
+        for text in ("TESTTEPE MAH. 1234 SK. 5 / 6 BUCAK - BURDUR", ": 1234 SK. TESTTEPE MAH. 5/6 Telefon"):
+            out = red(text, MaskRegistry())
+            self.assertNotIn("TESTTEPE", out, text)
+            self.assertIn("[ADRES_", out, text)
+
+    def test_workplace_address_in_tutanak_with_court_two_lines_above(self):
+        text = ("TUTANAK\nBurdur 2. Ağır Ceza Mahkemesinin 2025/211 sayılı yazılarına istinaden tebligata\n"
+                "yarar açık adresinin araştırılması istenen ALİ VELİ isimli şahsa, idaremiz Testtepe Mah.\n"
+                "Deneme Cad. No: 12 Örnek Okey Salonu Merkez/SAKARYA iş yeri adresinden ulaşılamamıştır.\n")
+        out = red(text, MaskRegistry())
+        self.assertNotIn("Deneme Cad", out)
+        self.assertIn("[ADRES_", out)
+
+    def test_dead_md_link_becomes_plain_text_but_live_links_stay(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "b.md"), "w", encoding="utf-8") as f:
+                f.write("x")
+            with open(os.path.join(tmp, "dava-analiz.md"), "w", encoding="utf-8") as f:
+                f.write("[Tensip Zaptı](<01/yok.md>) ve [var](<b.md>) ve [web](https://example.org/a.md)\n")
+            UyapRedactor.rewrite_dropped_links(os.path.join(tmp, "dava-analiz.md"))
+            out = open(os.path.join(tmp, "dava-analiz.md"), encoding="utf-8").read()
+            self.assertNotIn("yok.md", out)
+            self.assertIn("Tensip Zaptı", out)
+            self.assertIn("[var](<b.md>)", out)
+            self.assertIn("https://example.org/a.md", out)
+
+    def test_archive_signature_and_xml_links_rewritten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            idx = os.path.join(tmp, "INDEX.md")
+            with open(os.path.join(tmp, "Ustveri.md"), "w", encoding="utf-8") as f:
+                f.write("x")
+            with open(idx, "w", encoding="utf-8") as f:
+                f.write("| Dosya | Metin |\n|---|---|\n"
+                        "| [a/ImzaCades.imz](<a/ImzaCades.imz>) | — |\n"
+                        "| [a/Ustveri.xml](<a/Ustveri.xml>) | [↗](<Ustveri.md>) |\n"
+                        "| [a/x.psmdcp](<a/x.psmdcp>) | — |\n")
+            UyapRedactor.rewrite_dropped_links(idx)
+            out = open(idx, encoding="utf-8").read()
+            self.assertNotIn("](<a/ImzaCades.imz>)", out)
+            self.assertNotIn("](<a/x.psmdcp>)", out)
+            self.assertNotIn("](<a/Ustveri.xml>)", out)
+
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestGroupedIbanOcr(unittest.TestCase):
+    """Gruplu yazılmış IBAN satır sonunda bölünmüş veya OCR bir hane eksik okumuş olabilir."""
+
+    def test_grouped_iban_split_across_lines_masked(self):
+        red, _ = UyapRedactor.redact_text("Örnek Bankası TR12 3456 7890 1234\n5678 9012, 34 nolu hesaba gönderdi")
+        self.assertNotIn("7890 1234", red)
+        self.assertNotIn("5678 9012", red)
+        self.assertIn("nolu hesaba", red)
+
+    def test_grouped_iban_missing_one_digit_masked(self):
+        red, _ = UyapRedactor.redact_text("adına Örnek Bankası TR12 3456 7890 1234 5678 9012 3:\nnolu hesaptan 01.02.2025")
+        self.assertNotIn("3456", red)
+        self.assertIn("01.02.2025", red)
+
+    def test_web_address_ending_tr_not_masked(self):
+        t = "www.ornekbanka.com.tr\n1234567890123\n4 5 6"
+        self.assertEqual(UyapRedactor.redact_iban(t)[0], t)
+
+    def test_iban_with_dropped_digits_masked(self):
+        for t in ("sube kodu 1234 TR1234567890123 4567890,12 tl hesaba",
+                  "DAN TR12345678901234567890123| A\n1.234,56"):
+            red, _ = UyapRedactor.redact_text(t)
+            self.assertNotIn("TR12", red, t)
+        self.assertIn("1.234,56", UyapRedactor.redact_text("DAN TR12345678901234567890123| A\n1.234,56")[0])
