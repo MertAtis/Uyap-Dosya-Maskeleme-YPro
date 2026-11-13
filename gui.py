@@ -37,7 +37,7 @@ from tkinter import ttk, filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
 
 # Uygulama Sürümü ve Otomatik Güncelleme Kaynağı
-APP_VERSION = "1.4.1"
+APP_VERSION = "1.4.2"
 RUN_BUTTON_TEXT = "▶  Başlat"
 GITHUB_REPO = "MertAtis/Uyap-Dosya-Maskeleme-YPro"
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"

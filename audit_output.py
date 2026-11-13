@@ -92,7 +92,7 @@ def strip_hex_tokens(text: str) -> str:
 def read_text(path: str) -> Optional[str]:
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
-            return f.read()
+            return UyapRedactor.normalize_spaces(f.read())
     except Exception:
         return None
 
@@ -126,7 +126,7 @@ def _extract_non_ocr_from_base(base_dir: str, rel: str, allow_kaynak: bool = Tru
         p = _find_nfc_nfd_file(base_dir, cand)
         if p:
             raw = UyapRedactor.extract_udf_raw(p)
-            return raw if raw else None
+            return UyapRedactor.normalize_spaces(raw) if raw else None
 
     # Sonra Office (.docx, .doc, .xlsx)
     for ext, fn in (
@@ -140,7 +140,24 @@ def _extract_non_ocr_from_base(base_dir: str, rel: str, allow_kaynak: bool = Tru
             p = _find_nfc_nfd_file(base_dir, cand)
             if p:
                 raw = fn(p)
-                return raw if raw else None
+                return UyapRedactor.normalize_spaces(raw) if raw else None
+
+    # En son metin katmanlı PDF (taranmış PDF'ler OCR önbelleğiyle denetlenir; burada yeniden OCR yapılmaz)
+    pdf_rel = stem + ".pdf"
+    for pref in prefixes:
+        cand = os.path.join(pref, pdf_rel) if pref else pdf_rel
+        p = _find_nfc_nfd_file(base_dir, cand)
+        if p:
+            try:
+                import fitz
+                with fitz.open(p) as doc:
+                    sample = "".join(doc[i].get_text() for i in range(min(3, len(doc))))
+                if len(sample.strip()) < 50:
+                    return None
+            except Exception:
+                return None
+            raw = UyapRedactor.extract_pdf_raw(p)
+            return UyapRedactor.normalize_spaces(raw) if raw else None
     return None
 
 
@@ -304,6 +321,30 @@ OLAY_RE = re.compile(
 )
 
 
+_KUNYE_RE = re.compile(
+    r'(?i)vergi|\bVKN\b|V\.\s?D\.|mersis|ticaret\s+sicil|\btel\b|telefon|faks|\bKEP\b|e-?posta|web'
+)
+_PERSON_ID_RE = re.compile(r'(?i)T\.?\s?C\.?\s*(?:Kimlik|No)|TCKN|\[TCKN_')
+
+
+def _company_block_above(lines: List[str], i: int, max_up: int = 6) -> bool:
+    """Adres satırının üstünde yalnız şirket künyesi satırları ve en üstte kurum/şirket adı varsa True
+    (redaktördeki 'şirket taraf bloğu' kuralıyla uyumlu; araya kişi kimliği girerse False)."""
+    seen = 0
+    for j in range(i - 1, -1, -1):
+        s = lines[j].strip()
+        if not s:
+            continue
+        seen += 1
+        if seen > max_up or _PERSON_ID_RE.search(s):
+            return False
+        if INSTITUTION_RE.search(s):
+            return True
+        if not _KUNYE_RE.search(s):
+            return False
+    return False
+
+
 def address_type_count(line: str) -> int:
     return sum(1 for r in ADDR_TOKENS.values() if r.search(line))
 
@@ -362,6 +403,9 @@ def scan_leaks(rel: str, text: str, known_tckns, known_ibans, out: Dict, check_a
             elif INSTITUTION_RE.search(line) or INSTITUTION_RE.search(near):
                 # Kurum adı aynı satırda, önceki 2 dolu satırda ya da sonraki dolu satırda aranır (kurum adı
                 # adresten önce/sonra alt satıra taşabilir); daha uzak bağlam (belge başlığı vb.) yetmez.
+                kind = "kurum"
+            elif _company_block_above(lines, i):
+                # Şirket adı ile adres arasında yalnız künye satırları (VKN/MERSİS/ticaret sicil/tel/KEP)
                 kind = "kurum"
             else:
                 kind = "kisi"

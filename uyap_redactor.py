@@ -217,6 +217,36 @@ class UyapRedactor:
             return cls._LEGACY_MASK[kind]
         return registry.label(kind, raw)
 
+    _SPACE_TRANS = {cp: " " for cp in (0x00A0, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006,
+                                         0x2007, 0x2008, 0x2009, 0x200A, 0x202F, 0x205F, 0x3000)}
+    _SPACE_TRANS.update({cp: None for cp in (0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF)})
+
+    _PCT_LINK_RE = re.compile(r'(\]\()(?!<)([^)\s<>]*%[0-9A-Fa-f]{2}[^)\s<>]*)(\))')
+
+    @classmethod
+    def _decode_link_targets(cls, text: str) -> str:
+        """Yerel (http olmayan) %-kodlu Markdown bağlantı hedeflerini <çözülmüş yol> biçimine çevirir."""
+        if not text or "%" not in text:
+            return text
+
+        def repl(m: re.Match) -> str:
+            target = m.group(2)
+            if re.match(r'(?i)^(?:https?|mailto|file):', target):
+                return m.group(0)
+            dec = urllib.parse.unquote(target)
+            if any(c in dec for c in "<>\n\r"):
+                return m.group(0)
+            return f"{m.group(1)}<{dec}>{m.group(3)}"
+
+        return cls._PCT_LINK_RE.sub(repl, text)
+
+    @classmethod
+    def normalize_spaces(cls, text: str) -> str:
+        """NBSP ve diğer Unicode boşlukları düz boşluğa çevirir; sıfır genişlikli karakterleri siler."""
+        return text.translate(cls._SPACE_TRANS) if text else text
+
+    _BASE_TR_VOCAB = frozenset(['ad', 'adet', 'adli', 'adres', 'adresi', 'adı', 'aile', 'ait', 'alacak', 'alacaklı', 'alıcı', 'alınması', 'ancak', 'anne', 'apartman', 'ara', 'aralık', 'araç', 'arz', 'asliye', 'aslı', 'asıl', 'avans', 'avukat', 'ayrıca', 'ayı', 'açıklama', 'ağustos', 'baba', 'banka', 'bankası', 'baro', 'barosu', 'başkanlığı', 'başsavcılığı', 'bedel', 'bedeli', 'bekar', 'belediye', 'belge', 'belgesi', 'bildirilmesi', 'bilgi', 'bilgileri', 'bilgilerinize', 'bilirkişi', 'bir', 'borç', 'borçlu', 'bu', 'bulvar', 'cadde', 'caddesi', 'celse', 'cevabı', 'cevap', 'ceza', 'cuma', 'cumartesi', 'cumhuriyet', 'cumhuriyeti', 'daha', 'dair', 'daire', 'dairesi', 'dava', 'davacı', 'davalı', 'dekont', 'dekontu', 'devlet', 'dilekçe', 'dilekçesi', 'diğer', 'doktor', 'dosya', 'doğum', 'durum', 'durumu', 'duruşma', 'ederim', 'edilmesi', 'ehliyet', 'ek', 'ekim', 'ekli', 'ekte', 'erkek', 'esas', 'evli', 'evrak', 'eylül', 'faiz', 'fatura', 'gelen', 'gerekçeli', 'gereği', 'gereğince', 'gereğini', 'gibi', 'gibidir', 'giden', 'gider', 'gönderen', 'gönderilmesi', 'göre', 'günü', 'haciz', 'hakim', 'hakkında', 'hali', 'harç', 'hasar', 'hastane', 'hastanesi', 'haziran', 'her', 'hesabı', 'hesap', 'hukuk', 'hususu', 'hususunda', 'hâkim', 'hükmü', 'hüküm', 'iban', 'icra', 'idare', 'ifade', 'ifadesi', 'ihale', 'ikamet', 'il', 'ilamlı', 'ilamsız', 'ile', 'ilgi', 'ilişkin', 'ilçe', 'imza', 'imzası', 'istenmesi', 'istinaf', 'itiraz', 'için', 'işlem', 'işlemi', 'kadar', 'kadın', 'kanun', 'kanunu', 'kapı', 'karar', 'kararı', 'kasım', 'kat', 'katibi', 'katip', 'kavşak', 'kavşağı', 'kaydı', 'kaymakamlığı', 'kayıt', 'kayıtlı', 'kaza', 'kazası', 'kesinleşme', 'kimlik', 'kira', 'kiracı', 'kiraya', 'kişi', 'kişinin', 'konu', 'kurumu', 'kâtip', 'madde', 'maddesi', 'mahalle', 'mahallesi', 'mahkeme', 'mahkemenizin', 'mahkemesi', 'makbuz', 'makbuzu', 'mart', 'masraf', 'mayıs', 'mazbata', 'mağdur', 'medeni', 'miktar', 'muayene', 'müdürlüğü', 'müdürlüğüne', 'mühür', 'müzekkere', 'müzekkeresi', 'müşteki', 'nisan', 'no', 'noter', 'noterliği', 'numara', 'numarası', 'nüfus', 'ocak', 'olan', 'olarak', 'olay', 'olayı', 'olunması', 'olunur', 'olup', 'onay', 'onaylı', 'oran', 'pazar', 'pazartesi', 'perşembe', 'plaka', 'plakası', 'poliçe', 'rapor', 'raporu', 'reddiyat', 'referans', 'rica', 'saat', 'salı', 'sanık', 'satış', 'savcı', 'savcılığı', 'saygılarımla', 'sayı', 'sayılı', 'sayın', 'sigorta', 'sokak', 'sokağı', 'sonra', 'sonucu', 'sonuç', 'soyad', 'soyadı', 'sulh', 'suret', 'sözleşme', 'sözleşmesi', 'sürücü', 'sınıfı', 'tahsilat', 'takibi', 'takip', 'talebi', 'talep', 'talimat', 'tanık', 'tarafına', 'tarafından', 'tarih', 'tarihinde', 'tarihli', 'tebligat', 'tebliğ', 'tedavi', 'tel', 'telefon', 'temmuz', 'temyiz', 'tensip', 'tespit', 'tespiti', 'teşhis', 'ticaret', 'toplam', 'trafik', 'tutanak', 'tutanağı', 'tutar', 'tutarı', 'tüketici', 'tüm', 'türkiye', 'tıp', 'uyarınca', 'uyruğu', 'valiliği', 've', 'vekalet', 'vekaletname', 'vekil', 'vekili', 'veren', 'verilmesi', 'veya', 'yapılması', 'yaralı', 'yasa', 'yazı', 'yazısı', 'yer', 'yeri', 'yevmiye', 'yolu', 'yolun', 'yönetmelik', 'yılı', 'zabıt', 'zaptı', 'çarşamba', 'çok', 'ödeme', 'ölü', 'önce', 'örnek', 'üzere', 'şahsın', 'şahıs', 'şu', 'şubat', 'şube', 'şüpheli'])
+
     SMALL_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".tif", ".tiff", ".heic")
 
     @staticmethod
@@ -453,7 +483,7 @@ class UyapRedactor:
         # 2A-2. Dörtlü gruplarla yazılmış IBAN: satır sonunda bölünmüş veya OCR'ın 1-4 hane
         # eksik okuduğu biçimler ("TR12 3456 7890 1234\n5678 9012", "TR12 ... 9012 3:")
         p_grouped = re.compile(
-            r'(?<![A-Za-z0-9])TR\d{2}(?:[ \t]+\d{4}){2}(?:(?:[ \t]+|[ \t]*\r?\n[ \t]*)\d{1,4}(?![\d.]))+'
+            r'(?<![A-Za-z0-9])TR\d{2}(?:[ \t]+\d{4}){2}(?:(?:[ \t]+|[ \t]*\r?\n[ \t]*(?:[/\-][ \t]*)?)\d{1,4}(?![\d.]))+'
         )
 
         def repl_grouped(m: re.Match) -> str:
@@ -738,6 +768,7 @@ class UyapRedactor:
     def collect_known_tckns_from_text(cls, text: str) -> Set[str]:
         """Metin içindeki geçerli (Mod-10) veya açık etiketli 11 haneli TCKN'leri toplar."""
         known: Set[str] = set()
+        text = cls.normalize_spaces(text)
 
         # 1. Geçerli (Mod-10/11) 11 haneli TCKN'ler
         for m in re.finditer(cls._TCKN_STANDALONE_RE, text):
@@ -893,6 +924,33 @@ class UyapRedactor:
                 return f"{m.group('label')}{cls._mask('tckn', raw_num, registry)}"
             return m.group(0)
 
+        # 1A-0. Etiketli ve satır sonunda bölünmüş TCKN ("T.C. Kimlik No: 234567⏎89138",
+        # OCR "I.C. Kimlik N0: 2345 6789 138"): ilk satırdaki <11 hane + alt satır başındaki eksik
+        # haneler tam 11 eder ve ilk hane 0 değilse maskelenir.
+        p_split = re.compile(
+            r'(?i)(?P<label>(?:\b[TI1]\.?[ \t]*C\.?[ \t]*(?:Kimlik[ \t]*N[o0][a-zçğıöşü\.]*|N[o0][a-zçğıöşü\.]*|KN)?'
+            r'|\bTCKN|\bK[İIÍ]ML[İIÍ]K[ \t]*N[O0][A-Za-zÇĞİÖŞÜçğıöşü\.]*)[ \t\*\_]*[:\.\-]?[ \t\*\_]*)'
+            r'(?P<a>\d(?:[ \t]?\d)*)(?:(?P<sep>[ \t]*\r?\n[ \t]*)(?P<b>\d(?:[ \t]?\d)*))?(?![\d])'
+        )
+
+        def repl_split(m: re.Match) -> str:
+            nonlocal count
+            a = re.sub(r'\D', '', m.group('a'))
+            if m.group('b') is None:
+                # Tek satır: yalnız boşlukla gruplanmış tam 11 hane (bitişik 11 hane diğer kurallarda)
+                if len(a) != 11 or a[0] == '0' or not re.search(r'\d[ \t]\d', m.group('a')):
+                    return m.group(0)
+                count += 1
+                return f"{m.group('label')}{cls._mask('tckn', m.group('a'), registry)}"
+            b = re.sub(r'\D', '', m.group('b'))
+            if len(a) >= 11 or len(a) + len(b) != 11 or a[0] == '0':
+                return m.group(0)
+            raw = m.group('a') + m.group('sep') + m.group('b')
+            count += 1
+            return f"{m.group('label')}{cls._mask('tckn', raw, registry)}"
+
+        text = p_split.sub(repl_split, text)
+
         text = p_labeled.sub(repl_labeled, text)
 
         # 1A-1b. OCR bozulmalı etiket ve/veya ayırıcılı rakamlar (tam 11 hane):
@@ -1018,6 +1076,13 @@ class UyapRedactor:
                     return raw
                 # Yıl/esas ("2023/12345") ve tarih biçimleri bilinen TCKN soneki/öneki ile tesadüfen çakışabilir
                 if cls._is_date_or_esas_number(raw):
+                    return raw
+                # Açıkça VKN/vergi/MERSİS/poliçe vb. etiketli bitişik 10 hane tüzel kişi numarasıdır;
+                # bilinen bir TCKN'nin önekiyle tesadüfen çakışsa bile TCKN sayılmaz.
+                before = m.string[max(0, m.start() - 30):m.start()]
+                if re.fullmatch(r'\d{10}', raw) and re.search(
+                        r'(?i)(?:vergi(?:\s+kimlik)?(?:\s+no(?:su)?)?|\bVKN|V\.\s?D\.?(?:\s*No)?|mersis|poliçe|'
+                        r'abone|sipariş|fatura|barkod)\W{0,6}$', before):
                     return raw
                 # Tarih (08.10.2021) veya para tutarlarını asla bozmamak için kontrol
                 norm = cls._normalize_ocr_digits(raw)
@@ -1269,6 +1334,21 @@ class UyapRedactor:
 
         text = p6.sub(repl6, text)
 
+        # 5a. Kişiye ait SGK/sigortalı sicil no (8-13 hane) ve hekim diploma tescil no.
+        # "İşyeri Sicil No" (işverene ait, 20+ hane) bilerek dışarıda bırakılır.
+        p6s = re.compile(
+            r'(?i)(?P<lead>(?<!İşyeri )(?<!işyeri )\b(?:SGK|SSK|Sigortal[ıi]|Sosyal\s+Güvenlik)[\s\*]*(?:Sicil|Kimlik|Sigorta)?[\s\*]*(?:No|Numaras[ıi])?[\s\*]*[:\t\-][\s\*]*'
+            r'|\bDiploma\s+Tescil\s*(?:No|Numaras[ıi])?[\s\*]*[:\t\-]?[\s\*]*)'
+            r'(?<!\d)(?P<sicil>\d{4,13})(?![\d/])'
+        )
+
+        def repl6s(m: re.Match) -> str:
+            nonlocal count
+            count += 1
+            return f"{m.group('lead')}{cls._mask('sicil', m.group('sicil'), registry)}"
+
+        text = p6s.sub(repl6s, text)
+
         # 5b. Antetteki ticaret sicil no ("Tic. Sicil No: 123456", OCR "Tc. Sici No. 233076 6619 345")
         p6b = re.compile(
             r'(?i)(?P<lead>\bT[iı]?c\.?\s*Sic[iı]l?\s*(?:No|Numaras[ıi])\.?[ \t]*:?[ \t]*)(?P<sicil>\d[\d ]{3,18}\d)(?![\d])'
@@ -1432,8 +1512,14 @@ class UyapRedactor:
             return "olay"
         # Taraf satırı bir şirket/kurumsa ("DAVALILAR : 1.- X Sigorta A.Ş, (V.D. No: ...)") alttaki
         # adres kurum adresidir; satırda kişi kimliği (T.C./TCKN) varsa kişi sayılır.
-        if prev and cls._ADDR_STRONG_INST_RE.search(prev[0]) and \
-                not re.search(r'(?i)T\.?\s?C\.?\s*(?:Kimlik|No)|TCKN|\[TCKN_', prev[0]):
+        _no_person_id = r'(?i)T\.?\s?C\.?\s*(?:Kimlik|No)|TCKN|\[TCKN_'
+        if prev and cls._ADDR_STRONG_INST_RE.search(prev[0]) and not re.search(_no_person_id, prev[0]):
+            return "kurum"
+        # Şirket adı ile adres arasında yalnız şirket künyesi satırı varsa (VKN/MERSİS/sicil/tel/KEP)
+        if len(prev) >= 2 and cls._ADDR_STRONG_INST_RE.search(prev[1]) and \
+                not re.search(_no_person_id, prev[1]) and \
+                re.search(r'(?i)vergi|\bVKN\b|V\.\s?D\.|mersis|ticaret\s+sicil|\btel\b|telefon|faks|\bKEP\b|e-?posta|web',
+                          prev[0]) and not re.search(_no_person_id, prev[0]):
             return "kurum"
         if any(cls._ADDR_PERSON_RE.search(x) for x in prev):
             return "kisi"
@@ -1549,7 +1635,7 @@ class UyapRedactor:
 
         # 2. Önceden sınırlandırılmış UYAP adres cümleleri
         p2 = re.compile(
-            r'(?P<prefix>(?:doğumlu\s+ve\s+halen|ve\s+halen|doğumlu[\.,]|nüfus(?:a|unda)\s+kayıtlı(?:dır)?[\.,]?|kayıtlı\s+olup\s+halen|belirtilen|E-Tebligat\s+Adresidir\.)\s+)'
+            r'(?P<prefix>(?:doğumlu\s+ve\s+halen|ve\s+halen|(?<![A-Za-zÇĞİÖŞÜçğıöşü])halen|doğumlu[\.,]|nüfus(?:a|unda)\s+kayıtlı(?:dır)?[\.,]?|kayıtlı\s+olup\s+halen|belirtilen|E-Tebligat\s+Adresidir\.)\s+)'
             r'(?P<addr>(?:[A-ZÇĞİÖŞÜa-zçğıöşü0-9\.\-\/]+\s+){0,5}?(?:Mah\.|Mh\.|Mahallesi\b)[^\r\n\|]+?)'
             r'(?P<suffix>\s+(?:adresinde\s+oturur|ikamet\s+eder|adresinde\s+ikamet\s+eder|adresinde\s+bulunur|adresine\b|adresinde\b)|\s*(?=$|\r?\n))'
         )
@@ -1558,6 +1644,12 @@ class UyapRedactor:
             nonlocal count
             addr = m.group('addr')
             if re.search(mask_adres_re, addr) or cls._looks_like_url_or_email(addr):
+                return m.group(0)
+            # Tek başına "halen" ön eki: devamı gerçekten açık adres değilse ("halen devam eden ... Mah.
+            # sakinleri") dokunma; sokak/cadde veya kapı numarası şart.
+            if re.fullmatch(r'(?i)halen\s+', m.group('prefix')) and not re.search(
+                    r'(?i)\b(?:Sok\w*|Sk\.?|Cad\w*|Cd\.?|Bulvar\w*|Blv\.?)(?![A-Za-zçğıöşü])|\bNo\s*[:.]?\s*\d|\d+\s*/\s*\d',
+                    addr):
                 return m.group(0)
             if cls._ADDR_COORD_RE.search(addr) or cls._address_owner(m.string, m.start('addr'), m.end('addr')) == "olay":
                 return m.group(0)
@@ -1775,6 +1867,14 @@ class UyapRedactor:
         """
         stats = cls._empty_stats()
 
+        # Katman 0: Unicode boşluk normalizasyonu. PDF/Word metinlerinde sık görülen bölünmez boşluk
+        # (NBSP) ve dar boşluklar kuralların [ \t] beklentisini bozup sicil/adres/TCKN sızıntısına
+        # yol açar; hepsi düz boşluğa, sıfır genişlikli karakterler kaldırılır.
+        text = cls.normalize_spaces(text)
+        # %-kodlu Markdown bağlantı hedeflerini çöz ("Şüpheli%200532%20..."): aksi halde hedefteki
+        # telefon/TCKN maskelenmez ve bağlantı maskeli dosya yoluna eşlenemez.
+        text = cls._decode_link_targets(text)
+
         # Katman 1: Kimlik MRZ (Önce çalışır, blok halinde temizler)
         t, stats["mrz"] = cls.redact_mrz(text, registry=registry)
 
@@ -1876,7 +1976,8 @@ class UyapRedactor:
             with tempfile.TemporaryDirectory() as tmpdir:
                 for pno in range(page_count):
                     page = doc[pno]
-                    text = page.get_text().strip()
+                    # PyMuPDF bazı yazı tiplerinde '-' karakterini U+00AD (yumuşak tire) olarak döndürür
+                    text = page.get_text().replace("\u00ad", "-").strip()
 
                     if len(text) > 50:
                         pages_content.append(f"### Sayfa {pno + 1}\n\n{text}")
@@ -2329,6 +2430,8 @@ class UyapRedactor:
                         continue
                     parts = [p for p in norm_slash.split("/") if p and p != "."]
                     if not parts or any(p == ".." for p in parts):
+                        if issues is not None:
+                            issues.append(("güvensiz ad", raw_name))
                         continue
 
                     dest_candidate = os.path.join(real_tmp, *parts)
@@ -2724,9 +2827,14 @@ class UyapRedactor:
                 else:
                     vocab.update(cls._tr_lower(w) for w in re.findall(r'[A-Za-zÇĞİÖŞÜçğıöşü]{3,}', t))
         flagged = []
+        if len(vocab) < 300:
+            # Klasörde karşılaştırılacak yeterli düzgün metin yoksa (ör. yalnız taranmış evrak),
+            # yerleşik Türkçe/hukuk sözcük listesiyle desteklenir; aksi halde temiz taramalar da işaretlenir.
+            vocab = vocab | cls._BASE_TR_VOCAB
         for p, t in ocr_docs:
             ratio, n = cls._ocr_word_hit_ratio(t, vocab)
-            if n >= min_words and ratio < threshold:
+            threshold_eff = threshold
+            if n >= min_words and ratio < threshold_eff:
                 if "OCR UYARISI" not in t:
                     lines = t.split("\n", 1)
                     if lines and lines[0].startswith("# "):
@@ -2970,6 +3078,7 @@ class UyapRedactor:
             "udf_converted": 0,
             "office_converted": 0,
             "small_images_skipped": 0,
+            "pdf_text_converted": 0,
             "archive_count": 0,
             "unprocessed": [],
             "index_synced": 0,
@@ -3025,6 +3134,9 @@ class UyapRedactor:
                         unprocessed_items.append((f"{arc_rel}/{m}" if m else arc_rel, "işlenemedi (şifreli)"))
                 if any(k == "çok büyük" for k, _ in arc_issues):
                     unprocessed_items.append((arc_rel, "işlenemedi (çok büyük)"))
+                for k, m in arc_issues:
+                    if k == "güvensiz ad":
+                        unprocessed_items.append((f"{arc_rel}/{m}", "güvensiz arşiv üye adı (atlandı)"))
                 return True
 
             def _collect_extracted_archive_items(
@@ -3352,7 +3464,9 @@ class UyapRedactor:
                     grand_stats["last_file_stats"] = p_stats
                     grand_stats["last_file_path"] = masked_base_rel
 
-                    if len(red_text.strip()) > 50:
+                    # Metin belgelerinde (UDF/Word/Excel) kısa ama geçerli evrak da aktarılır; 50 karakter
+                    # eşiği yalnızca OCR türleri için (logo/boş tarama gürültüsünü elemek amacıyla) geçerlidir.
+                    if len(red_text.strip()) > (0 if ext in cls.TEXT_DOC_EXTS else 50):
                         os.makedirs(os.path.dirname(target_dest_md), exist_ok=True)
                         with open(target_dest_md, "w", encoding="utf-8") as wf:
                             wf.write(red_text)
@@ -3364,6 +3478,11 @@ class UyapRedactor:
                                 progress_cb("md", masked_base_rel, grand_stats)
                         elif ext in cls.OFFICE_DOC_EXTS:
                             grand_stats["office_converted"] += 1
+                            if progress_cb:
+                                progress_cb("md", masked_base_rel, grand_stats)
+                        elif ext == ".pdf" and "(Yerel OCR)" not in red_text:
+                            # Metin katmanlı PDF: OCR yapılmadı, doğrudan metin çıkarıldı
+                            grand_stats["pdf_text_converted"] += 1
                             if progress_cb:
                                 progress_cb("md", masked_base_rel, grand_stats)
                         else:
@@ -3429,7 +3548,7 @@ class UyapRedactor:
                     grand_stats["last_file_stats"] = p_stats
                     grand_stats["last_file_path"] = masked_disp_rel
 
-                    if len(red_text.strip()) > 50:
+                    if len(red_text.strip()) > (0 if inner_ext in cls.TEXT_DOC_EXTS else 50):
                         os.makedirs(os.path.dirname(target_dest), exist_ok=True)
                         with open(target_dest, "w", encoding="utf-8") as wf:
                             wf.write(red_text)
@@ -3578,6 +3697,8 @@ class UyapRedactor:
         # 6. Dönüşüm ve maskeleme raporu (ham değer içermez)
         grand_stats["mask_occurrences"] = dict(registry.occurrences)
         grand_stats["mask_distinct"] = {k: registry.distinct(k) for k in MaskRegistry.PREFIX}
+        if grand_stats["md_transferred"] == 0:
+            grand_stats["warning_no_documents"] = True
         cls._write_report(src_folder, dest_folder, grand_stats, known_tckns=known_tckns, registry=registry)
 
         if grand_stats["md_transferred"] == 0:
@@ -3625,9 +3746,12 @@ class UyapRedactor:
             w(f"**Aktarılan metin belgesi (.md):** {gs['md_transferred']} adet\n")
             w(f"**Metne dökülen UYAP UDF belgesi (.udf → .md):** {gs.get('udf_converted', 0)} adet\n")
             w(f"**Office (Word/Excel) belgesi:** {gs.get('office_converted', 0)} adet\n")
+            w(f"**Metin katmanlı PDF (OCR'sız):** {gs.get('pdf_text_converted', 0)} adet\n")
             w(f"**Metin içermeyen küçük görsel (simge/logo/imza, atlandı):** {gs.get('small_images_skipped', 0)} adet\n")
             w(f"**Açılan EYP/ZIP arşivi:** {gs.get('archive_count', 0)} adet\n")
             w(f"**Bu çalıştırmada yerel OCR ile metne dökülen taranmış ek:** {gs['ocr_converted']} adet\n")
+            if gs.get("warning_no_documents"):
+                w("\n> ⚠️ **Kaynak klasörde işlenebilir belge bulunamadı.** Doğru dava klasörünü seçtiğinizden emin olun.\n\n")
             w(f"**OCR'lı (taranmış) evrak:** {gs.get('ocr_present', 0)} adet\n")
             w(f"**INDEX.md'de güncellenen karakter sayısı:** {gs['index_synced']} satır\n\n")
 
@@ -3778,6 +3902,7 @@ def main():
     print(f"📄 Aktarılan .md: {stats['md_transferred']} adet")
     print(f"📝 UDF → metin : {stats.get('udf_converted', 0)} adet")
     print(f"💼 Word/Excel  : {stats.get('office_converted', 0)} adet")
+    print(f"📑 Metinli PDF : {stats.get('pdf_text_converted', 0)} adet")
     print(f"🖼️ Küçük görsel: {stats.get('small_images_skipped', 0)} adet (simge/logo, atlandı)")
     print(f"📦 EYP/ZIP     : {stats.get('archive_count', 0)} arşiv")
     print(f"👁️ Yerel OCR    : {stats['ocr_converted']} adet")

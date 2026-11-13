@@ -2126,3 +2126,67 @@ class TestFiltrelemeTestFindings(unittest.TestCase):
             self.assertEqual(st["small_images_skipped"], 1)
         finally:
             shutil.rmtree(root, ignore_errors=True)
+
+
+class TestSenaryoQAFindings(unittest.TestCase):
+    """Sonnet senaryo testlerinde bulunan sızıntı/fazla maskeleme düzeltmeleri (uydurma veri)."""
+
+    R = staticmethod(lambda t: UyapRedactor.redact_text(t)[0])
+
+    def test_nbsp_bosluklu_sicil_ve_adres(self):
+        out = self.R("Bilirkişi\xa0Sicil\xa0No:\xa0784512\nAdres\xa0:\xa0Mamak\xa0Mah.\xa0Gazi\xa0Cad.\xa0No:58/4\xa0Mamak/ANKARA")
+        self.assertNotIn("784512", out)
+        self.assertNotIn("Mamak Mah", out)
+        self.assertNotIn("Gazi", out)
+
+    def test_halen_adresinde_oturur_mahalle_adi_maskelenir(self):
+        out = self.R("Şüpheli halen Bağbaşı Mah. Gül Sok. No:5 D:3 Merkezefendi/DENİZLİ adresinde oturur.\n\nŞÜPHELİ İFADESİ")
+        self.assertNotIn("Bağbaşı", out)
+        self.assertIn("adresinde oturur.\n\nŞÜPHELİ İFADESİ", out)
+        self.assertIn("Örnek Mah. sakinleri", self.R("halen devam eden davada Örnek Mah. sakinleri"))
+
+    def test_satira_bolunmus_iban_ikinci_satir(self):
+        self.assertNotIn("6789", self.R("IBAN: TR12 0006 4000 0011 2345\n/ 6789 01"))
+
+    def test_sgk_ve_diploma_tescil(self):
+        self.assertNotIn("1234567890123", self.R("SGK Sicil No: 1234567890123"))
+        self.assertNotIn("123456", self.R("Uzm. Dr. Ali Veli Diploma Tescil No: 123456"))
+        self.assertIn("2019/12345", self.R("Marka Tescil No: 2019/12345"))
+
+    def test_bolunmus_ve_bosluklu_tckn(self):
+        self.assertNotIn("89138", self.R("T.C. Kimlik No: 234567\n89138 olan"))
+        self.assertNotIn("6789 138", self.R("I.C. Kimlik N0: 2345 6789 138"))
+        self.assertIn("2025 yılında", self.R("TCKN: 12345678950\n2025 yılında"))
+        self.assertIn("2025/123 Esas", self.R("T.C. No: 12345\n2025/123 Esas"))
+
+    def test_isveren_adresi_kunye_satiri_arada(self):
+        t = ("**İŞVEREN:** Örnek Yazılım A.Ş.\nVergi Kimlik No: 9876543210\n"
+             "Adres: Teknokent Mah. Bilişim Cad. No:5 Kat:3 Çankaya/ANKARA")
+        self.assertIn("Teknokent Mah.", self.R(t))
+        t2 = "DAVALI 1: Örnek Sigorta A.Ş.\nDAVALI 2: Ali Veli\nAdres: Gül Mah. Lale Sok. No:5 Merkez/BURDUR"
+        self.assertNotIn("Lale Sok", self.R(t2))
+
+    def test_vkn_bilinen_tckn_onekiyle_cakisinca_korunur(self):
+        out = self.R("Ali Veli TC: 12345678950\nŞirket VKN: 1234567890 (10 haneli)")
+        self.assertIn("1234567890 (10 haneli)", out)
+
+    def test_yuzde_kodlu_baglanti_hedefi_cozulur_ve_maskelenir(self):
+        out = self.R("- [K](Şüpheli%200532%20000%2011%2022%20-%20ifadeler/a.md) [w](https://x.gov.tr/a%20b.pdf)")
+        self.assertNotIn("0532", out)
+        self.assertNotIn("%20", out.split("https")[0])
+        self.assertIn("https://x.gov.tr/a%20b.pdf", out)
+
+    def test_kisa_udf_belgesi_atilmaz(self):
+        import tempfile, shutil, zipfile
+        root = tempfile.mkdtemp(prefix="uyap_kisa_")
+        try:
+            src = os.path.join(root, "Dava")
+            os.makedirs(src)
+            with zipfile.ZipFile(os.path.join(src, "kisa.udf"), "w") as z:
+                z.writestr("content.xml", '<?xml version="1.0" encoding="UTF-8" ?><template format_id="1.8">'
+                           '<content><![CDATA[CEVAP\nDavalı TC: 12345678950]]></content></template>')
+            dest, st = UyapRedactor.export_isolated_clean_folder(src, os.path.join(root, "out"))
+            self.assertTrue(os.path.isfile(os.path.join(dest, "kisa.md")))
+            self.assertEqual(st["unprocessed"], [])
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
