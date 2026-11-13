@@ -117,13 +117,13 @@ class TestGlassPillBadge(unittest.TestCase):
     def test_badge_creation(self):
         badge = GlassPillBadge(
             self.root,
-            text="%100 Çevrimdışı",
+            text="Çevrimdışı",
             dot_color="#10B981",
             bg="#F0FDF4",
             border="#DCFCE7",
             fg="#15803D"
         )
-        self.assertEqual(badge.lbl_text.cget("text"), "%100 Çevrimdışı")
+        self.assertEqual(badge.lbl_text.cget("text"), "Çevrimdışı")
         self.assertEqual(badge.lbl_dot.cget("text"), "●")
         self.assertEqual(badge.lbl_dot.cget("fg"), "#10B981")
         self.assertEqual(badge.cget("bg"), "#F0FDF4")

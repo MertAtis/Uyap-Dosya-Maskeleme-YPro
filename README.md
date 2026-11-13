@@ -1,6 +1,6 @@
 # 🛡️ Uyap Dosya Maskeleme (YPro)
 
-> **%100 Çevrimdışı (Offline) UYAP Kişisel Veri Maskeleme, Temizleme ve Yapay Zekâya Hazırlama Aracı**
+> **Çevrimdışı (Offline) UYAP Kişisel Veri Maskeleme, Temizleme ve Yapay Zekâya Hazırlama Aracı**
 
 <div align="center">
 
@@ -18,9 +18,9 @@
 
 ## ✨ Öne Çıkan Özellikler
 
-- **🔒 %100 Çevrimdışı ve Sıfır Veri Sızıntısı:** Hiçbir harici API'ye, sunucuya veya buluta veri göndermez. Tüm işlem yerel Python çekirdeği ile RAM üzerinde gerçekleşir.
-- **🛡️ Sıfır Veri Değişikliği (Non-Destructive):** Orijinal `.udf`, `.pdf`, `.tif` dosyalarınıza kesinlikle dokunmaz. Yalnızca makine-okur türev `.md` metinleri üzerinde çalışır.
-- **⚖️ Hukuki Bütünlük Garantisi:** Olay örgüsü, tarihler, para miktarları, mahkeme esas/karar numaraları, ceza maddeleri, anne/baba adları ve taraf ad-soyadları korunur; dava analizi için gerekli hiçbir hukuki veri bozulmaz.
+- **🔒 Çevrimdışı Çalışma:** Hiçbir harici API'ye, sunucuya veya buluta veri göndermez. Tüm işlem yerel Python çekirdeği ile RAM üzerinde gerçekleşir.
+- **🛡️ Orijinale Dokunmama (Non-Destructive):** Orijinal `.udf`, `.pdf`, `.tif` dosyalarınıza kesinlikle dokunmaz. Yalnızca makine-okur türev `.md` metinleri üzerinde çalışır.
+- **⚖️ Hukuki Bütünlük:** Olay örgüsü, tarihler, para miktarları, mahkeme esas/karar numaraları, kanun maddeleri, olay yeri, kurum adresleri, anne/baba adları ve taraf ad-soyadları korunacak biçimde tasarlanmıştır. Kural tabanlı maskeleme hatasız değildir; çıktıyı paylaşmadan önce rapordaki OCR uyarılarına göz atın.
 - **📱 Cep Telefonu ve İletişim Koruması:** Müvekkil ve taraf cep telefonlarının tüm Türkiye formatlarını (`05xx`, `+90 5xx`, boşluklu, parantezli) tespit ederek maskeler.
 - **🪪 Kimlik Kartı & MRZ Koruma:** Taranmış evraklardaki kimlik fotokopilerinde yer alan yeni/eski seri numaralarını ve 3 satırlı ICAO/MRZ şeritlerini (`I<TUR...`) kapatır.
 - **🔄 Otomatik INDEX.md Senkronizasyonu:** OCR sonradan tamamlansa dahi `INDEX.md` dosyasını tarayarak güncel `.md` bağlantılarını ve karakter sayılarını otomatik olarak tabloya işler.
@@ -30,33 +30,39 @@
 
 ---
 
-## 🎯 Hedef 7 Kişisel Veri Kategorisi
+## 🎯 Hedef Kişisel Veri Kategorileri
+
+Maskeler **tutarlı ve numaralıdır**: aynı değer tüm belgelerde aynı etiketi alır (`[TCKN_1]` her yerde aynı kişidir), farklı değerler farklı numara alır. Değer-etiket eşleme tablosu bilerek hiçbir dosyaya yazılmaz; yalnızca işlem sırasında bellekte tutulur.
 
 | Veri Türü | Maskeleme Formatı | Açıklama |
 | :--- | :--- | :--- |
-| **T.C. Kimlik No / YKN** | `[TCKN_GİZLENDİ]` | Algoritmik doğrulama (Mod-10/11) + etiketli 9-11 hane yakalama (dilekçelerdeki 10 haneli yazım hataları dahil; PTT yıldızlı TCKN'ler korunur) |
-| **Cep Telefonu Numarası** | `[TELEFON_GİZLENDİ]` | Türkiye 5xx mobil numaraları (05xx, +90 5xx, boşluklu, tireli, parantezli tüm varyasyonlar) |
-| **Kimlik Kartı Seri No** | `[SERİ_NO_GİZLENDİ]` | Yeni çipli (`[A-Z]\d{2}[A-Z]\d{5}`) ve eski nüfus cüzdanı seri numaraları |
-| **ICAO / MRZ Kodu** | `[KİMLİK_MRZ_KODU_GİZLENDİ]` | Kimlik kartı ve pasaport altındaki 3 satırlı/2 satırlı makine okunur şeritler (`I<TUR...`) |
-| **IBAN** | `[IBAN_GİZLENDİ]` | TR ile başlayan tüm ulusal banka hesap numaraları |
-| **Hâkim / Savcı / Kâtip Sicil** | `[SİCİL_GİZLENDİ]` | Unvan bazlı regex taraması (Başkan, Üye, Hâkim, C. Savcısı, Yazı İşleri Müdürü, Kâtip) |
-| **Açık Adres** | `[ADRES_GİZLENDİ]` | Mahalle, sokak, cadde, kapı no, il/ilçe kalıpları |
+| **T.C. Kimlik No / YKN** | `[TCKN_1]` | Algoritmik doğrulama (Mod-10/11) + etiketli 9-11 hane yakalama (dilekçelerdeki 10 haneli yazım hataları dahil; PTT yıldızlı TCKN'ler korunur) |
+| **Cep Telefonu Numarası** | `[TEL_1]` | Türkiye 5xx mobil numaraları (05xx, +90 5xx, boşluklu, tireli, parantezli). Sabit hat (kurum telefonları) ve barkod/evrak numaraları korunur |
+| **Kimlik Kartı Seri No** | `[SERİ_NO_1]` | Yeni çipli (`[A-Z]\d{2}[A-Z]\d{5}`) ve eski nüfus cüzdanı seri numaraları |
+| **ICAO / MRZ Kodu** | `[MRZ_1]` | Kimlik kartı ve pasaport altındaki 3 satırlı/2 satırlı makine okunur şeritler (`I<TUR...`) |
+| **IBAN** | `[IBAN_1]` | TR ile başlayan IBAN'lar (boşluklu, OCR bozuk, satırlara bölünmüş biçimler dahil) |
+| **Banka Hesap / Müşteri No** | `[HESAP_1]` | Yalnızca hesap bağlamında: "... numaralı hesap", "Hesap No:", hesap listesi tablolarındaki Hesap/Müşteri No sütunları |
+| **Banka Kartı No** | `[KART_1]` | Luhn doğrulamalı 16 hane ve banka tarafından kısmen maskelenmiş kart numaraları |
+| **Sicil No** | `[SİCİL_1]` | Hâkim, savcı, kâtip, bilirkişi, kolluk, baro ve ticaret sicil numaraları |
+| **Açık Kişi Adresi** | `[ADRES_1]` | Kişilere ait ikamet/iş/tebligat adresleri. Kurum adresleri (banka, adliye, noter, baro, PTT, şirket antedi), olay yeri ve nüfus kayıt yerleri korunur |
+
+Registry kullanılmadan doğrudan `redact_text()` çağrıldığında eski sabit etiketler (`[TCKN_GİZLENDİ]` vb.) üretilir.
 
 ---
 
 ## 🎯 Standart Tek İşlem Modu: İzole Temiz Klasör Üret (AI Export)
 
-Kullanıcı deneyimini sadeleştirmek ve veri güvenliğini en üst seviyeye çıkarmak amacıyla uygulama **tek ve kusursuz bir işlem standardına** odaklanmıştır:
+Kullanıcı deneyimini sadeleştirmek ve veri güvenliğini en üst seviyeye çıkarmak amacıyla uygulama **tek bir işlem standardına** odaklanmıştır:
 
 * **📦 İzole Temiz Dava Klasörü Oluşturma:**  
   Orijinal klasöre ASLA dokunmaz. Seçilen dava klasörünün yanına `<Dava Klasörü> (Maskelenmis AI)` adında izole bir klasör üretir.
-* **📄 Sıfır İkili Dosya Prensibi:**  
+* **📄 İkili Dosya Aktarılmaz:**  
   Orijinal `.udf`, `.pdf`, `.tif`, `.eyp` veya ikili ekler hedef klasöre KESİNLİKLE kopyalanmaz. Yalnızca maskelenmiş metin `.md` dosyaları aktarılır.
 * **👁️ Yerel Apple Vision OCR Motoru:**  
   Taranmış fotokopi ve ekler macOS yerel OCR motoruyla çevrimdışı olarak çözülür ve `.md` formatında temiz klasöre kazandırılır.
-* **🔒 7 Katmanlı Kişisel Veri Maskelemesi:**  
-  TCKN, Cep Telefonu, Kimlik Seri No, MRZ Kodu, IBAN, Sicil No ve Açık Adresler tamamen maskelenir.
-* **🔄 Tam Otomatik INDEX.md Senkronizasyonu:**  
+* **🔒 Katmanlı Kişisel Veri Maskelemesi:**  
+  TCKN, cep telefonu, kimlik seri no, MRZ, IBAN, hesap/kart no, sicil no ve kişi adresleri maskelenir. Her çalıştırma `DAVA_DÖNÜŞÜM_VE_GÜVENLİK_RAPORU.md` ile neyin maskelendiğini, neyin bilerek korunduğunu ve bilinen sınırları raporlar.
+* **🔄 Otomatik INDEX.md Senkronizasyonu:**  
   `INDEX.md` tablosundaki tüm evrak satırları taranarak üretilen `.md` bağlantıları ve güncel karakter sayılarıyla senkronize edilir.
 * **📂 Tek Tıkla Finder'da Açma:**  
   İşlem bittiğinde oluşturulan temiz klasör doğrudan macOS Finder'da açılabilir.
@@ -92,7 +98,7 @@ python3 uyap_redactor.py "/dosya/yolu/Dava Klasoru"
 python3 uyap_redactor.py "/dosya/yolu/Dava Klasoru" --sync-index
 ```
 
-#### B. %100 Bağımsız `.app` ve Kurulum `.dmg`'si Derleme (Standalone)
+#### B. Bağımsız `.app` ve Kurulum `.dmg`'si Derleme (Standalone)
 Python çalışma zamanını ve kütüphaneleri uygulamanın içine paketleyip dağıtılabilir DMG üretmek için:
 ```bash
 chmod +x build_dmg.sh
@@ -106,11 +112,13 @@ chmod +x build_dmg.sh
 ```text
 uyap-dosya-maskeleme-ypro/
 ├── gui.py                  # macOS Tkinter modern grafik arayüzü (2x4 İstatistik Paneli & AutoUpdater)
-├── uyap_redactor.py        # 7 Katmanlı maskeleme ve INDEX.md senkronizasyon motoru
+├── uyap_redactor.py        # Katmanlı maskeleme (MaskRegistry: tutarlı numaralı etiket) ve INDEX.md senkronizasyon motoru
+├── audit_output.py         # Geliştirici denetimi: sızıntı / fazla maskeleme / tutarlılık / yapı / koruma ölçümü
 ├── test_uyap_redactor.py   # Çekirdek motor test paketi
+├── test_audit_output.py    # Denetim aracı testleri
 ├── test_gui_automation.py  # 40 Testlik GUI, AutoUpdater ve UI/UX otomasyon paketi
 ├── test_standalone_binary_qa.py # Standalone ikili dosya, otool ve Apple Vision QA paketi
-├── build_dmg.sh            # %100 Bağımsız standalone .app ve .dmg derleme betiği (Resmî Dağıtım)
+├── build_dmg.sh            # Bağımsız standalone .app ve .dmg derleme betiği (Resmî Dağıtım)
 ├── build_app.sh            # Geliştiriciler için hızlı yerel test .app derleme betiği
 ├── UYAP Maskeleme.spec     # PyInstaller bağımsız derleme spesifikasyonu
 ├── requirements.txt        # Sistem gereksinimleri (Zero-Dependency)
@@ -126,3 +134,13 @@ uyap-dosya-maskeleme-ypro/
 
 ## 📄 Lisans ve Sorumluluk Reddi
 Bu yazılım avukatlar ve hukuk profesyonelleri için KVKK ve veri koruma uyumluluğunu kolaylaştırmak amacıyla geliştirilmiştir. Yapay zekâ analizleri öncesinde üçüncü parti bulut sistemlerine veri aktarılmadan önce yerelde çalıştırılması tavsiye edilir.
+
+### Geliştirici denetimi (yalnızca yerel)
+
+```bash
+# Ham OCR metni yalnızca açıkça istenirse ve hedef/kaynak klasör DIŞINDA bir dizinde önbelleğe alınır
+UYAP_OCR_CACHE_DIR=/tmp/ocrcache python3 uyap_redactor.py "<Dava Klasörü>" --out /tmp/out
+python3 audit_output.py "<Dava Klasörü>" /tmp/out --ocr-cache /tmp/ocrcache --details /tmp/audit.txt
+```
+
+`audit_output.py` ekrana yalnızca sayılar ve dosya adları yazar; ham değerli ayrıntılar `--details` dosyasına gider (paylaşmayın). Sızıntı bulunursa çıkış kodu 1'dir.

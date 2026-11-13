@@ -355,14 +355,16 @@ class TestUyapRedactor(unittest.TestCase):
             with open(dest_md, "r", encoding="utf-8") as f:
                 dest_md_content = f.read()
 
+            # Not: export artık tutarlı numaralı etiketler üretir ([TCKN_1] ...); eski sabit
+            # etiketler yalnızca registry'siz redact_* çağrılarında kullanılır.
             self.assertNotIn("12345678901", dest_md_content)
-            self.assertIn("[TCKN_GİZLENDİ]", dest_md_content)
+            self.assertIn("[TCKN_1]", dest_md_content)
             self.assertNotIn("05321112233", dest_md_content)
-            self.assertIn("[TELEFON_GİZLENDİ]", dest_md_content)
+            self.assertIn("[TEL_1]", dest_md_content)
             self.assertNotIn("A12B34567", dest_md_content)
-            self.assertIn("[SERİ_NO_GİZLENDİ]", dest_md_content)
+            self.assertIn("[SERİ_NO_1]", dest_md_content)
             self.assertNotIn("TR330006100511123456789012", dest_md_content)
-            self.assertIn("[IBAN_GİZLENDİ]", dest_md_content)
+            self.assertIn("[IBAN_1]", dest_md_content)
 
             # 2. Sıfır İkili Dosya Garantisi: Hedef klasörde tek bir UDF/PDF/TIF/TIFF/EYP/ZIP/BAK veya _kaynak olmamalı
             self.assertFalse(os.path.exists(os.path.join(dest_dir, "_kaynak")), "_kaynak dizini temiz klasörde bulunmamalı!")
@@ -485,7 +487,7 @@ class TestRegressionFixes(unittest.TestCase):
                 content = f.read()
             self.assertNotIn(self.VALID_TCKN, content)
             self.assertNotIn(self.PHONE, content)
-            self.assertIn("[TCKN_GİZLENDİ]", content)
+            self.assertIn("[TCKN_1]", content)  # export numaralı etiket üretir
 
     def test_manifest_json_files_are_redacted_and_stay_valid(self):
         """2. uyap-project.json ve uyap-evrak-listesi.json değer bazında maskelenmeli, geçerli JSON kalmalı."""
@@ -522,9 +524,10 @@ class TestRegressionFixes(unittest.TestCase):
             self.assertEqual(red_project["case"], "2024/100 Esas")
             self.assertEqual(red_project["sayfa"], 12)
             self.assertEqual(red_project["taraflar"][0]["ad"], "Örnek Kişi")
-            self.assertEqual(red_project["taraflar"][0]["tckn"], UyapRedactor.MASK_TCKN)
-            self.assertEqual(red_project["taraflar"][1]["tckn_int"], UyapRedactor.MASK_TCKN)
-            self.assertIn("[ADRES_GİZLENDİ]", red_project["adres"])
+            # Aynı TCKN hem metin hem tamsayı alanında aynı numaralı etiketi almalı
+            self.assertRegex(red_project["taraflar"][0]["tckn"], r'^\[TCKN_\d+\]$')
+            self.assertEqual(red_project["taraflar"][1]["tckn_int"], red_project["taraflar"][0]["tckn"])
+            self.assertRegex(red_project["adres"], r'\[ADRES_\d+\]')
             self.assertGreaterEqual(stats["tckn"], 3)
             self.assertGreaterEqual(stats["telefon"], 1)
 
@@ -737,9 +740,9 @@ class TestRealCaseFolderFixes(unittest.TestCase):
             self.assertEqual(self.red(t), t)
 
     def test_ocr_garbled_iban_prefix_is_masked(self):
-        out = self.red("VELİ\n|TR578326616630494032699102\n-2000\nITR674095461113930955972979\n")
-        self.assertNotIn("0622439332836791601108", out)
-        self.assertNotIn("0364697482123789914330", out)
+        out = self.red("VELİ\n|TR330000100519786457841326\n-2000\nITR120000100519786457841328\n")
+        self.assertNotIn("0000100519786457841326", out)
+        self.assertNotIn("0000100519786457841328", out)
         self.assertEqual(out.count("[IBAN_GİZLENDİ]"), 2)
 
     def test_address_continuation_line_masked_until_phone(self):
@@ -800,6 +803,294 @@ class TestRealCaseFolderFixes(unittest.TestCase):
             self.assertNotIn("klasörüne çıkarıldı", out)
         finally:
             shutil.rmtree(d, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Tutarlı numaralı maske (MaskRegistry), fazla maskeleme ve kaçan veri testleri.
+# Tüm değerler UYDURMADIR (geçerli checksum'lı sahte TCKN, sahte IBAN/ad/adres).
+# ---------------------------------------------------------------------------
+from uyap_redactor import MaskRegistry  # noqa: E402
+
+
+def fake_tckn(first9: str) -> str:
+    """İlk 9 haneden geçerli checksum'lı sahte TCKN üretir."""
+    d = [int(c) for c in first9]
+    d10 = ((d[0] + d[2] + d[4] + d[6] + d[8]) * 7 - (d[1] + d[3] + d[5] + d[7])) % 10
+    d11 = (sum(d) + d10) % 10
+    return first9 + str(d10) + str(d11)
+
+
+T1 = fake_tckn("123456789")
+T2 = fake_tckn("234567891")
+IBAN1 = "TR120006400000112345678901"
+IBAN1_SPACED = "TR12 0006 4000 0011 2345 6789 01"
+
+
+def red(text, registry=None, known=None):
+    return UyapRedactor.redact_text(text, known_tckns=known, registry=registry)[0]
+
+
+class TestMaskRegistry(unittest.TestCase):
+
+    def test_fake_tckn_is_valid(self):
+        self.assertTrue(UyapRedactor.is_valid_tckn(T1))
+        self.assertTrue(UyapRedactor.is_valid_tckn(T2))
+
+    def test_same_value_same_label_different_value_different_label(self):
+        reg = MaskRegistry()
+        a = red(f"Davacı TCKN: {T1}", reg)
+        b = red(f"Kimlik No: {T1} ve diğer kişi T.C. Kimlik No: {T2}", reg)
+        self.assertIn("[TCKN_1]", a)
+        self.assertIn("[TCKN_1]", b)
+        self.assertIn("[TCKN_2]", b)
+        self.assertNotIn(T1, a + b)
+
+    def test_spaced_and_ocr_iban_get_same_label(self):
+        reg = MaskRegistry()
+        a = red(f"IBAN: {IBAN1}", reg)
+        b = red(f"IBAN: {IBAN1_SPACED}", reg)
+        c = red("IBAN: |" + IBAN1.replace("0", "O", 3), reg)
+        self.assertIn("[IBAN_1]", a)
+        self.assertIn("[IBAN_1]", b)
+        self.assertIn("[IBAN_1]", c)
+
+    def test_partial_tckn_maps_to_known_label(self):
+        reg = MaskRegistry({T1})
+        a = red(f"TCKN: {T1}", reg)
+        b = red(f"TC:{T1[:3]}*****{T1[-3:]}", reg)
+        self.assertIn("[TCKN_1]", a)
+        self.assertEqual(b, "[TCKN_1]")
+
+    def test_registry_none_keeps_legacy_labels(self):
+        out = red(f"TCKN: {T1} Tel: 05321112233 IBAN: {IBAN1}")
+        self.assertIn("[TCKN_GİZLENDİ]", out)
+        self.assertIn("[TELEFON_GİZLENDİ]", out)
+        self.assertIn("[IBAN_GİZLENDİ]", out)
+
+    def test_registry_has_no_disk_export(self):
+        for name in ("to_file", "dump", "save", "export", "to_json"):
+            self.assertFalse(hasattr(MaskRegistry, name), name)
+
+    def test_numbered_labels_not_rematched_by_later_layers(self):
+        reg = MaskRegistry()
+        text = "[TEL_12] Hakim [TCKN_3] Katip [SİCİL_4] [ADRES_2] No:5 [IBAN_7]"
+        self.assertEqual(red(text, reg), text)
+
+    def test_address_split_and_single_line_same_label(self):
+        reg = MaskRegistry()
+        a = red("**DAVALI :** Ali VELİ - Lale Mah. Gül Sk. No:12 İç Kapı No:3 Merkez/ BURDUR", reg)
+        b = red("Adres: Lale Mahallesi Gül Sokak No:12 İç Kapı No:3 Burdur Merkez/BURDUR", reg)
+        self.assertIn("[ADRES_1]", a)
+        self.assertIn("[ADRES_1]", b)
+
+    def test_address_continuation_line_gets_same_label(self):
+        reg = MaskRegistry()
+        out = red("Yakalama Adresi: Lale Mah. Gül Sk. No:12\nİç Kapı No: 2 Örnekçay / Antalya Tel: 0242 111 22 33", reg)
+        self.assertEqual(out.count("[ADRES_1]"), 2)
+        self.assertNotIn("[ADRES_2]", out)
+
+    def test_export_consistent_labels_and_no_mapping_written(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "Dava 2024-1")
+            os.makedirs(os.path.join(src, "a"))
+            with open(os.path.join(src, "a", "1.md"), "w", encoding="utf-8") as f:
+                f.write(f"# Bir\n\nDavacı TCKN: {T1}\nIBAN: {IBAN1}\n")
+            with open(os.path.join(src, "a", "2.md"), "w", encoding="utf-8") as f:
+                f.write(f"# İki\n\nDavalı TCKN: {T2}\nTekrar: {T1}\nIBAN: {IBAN1_SPACED}\n")
+            dest, stats = UyapRedactor.export_isolated_clean_folder(src, os.path.join(tmp, "out"))
+            t1 = open(os.path.join(dest, "a", "1.md"), encoding="utf-8").read()
+            t2 = open(os.path.join(dest, "a", "2.md"), encoding="utf-8").read()
+            self.assertIn("[TCKN_1]", t1)
+            self.assertIn("[TCKN_1]", t2)
+            self.assertIn("[TCKN_2]", t2)
+            self.assertIn("[IBAN_1]", t2)
+            # Hiçbir çıktı dosyasında ham değer / eşleme tablosu yok
+            for root, _d, files in os.walk(dest):
+                for fn in files:
+                    content = open(os.path.join(root, fn), encoding="utf-8", errors="replace").read()
+                    compact = content.replace(" ", "")
+                    for raw in (T1, T2, IBAN1):
+                        self.assertNotIn(raw, compact, fn)
+            report = open(os.path.join(dest, UyapRedactor.REPORT_NAME), encoding="utf-8").read()
+            self.assertIn("Aynı numara = aynı değer", report)
+            for word in ("%100", "kusursuz", "Kusursuz", "garanti", "sıfır sızıntı"):
+                self.assertNotIn(word, report)
+            self.assertEqual(stats["mask_distinct"]["tckn"], 2)
+
+
+class TestOverMaskingFixes(unittest.TestCase):
+
+    def test_institution_addresses_not_masked(self):
+        for line in (
+            "Adres : Örnek Bankası A.Ş. Operasyon Merkezi / Adres: Çam Mah. Tersane Cad.No:15 Pendik/ İstanbul",
+            "Mersis Numarası:0123456789000017 Finans Mahallesi Finans Caddesi No:40/1 34760 Ümraniye/İSTANBUL",
+            "Adres\t: İzmir Adalet Sarayı 35170 Konak/İZMİR",
+        ):
+            self.assertEqual(red(line, MaskRegistry()), line)
+
+    def test_person_address_still_masked(self):
+        out = red("Av. Ayşe ÖRNEK ADRES: Lale Mah. Gül Cad. NO.97 D.5 Buca/İZMİR", MaskRegistry())
+        self.assertIn("[ADRES_1]", out)
+
+    def test_mahkeme_abbreviation_and_esas_not_address(self):
+        line = "İzmir 6. Asliye Hukuk Mah. 2025/69 E. sayılı dosyanın duruşmalarına katılmak üzere yetki verilmiştir."
+        self.assertEqual(red(line), line)
+
+    def test_nufus_template_not_address(self):
+        line = (f"vasi olarak atanan Antalya ili, Örnek ilçesi, Örnekköy Mahallesi. Nk.lu. C: 10 , H:83, BSN: 1'da "
+                f"nüfusa kayıtlı, 20/07/1956 doğumlu,TC: {T1} kimlik nolu ALİ ÖRNEK'in")
+        out = red(line)
+        self.assertIn("Örnekköy Mahallesi. Nk.lu. C: 10", out)
+        self.assertIn("20/07/1956", out)
+        self.assertNotIn(T1, out)
+        line2 = "İli: BURDUR İlçesi: MERKEZ Mah./Köy:DEĞİRMENLER"
+        self.assertEqual(red(line2), line2)
+
+    def test_olay_yeri_not_masked(self):
+        line = "27.07.2020 günü Burdur İli, Merkez, Kardelen Mahallesi, Zambak Caddesi, No:58 önünde trafik kazası meydana gelmiştir."
+        self.assertEqual(red(line), line)
+
+    def test_labeled_tckn_does_not_eat_following_word(self):
+        out = red(f"T.C. KİMLİK NO:{T1} OLAN, ALİ ÖRNEK ADLI BABASI")
+        self.assertIn("[TCKN_GİZLENDİ] OLAN, ALİ", out)
+
+    def test_document_numbers_not_phone(self):
+        for line in ("Evrak No: 5321234567", "Barkod 5551234567", "Ref No : 5591234567"):
+            self.assertEqual(red(line), line)
+        self.assertIn("[TELEFON_GİZLENDİ]", red("Telefon Numarası :5877893287"))
+
+    def test_fixed_line_not_masked(self):
+        line = "Tel: 0 217 421 80 96 Faks: (0212) 542 07 61"
+        self.assertEqual(red(line), line)
+
+    def test_mersis_and_bank_ref_kept(self):
+        for line in ("MERSİS No: 0929 0810 0339 0757", "BANKA REF. NO : 8383470174681453"):
+            self.assertEqual(red(line), line)
+
+
+class TestLeakFixes(unittest.TestCase):
+
+    def test_multiline_iban_masked(self):
+        text = "### 34019161 4610 TR4100 \n\n### 010000 \n\n### 413246 \n\n### 204750 \n\n### 01 \n\n### VADESİZ"
+        out = red(text, MaskRegistry())
+        self.assertIn("[IBAN_1]", out)
+        self.assertIn("[HESAP_1] 4610", out)
+        self.assertNotIn("413246", out)
+        self.assertIn("VADESİZ", out)
+
+    def test_ocr_ta_and_s_iban_masked(self):
+        reg = MaskRegistry()
+        a = red("|TA120006400000112345678901", reg)
+        b = red("TR12000640000011234S678901", reg)
+        self.assertIn("[IBAN_1]", a)
+        self.assertIn("[IBAN_1]", b)
+
+    def test_account_numbers(self):
+        cases = [
+            ("Şubemiz nezdinde 4513494 numaralı hesabının olduğu", "4513494"),
+            ("Hesap No: 12345678 olarak", "12345678"),
+            ("hesap numarası 1234-5678901 olan", "1234-5678901"),
+            ("## Müşteri No : 3693612", "3693612"),
+            ("01014015 TL Vadesiz 0.00", "01014015"),
+        ]
+        for text, raw in cases:
+            out = red(text)
+            self.assertNotIn(raw, out, text)
+            self.assertIn("[HESAP_NO_GİZLENDİ]", out, text)
+        self.assertIn("0.00", red("01014015 TL Vadesiz 0.00"))
+
+    def test_account_table_columns(self):
+        table = (
+            "| MUSTERINO | MUSTERIADI | HESAPNO | SUBEKODU | BAKIYE | ACILIS |\n"
+            "| --- | --- | --- | --- | --- | --- |\n"
+            "| 10500001 | ALİ ÖRNEK | 20600002 | 00072 | 1.250,50 | 20031031 |\n"
+        )
+        out = red(table, MaskRegistry())
+        self.assertNotIn("10500001", out)
+        self.assertNotIn("20600002", out)
+        for kept in ("00072", "1.250,50", "20031031", "ALİ ÖRNEK"):
+            self.assertIn(kept, out)
+
+    def test_dashed_account_reuses_known_label(self):
+        reg = MaskRegistry()
+        out = red("ALİ ÖRNEK 30400005 numaralı hesabı mevcut\n2000-30400005-351 VDSZMVD", reg)
+        self.assertEqual(out.count("[HESAP_1]"), 2)
+
+    def test_card_numbers(self):
+        out = red("Kart: 4111 1111 1111 1111 ve 5406 67** **** 1234")
+        self.assertNotIn("4111 1111", out)
+        self.assertNotIn("67**", out)
+        self.assertEqual(out.count("[KART_NO_GİZLENDİ]"), 2)
+
+    def test_sicil_variants(self):
+        cases = [
+            "SEVAL ÖRNEK (Sicil=234408)",
+            "Sicili 476175",
+            "Baro Sicil No : Burdur Barosu , 490",
+            "Av. Ayşe ÖRNEK (16475) ADRES:",
+            "Ticaret Sicil No: 862070",
+            "Tc. Sici No. 233076 6619 345",
+            "İstanbul Ticaret Sidi Memurtugu, 366587/3 616",
+        ]
+        for c in cases:
+            out = red(c)
+            self.assertIn("[SİCİL_GİZLENDİ]", out, c)
+        self.assertNotIn("476175", red("Sicili 476175"))
+
+    def test_ocr_form_sicil_lines(self):
+        out = red("DOLDURAN ADLİ KOLLUK\n231336-ALİ ÖRNEK\nGÖREVLİSİNİN ADI-SOYADI SİCİLİ,")
+        self.assertNotIn("231336", out)
+        self.assertIn("ALİ ÖRNEK", out)
+        out2 = red("Doktor\nVELİ ÖRNEK\n196931\n")
+        self.assertNotIn("196931", out2)
+        out3 = red("(X.5) ONAYLAYAN SICIL-İMZA\nM-\n280908\n")
+        self.assertNotIn("280908", out3)
+
+    def test_known_sicil_reused_on_ocr_line(self):
+        reg = MaskRegistry()
+        a = red("**HAKİM\t:** Ayşe ÖRNEK  285669", reg)
+        b = red(": Ayşe ÖRNEK 285669", reg)
+        self.assertIn("[SİCİL_1]", a)
+        self.assertIn("[SİCİL_1]", b)
+
+
+class TestOcrCacheAndIndex(unittest.TestCase):
+
+    def test_ocr_cache_inside_dest_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "Dava")
+            os.makedirs(src)
+            dest = os.path.join(tmp, "out")
+            old = os.environ.get("UYAP_OCR_CACHE_DIR")
+            os.environ["UYAP_OCR_CACHE_DIR"] = os.path.join(dest, "cache")
+            try:
+                with self.assertRaises(ValueError):
+                    UyapRedactor.export_isolated_clean_folder(src, dest)
+            finally:
+                if old is None:
+                    os.environ.pop("UYAP_OCR_CACHE_DIR", None)
+                else:
+                    os.environ["UYAP_OCR_CACHE_DIR"] = old
+
+    def test_ocr_cache_read_instead_of_ocr(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = os.path.join(tmp, "c.md")
+            with open(cache, "w", encoding="utf-8") as f:
+                f.write(f"# x.pdf\n\n### Sayfa 1 (Yerel OCR)\n\nTCKN: {T1}\n")
+            out, st = UyapRedactor.extract_and_redact_scanned_file(
+                os.path.join(tmp, "yok.pdf"), raw_cache_path=cache)
+            self.assertNotIn(T1, out)
+            self.assertEqual(st["tckn"], 1)
+
+    def test_archive_index_counts_synced(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "ana_evrak.md"), "w", encoding="utf-8") as f:
+                f.write("x" * 1234)
+            idx = os.path.join(tmp, "INDEX.md")
+            with open(idx, "w", encoding="utf-8") as f:
+                f.write("| Dosya | Metin |\n|---|---|\n| a | [↗](<ana_evrak.md>) (9 karakter) |\n")
+            UyapRedactor.sync_index_md(tmp)
+            self.assertIn("(1.234 karakter)", open(idx, encoding="utf-8").read())
 
 
 if __name__ == "__main__":

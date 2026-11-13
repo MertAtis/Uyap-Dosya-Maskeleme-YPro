@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 UYAP Maskeleme — macOS Desktop GUI
-%100 Çevrimdışı (Offline) UYAP Kişisel Veri Maskeleme ve AI Hazırlık Aracı
+Çevrimdışı (Offline) UYAP Kişisel Veri Maskeleme ve AI Hazırlık Aracı
 
 Tasarım ve Estetik:
 - Shadcn Sadeliği (Zinc renk paleti, mikro kontrast, 1px rafine kenarlıklar, minimalist hap rozetler)
@@ -1341,7 +1341,7 @@ class UyapRedactorApp(_AppBase):
                         else:
                             msg_text = (
                                 "Güncelleme kontrolü için internet bağlantısı kurulamadı.\n\n"
-                                "Not: UYAP Maskeleme motoru %100 çevrimdışı (offline) olarak tam kapasiteyle çalışmaya devam etmektedir."
+                                "Not: UYAP Maskeleme motoru çevrimdışı (offline) çalışmaya devam etmektedir."
                             )
                         messagebox.showwarning(
                             "Güncelleme Sunucusuna Ulaşılamadı",
@@ -1595,7 +1595,7 @@ class UyapRedactorApp(_AppBase):
             self.msg_queue.put(("stats", final_stats))
 
             summary_msg = (
-                f"İzole Temiz Klasör %100 Başarıyla Oluşturuldu! ({elapsed:.1f} sn)\n\n"
+                f"Maskeli klasör oluşturuldu ({elapsed:.1f} sn).\n\n"
                 f"📂 Hedef Klasör: {os.path.basename(dest_folder)}\n"
                 f"📄 Aktarılan .md Belgesi: {final_stats.get('md_transferred', 0)} adet\n"
                 f"👁️ Yerel OCR ile Çözülen Taranmış Ek: {final_stats.get('ocr_converted', 0)} adet\n"
@@ -1605,10 +1605,13 @@ class UyapRedactorApp(_AppBase):
                 f"  • Cep Telefonu: {final_stats.get('telefon', 0)}\n"
                 f"  • Kimlik Seri No: {final_stats.get('seri_no', 0)}\n"
                 f"  • Kimlik MRZ Kodu: {final_stats.get('mrz', 0)}\n"
-                f"  • IBAN: {final_stats.get('iban', 0)}\n"
+                f"  • IBAN / Kart: {final_stats.get('iban', 0)}\n"
+                f"  • Hesap / Müşteri No: {final_stats.get('hesap', 0)}\n"
                 f"  • Sicil No: {final_stats.get('sicil', 0)}\n"
                 f"  • Açık Adres: {final_stats.get('adres', 0)}\n\n"
-                f"✅ Bu klasörde tek bir orijinal UDF, PDF, TIFF dosyası BULUNMAMAKTADIR.\n"
+                f"✅ Bu klasöre orijinal UDF, PDF, TIFF dosyası aktarılmadı.\n"
+                f"ℹ️ Aynı numaralı etiket = aynı değer. Otomatik maskeleme hatasız değildir; paylaşmadan önce\n"
+                f"   klasördeki DAVA_DÖNÜŞÜM_VE_GÜVENLİK_RAPORU.md dosyasına ve OCR uyarılarına göz atın.\n"
                 f"🎯 Yapay zekâya doğrudan bu temiz klasörü verebilirsiniz."
             )
             self.msg_queue.put(("log", f"\n{'='*64}\n{summary_msg}\n{'='*64}\n"))
