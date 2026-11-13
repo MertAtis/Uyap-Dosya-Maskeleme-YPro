@@ -1502,6 +1502,25 @@ class UyapRedactor:
             if pl:
                 prev.append(pl)
             pos = ps - 1
+        # Adresin hemen önünde açık kişi adresi ifadesi ("mernis adresinin", "açık adresinin",
+        # "yerleşim yeri", "küçüğün ... adresi") varsa kişi adresidir; satırın başka yerindeki kurum adı
+        # (aynı cümlede geçen "Sulh Hukuk Mahkemesi" gibi) bunu kurum adresi yapmaz.
+        before = text[max(ls, start - 80):start]
+        if re.search(r'(?i)mernis|(?:açık|ikamet\w*|tebligat|yerleşim)\s+(?:yeri\s+)?adres\w*|yerleşim\s+yeri|'
+                     r'(?:küçüğün|çocuğun|davalının|davacının|sanığın|şüphelinin|müvekkilin|borçlunun|tanığın)\b[^.\n]{0,40}adres\w*\s*["“]?\s*$',
+                     before):
+            return "kisi"
+        # Uzun düzyazı satırında (birden çok cümle) yalnız adresin çevresine bakılır; üst satırlar ve
+        # satırın uzak kısımları (başka kurumların adları) bağlam sayılmaz.
+        if len(line) > 200:
+            win = text[max(ls, start - 80):min(le, end + 40)]
+            if cls._ADDR_OLAY_RE.search(win) or cls._ADDR_HTS_RE.search(win) or cls._ADDR_COORD_RE.search(win):
+                return "olay"
+            if cls._ADDR_PERSON_RE.search(win):
+                return "kisi"
+            if cls._ADDR_INST_RE.search(win):
+                return "kurum"
+            return "kisi"
         if cls._ADDR_OLAY_RE.search(line) or cls._ADDR_HTS_RE.search(line) or cls._ADDR_COORD_RE.search(line):
             return "olay"
         if cls._ADDR_PERSON_RE.search(line):
@@ -1683,14 +1702,15 @@ class UyapRedactor:
         p3 = re.compile(
             r'(?i)(?P<lead>(?:^|(?<=[\s\|\#\:;\,\.\^\(\-\/\*"“”])))'
             r'(?P<addr>'
-            r'(?:(?:^|(?<=[\r\n\|\#\:;\,\.\^\(\-\/\*"“”]))[ \t]*(?:[A-ZÇĞİÖŞÜa-zçğıöşü0-9]+[ \t]+){1,2})?'
+            r'(?:(?:^|(?<=[\r\n\|\#\:;\,\.\^\(\-\/\*"“”]))[ \t]*(?:[A-ZÇĞİÖŞÜa-zçğıöşü0-9]+[ \t]+){1,2}'
+            r'|[A-ZÇĞİÖŞÜ0-9][A-Za-zÇĞİÖŞÜçğıöşü0-9]*[ \t]+(?=(?:Mahallesi|Mah\.?|Mh\.?)[\s\,\.\^\-]))?'
             r'\b(?:Mahallesi|Mah\.?|Mh\.?|Cadde(?:si)?|Cad\.?|Cd\.?|Sokak|Sokağ[ıi]|Sok\.?|Sk\.?|5k\.?|Bulvar[ıi]|Bulv\.?|Blv\.?|Küme\s*Evler[i]?|Toki\s+Evleri)[\s\,\.\^\-]+'
             r'(?:\|¢|[^\r\n\|]){0,100}?'
             r'(?:\b(?:No|Ne|[İiIıl]ç\s*Kap[ıi](?:\s*No)?|Kat|K|Daire|D|Blok|Blk|Apt|Apartman[ıi]|Sitesi|Evleri)|\|¢\s*Kap[ıi](?:\s*No)?)(?:[\s\.\-\:\^\/]*[0-9A-Za-z]|\s+No\b)'
             r'(?:\|¢|[^\r\n\|]){0,100}?'
             r'(?:[A-ZÇĞİÖŞÜa-zçğıöşü\s]{2,25}[\/J]\s*[A-ZÇĞİÖŞÜa-zçğıöşü0-9\s\,\.]{2,25})?'
             r')'
-            r'(?P<tail>(?=\s+(?:adresinde\s+oturur|ikamet\s+eder|adresinde|adresine|SUÇUN\s+TARİHİ|Tel\b|TC\s*Kimlik|\d{2}\.\d{2}\.\d{4}\b|\d\s+5\d{9}\b)|\s*(?:\|(?!¢)|\r|\n)|$))'
+            r'(?P<tail>(?=\s+(?:adresinde\s+oturur|ikamet\s+eder|adresinde|adresine|SUÇUN\s+TARİHİ|Tel\b|TC\s*Kimlik|\d{2}\.\d{2}\.\d{4}\b|\d\s+5\d{9}\b)|\s*(?:\|(?!¢)|\r|\n|[\"“”])|$))'
         )
 
         def repl3(m: re.Match) -> str:
@@ -1698,7 +1718,21 @@ class UyapRedactor:
             addr = m.group('addr')
             if re.search(cls.MASK_ANY_RE, addr):
                 return m.group(0)
-            if cls._skip_address(m.string, m.start('addr'), m.end('addr'), addr):
+            # Adres cümle içinde geçiyorsa eşleşme satır sonuna kadar uzayabilir ("... İncirliova/AYDIN olup
+            # mahkememizin ... TMK 411. madde gereğince"). Kapı no + daire/kat + "İlçe/İL" sonrasında kes:
+            # kalan cümle korunur ve hukuki ifadeler adresin tamamını "adres değil" saydırmaz.
+            rest = ""
+            core = re.search(
+                r'(?i)\bNo\s*[:.]?\s*\d+[A-Za-z]?(?:\s*/\s*\d+)?'
+                r'(?:\s*(?:[İiI]ç\s*Kap[ıi](?:\s*No)?|Daire|Kat|D|K|Blok)\s*[:.]?\s*[0-9A-Za-z]{1,4}\b)*'
+                r'(?:\s*,?\s*[A-ZÇĞİÖŞÜa-zçğıöşü]+\s*/\s*[A-ZÇĞİÖŞÜa-zçğıöşü]+'
+                r'|\s+[A-ZÇĞİÖŞÜ][a-zçğıöşü]+\s+[A-ZÇĞİÖŞÜ]{3,}\b)?',
+                addr,
+            )
+            if core and len(re.findall(r'[A-Za-zÇĞİÖŞÜçğıöşü]{2,}', addr[core.end():])) >= 2:
+                rest = addr[core.end():]
+                addr = addr[:core.end()]
+            if cls._skip_address(m.string, m.start('addr'), m.start('addr') + len(addr), addr):
                 return m.group(0)
             # "12.03.2025YENİ MAH. ..." / "12.03.2025 YENİ MAH. ...": tarihin yılı adrese dahil edilmez
             keep = ""
@@ -1709,7 +1743,7 @@ class UyapRedactor:
                     if not addr.strip():
                         return m.group(0)
             count += 1
-            return f"{m.group('lead')}{keep}{cls._mask('adres', addr, registry)}"
+            return f"{m.group('lead')}{keep}{cls._mask('adres', addr, registry)}{rest}"
 
         text = p3.sub(repl3, text)
 

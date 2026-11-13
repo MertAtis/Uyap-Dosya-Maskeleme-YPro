@@ -2190,3 +2190,50 @@ class TestSenaryoQAFindings(unittest.TestCase):
             self.assertEqual(st["unprocessed"], [])
         finally:
             shutil.rmtree(root, ignore_errors=True)
+
+
+class TestAileKlasoruBulgulari(unittest.TestCase):
+    """Aile mahkemesi klasör testinde bulunan tırnaklı/düzyazı adres sızıntıları (uydurma veri)."""
+
+    R = staticmethod(lambda t: UyapRedactor.redact_text(t)[0])
+
+    def test_tirnakli_adres_ve_cumle_korunur(self):
+        out = self.R('küçüğün belirtilen "Örnek Mahallesi Merkez (Örnek) Sokak No:6 Çine/AYDIN" adresinde yaşamadığı, '
+                     'açık adresinin "Deneme Mahallesi 328 Sok. No:9 İncirliova /AYDIN" olduğu ve mahkememizin yetki '
+                     'alanı dışında bulunduğu anlaşıldığından hüküm kurulmuştur.')
+        self.assertNotIn("Örnek Mahallesi", out)
+        self.assertNotIn("Deneme Mahallesi", out)
+        self.assertIn('" adresinde yaşamadığı', out)
+        self.assertIn('" olduğu ve mahkememizin', out)
+
+    def test_adres_sonrasi_hukuki_ifade_adresi_acik_birakmaz(self):
+        out = self.R("açık adresi Deneme Mahallesi 328 Sok. No:9 İncirliova/AYDIN olup mahkememizin yetki alanı "
+                     "dışında kaldığından TMK 411. madde gereğince hüküm kurulmuştur.")
+        self.assertNotIn("Deneme", out)
+        self.assertIn("olup mahkememizin", out)
+        self.assertIn("TMK 411. madde", out)
+
+    def test_uzun_satirda_uzak_kurum_adi_kisi_adresini_korumaz(self):
+        line = ("Küçük Ali Veli'yi temsil etmek üzere temsil kayyımı atanması için Aydın Sulh Hukuk Mahkemesine "
+                "ihbarda bulunulduğu, Aydın 1. Sulh Hukuk Mahkemesi'nin 2022/2665 Esas 2022/2991 Karar sayılı kararı "
+                'ile küçüğün mernis adresinin " Örnek Mah.Merkez (Örnek) Sokak No:6 Çine /Aydın " olması nedeniyle '
+                "yetkisizlik kararı verildiği anlaşılmıştır.")
+        out = self.R(line)
+        self.assertNotIn("Örnek Mah", out)
+        self.assertIn("Aydın 1. Sulh Hukuk Mahkemesi", out)
+
+    def test_ust_satirdaki_kurum_duzyazi_adresini_korumaz(self):
+        t = ("İncirliova İlçe Jandarma Komutanlığı'na müzekkere yazılarak küçüğün annesinin araştırılması istenmiştir.\n"
+             'Bu bağlamda kayyım atanması talep edilen küçüğün belirtilen "Örnek Mahallesi Merkez Sokak No:6 '
+             'Çine/AYDIN" adresinde yaşamadığı, açık adresinin "Deneme Mahallesi 328 Sok. No:9 İncirliova /AYDIN" '
+             "olduğu ve mahkememizin yetki alanı dışında bulunduğu anlaşıldığından dosyanın gönderilmesine karar verilmiştir.")
+        out = self.R(t)
+        self.assertNotIn("Örnek Mahallesi", out)
+        self.assertNotIn("Deneme Mahallesi", out)
+        self.assertIn("Jandarma Komutanlığı", out)
+
+    def test_duzyazida_banka_adresi_korunur(self):
+        t = ("Örnek Bankası A.Ş. Genel Müdürlüğü, Levent Mah. Büyükdere Cad. No:201 Şişli/İSTANBUL adresinde faaliyet "
+             "göstermekte olup bu husus dosyaya sunulan ticaret sicil gazetesi ve diğer belgelerle sabit olup davalı "
+             "bankanın sorumluluğu bulunmaktadır.")
+        self.assertIn("Büyükdere Cad. No:201", self.R(t))
