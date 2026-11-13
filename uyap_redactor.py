@@ -30,6 +30,8 @@ import shutil
 import sys
 import unicodedata
 import urllib.parse
+import xml.etree.ElementTree as ET
+import zipfile
 from datetime import datetime
 from collections import Counter
 from typing import Callable, Dict, List, Optional, Set, Tuple
@@ -752,6 +754,14 @@ class UyapRedactor:
                         try:
                             with open(fp, "r", encoding="utf-8", errors="replace") as rf:
                                 known.update(cls.collect_known_tckns_from_text(rf.read()))
+                        except Exception:
+                            pass
+                    elif f.lower().endswith(".udf"):
+                        fp = os.path.join(root, f)
+                        try:
+                            udf_text = cls.extract_udf_raw(fp)
+                            if udf_text:
+                                known.update(cls.collect_known_tckns_from_text(udf_text))
                         except Exception:
                             pass
         return known
@@ -1764,9 +1774,42 @@ class UyapRedactor:
         return cls.redact_text(full_raw, known_tckns=known_tckns, registry=registry)
 
     @classmethod
+    def extract_udf_raw(cls, file_path: str) -> str:
+        """
+        UYAP .udf (ZIP arşivi) dosyasındaki content.xml içinden HAM düz metni çıkarır.
+        Geçersiz ZIP, eksik content.xml veya okuma hatasında istisna fırlatmaz, "" döndürür.
+        """
+        try:
+            with zipfile.ZipFile(file_path, "r") as zf:
+                if "content.xml" not in zf.namelist():
+                    return ""
+                xml_bytes = zf.read("content.xml")
+        except Exception:
+            return ""
+
+        xml_text = xml_bytes.decode("utf-8", errors="replace")
+        text = ""
+        try:
+            root = ET.fromstring(xml_text)
+            content_el = root.find("content")
+            if content_el is not None and content_el.text is not None:
+                text = content_el.text
+        except Exception:
+            m = re.search(r"<!\[CDATA\[(.*?)\]\]>", xml_text, re.DOTALL)
+            if m:
+                text = m.group(1)
+
+        if not text:
+            return ""
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        return text.strip()
+
+    @classmethod
     def extract_scanned_raw(cls, file_path: str) -> str:
-        """PDF veya TIFF/görsel dosyasının HAM metnini döndürür (uzantıya göre)."""
+        """PDF, TIFF/görsel veya UDF dosyasının HAM metnini döndürür (uzantıya göre)."""
         ext = os.path.splitext(file_path)[1].lower()
+        if ext == ".udf":
+            return cls.extract_udf_raw(file_path)
         if ext == ".pdf":
             return cls.extract_pdf_raw(file_path)
         if ext in (".tif", ".tiff", ".png", ".jpg", ".jpeg"):
@@ -2217,12 +2260,14 @@ class UyapRedactor:
         grand_stats.update({
             "md_transferred": 0,
             "ocr_converted": 0,
+            "udf_converted": 0,
             "index_synced": 0,
             "total_files": 0,
             "total_work": 0,
             "processed_items": 0,
             "last_file_stats": {},
             "last_file_path": "",
+            "warning_no_documents": False,
         })
 
         def _add(st: Dict[str, int]) -> None:
@@ -2253,6 +2298,59 @@ class UyapRedactor:
         grand_stats["total_files"] = len(md_files)
         grand_stats["total_work"] = len(md_files)
 
+        def _udf_has_derivative(
+            full_p: str, clean_rel: str, target_dest_md: str, check_clean_src: bool = False
+        ) -> bool:
+            """UDF'nin Yargı PRO .md/.udf.md türevinin kaynakta veya hedefte (>=50 bayt) olup olmadığını döndürür."""
+            candidates = [
+                target_dest_md,
+                os.path.join(dest_folder, clean_rel + ".md"),
+                os.path.splitext(full_p)[0] + ".md",
+                full_p + ".md",
+            ]
+            if check_clean_src:
+                clean_no_ext = os.path.splitext(clean_rel)[0]
+                candidates.append(os.path.join(src_folder, clean_no_ext + ".md"))
+                candidates.append(os.path.join(src_folder, clean_rel + ".md"))
+            return any(os.path.exists(c) and os.path.getsize(c) >= 50 for c in candidates)
+
+        def _collect_step2_files(
+            exts: Tuple[str, ...], check_clean_src: bool = False
+        ) -> List[Tuple[str, str, str, str]]:
+            """Adım 2 (ve ön tarama) için taranacak PDF/TIFF/görsel/UDF listesini deterministik sırayla toplar."""
+            items: List[Tuple[str, str, str, str]] = []
+            # Not: Bu tarama _kaynak/ dizinini BİLEREK tarar (orijinal PDF/TIFF/UDF'ler oradadır)
+            for root, dirs, files in os.walk(src_folder):
+                if cls._is_skipped_dir(root, src_folder, cls.SKIP_DIRS_OCR) or _is_dest_subtree(root):
+                    dirs[:] = []
+                    continue
+                dirs[:] = sorted(
+                    d for d in dirs
+                    if not cls._is_skipped_dir(os.path.join(root, d), src_folder, cls.SKIP_DIRS_OCR)
+                    and not _is_dest_subtree(os.path.join(root, d))
+                )
+                for f in sorted(files):
+                    ext = os.path.splitext(f)[1].lower()
+                    if ext not in exts:
+                        continue
+                    full_p = os.path.join(root, f)
+                    rel_p = os.path.relpath(full_p, src_folder)
+                    clean_rel = rel_p[len("_kaynak/"):] if rel_p.startswith("_kaynak/") else rel_p
+                    base_rel = os.path.splitext(clean_rel)[0] + ".md"
+                    target_dest_md = os.path.join(dest_folder, base_rel)
+
+                    if ext == ".udf":
+                        if not _udf_has_derivative(full_p, clean_rel, target_dest_md, check_clean_src=check_clean_src):
+                            items.append((full_p, base_rel, target_dest_md, ext))
+                    else:
+                        # Eğer hedef klasörde bu evrakın .md metni henüz yoksa veya 50 karakterden kısaysa
+                        if not os.path.exists(target_dest_md) or os.path.getsize(target_dest_md) < 50:
+                            items.append((full_p, base_rel, target_dest_md, ext))
+            items.sort(key=lambda x: unicodedata.normalize("NFC", x[1]))
+            return items
+
+        pre_udf_files = _collect_step2_files((".udf",), check_clean_src=True)
+
         # 1a. Ön tarama (yalnızca bellekte): bağlamıyla tespit edilen hesap/sicil numaralarını öğren;
         # böylece aynı numara başka belgede bağlamsız geçtiğinde de aynı etiketle maskelenir.
         learn = MaskRegistry(known_tckns)
@@ -2260,6 +2358,13 @@ class UyapRedactor:
             try:
                 with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                     cls.redact_text(f.read(), known_tckns=known_tckns, registry=learn)
+            except Exception:
+                pass
+        for udf_path, _, _, _ in pre_udf_files:
+            try:
+                udf_raw = cls.extract_udf_raw(udf_path)
+                if udf_raw:
+                    cls.redact_text(udf_raw, known_tckns=known_tckns, registry=learn)
             except Exception:
                 pass
         registry.seed("hesap", learn.known_values("hesap", min_len=7))
@@ -2291,43 +2396,25 @@ class UyapRedactor:
                 if progress_cb:
                     progress_cb("error", f"{rel_path}: {str(e)}", grand_stats)
 
-        # 2. Taranmış Evrakları (PDF ve TIFF) Tara ve Gerekirse Apple Vision OCR ile Çöz
-        scanned_files = []
-        # Not: Bu tarama _kaynak/ dizinini BİLEREK tarar (orijinal PDF/TIFF'ler oradadır)
-        for root, dirs, files in os.walk(src_folder):
-            if cls._is_skipped_dir(root, src_folder, cls.SKIP_DIRS_OCR) or _is_dest_subtree(root):
-                dirs[:] = []
-                continue
-            dirs[:] = sorted(
-                d for d in dirs
-                if not cls._is_skipped_dir(os.path.join(root, d), src_folder, cls.SKIP_DIRS_OCR)
-                and not _is_dest_subtree(os.path.join(root, d))
-            )
-            for f in sorted(files):
-                ext = os.path.splitext(f)[1].lower()
-                if ext in (".pdf", ".tif", ".tiff", ".png", ".jpg", ".jpeg"):
-                    full_p = os.path.join(root, f)
-                    rel_p = os.path.relpath(full_p, src_folder)
-                    clean_rel = rel_p
-                    if clean_rel.startswith("_kaynak/"):
-                        clean_rel = clean_rel[len("_kaynak/"):]
-                    base_rel = os.path.splitext(clean_rel)[0] + ".md"
-                    target_dest_md = os.path.join(dest_folder, base_rel)
-
-                    # Eğer hedef klasörde bu evrakın .md metni henüz yoksa veya 50 karakterden kısaysa
-                    if not os.path.exists(target_dest_md) or os.path.getsize(target_dest_md) < 50:
-                        scanned_files.append((full_p, base_rel, target_dest_md))
-        scanned_files.sort(key=lambda x: unicodedata.normalize("NFC", x[1]))
+        # 2. Taranmış Evrakları (PDF/TIFF) ve Çıplak UYAP UDF Belgelerini İşle
+        scanned_files = _collect_step2_files((".pdf", ".tif", ".tiff", ".png", ".jpg", ".jpeg", ".udf"))
 
         grand_stats["total_work"] = len(md_files) + len(scanned_files)
 
         ocr_converted_list = []
-        for full_p, base_rel, target_dest_md in scanned_files:
+        for full_p, base_rel, target_dest_md, ext in scanned_files:
             try:
-                raw_cache_path = os.path.join(ocr_cache_dir, base_rel) if ocr_cache_dir else None
-                red_text, p_stats = cls.extract_and_redact_scanned_file(
-                    full_p, known_tckns=known_tckns, registry=registry, raw_cache_path=raw_cache_path
-                )
+                if ext == ".udf":
+                    raw = cls.extract_udf_raw(full_p)
+                    if raw:
+                        red_text, p_stats = cls.redact_text(raw, known_tckns=known_tckns, registry=registry)
+                    else:
+                        red_text, p_stats = "", cls._empty_stats()
+                else:
+                    raw_cache_path = os.path.join(ocr_cache_dir, base_rel) if ocr_cache_dir else None
+                    red_text, p_stats = cls.extract_and_redact_scanned_file(
+                        full_p, known_tckns=known_tckns, registry=registry, raw_cache_path=raw_cache_path
+                    )
                 grand_stats["processed_items"] += 1
                 grand_stats["last_file_stats"] = p_stats
                 grand_stats["last_file_path"] = base_rel
@@ -2337,15 +2424,21 @@ class UyapRedactor:
                     with open(target_dest_md, "w", encoding="utf-8") as wf:
                         wf.write(red_text)
                     _add(p_stats)
-                    grand_stats["ocr_converted"] += 1
                     grand_stats["md_transferred"] += 1
-                    ocr_converted_list.append(base_rel)
-                    if progress_cb:
-                        progress_cb("ocr", base_rel, grand_stats)
+                    if ext == ".udf":
+                        grand_stats["udf_converted"] += 1
+                        if progress_cb:
+                            progress_cb("md", base_rel, grand_stats)
+                    else:
+                        grand_stats["ocr_converted"] += 1
+                        ocr_converted_list.append(base_rel)
+                        if progress_cb:
+                            progress_cb("ocr", base_rel, grand_stats)
             except Exception as oe:
                 grand_stats["processed_items"] += 1
                 if progress_cb:
-                    progress_cb("error", f"OCR Hatası ({os.path.basename(full_p)}): {str(oe)}", grand_stats)
+                    err_label = "UDF Hatası" if ext == ".udf" else "OCR Hatası"
+                    progress_cb("error", f"{err_label} ({os.path.basename(full_p)}): {str(oe)}", grand_stats)
 
         # 3. Yargı PRO Manifest JSON Dosyalarını Değer Bazında Maskeleyerek Aktar
         # (AGENTS.md ve kök seviyedeki dosya-bilgileri.md / safahat.md / dava-analiz.md
@@ -2423,6 +2516,15 @@ class UyapRedactor:
         grand_stats["mask_distinct"] = {k: registry.distinct(k) for k in MaskRegistry.PREFIX}
         cls._write_report(src_folder, dest_folder, grand_stats)
 
+        if grand_stats["md_transferred"] == 0:
+            grand_stats["warning_no_documents"] = True
+            if progress_cb:
+                progress_cb(
+                    "error",
+                    "Kaynak klasörde işlenebilir belge bulunamadı (.md/.txt/.udf/.pdf/.tif). Klasörü kontrol edin.",
+                    grand_stats,
+                )
+
         return dest_folder, grand_stats
 
     REPORT_NAME = "DAVA_DÖNÜŞÜM_VE_GÜVENLİK_RAPORU.md"
@@ -2448,6 +2550,7 @@ class UyapRedactor:
             w(f"**Maskeli klasör:** {os.path.basename(dest_folder)}\n")
             w(f"**İşlem tarihi:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             w(f"**Aktarılan metin belgesi (.md):** {gs['md_transferred']} adet\n")
+            w(f"**Metne dökülen UYAP UDF belgesi (.udf → .md):** {gs.get('udf_converted', 0)} adet\n")
             w(f"**Bu çalıştırmada yerel OCR ile metne dökülen taranmış ek:** {gs['ocr_converted']} adet\n")
             w(f"**OCR'lı (taranmış) evrak:** {gs.get('ocr_present', 0)} adet\n")
             w(f"**INDEX.md'de güncellenen karakter sayısı:** {gs['index_synced']} satır\n\n")
@@ -2585,8 +2688,11 @@ def main():
         sys.exit(1)
 
     print("\n✅ Maskeli klasör oluşturuldu. Otomatik maskeleme hatasız değildir; paylaşmadan önce raporu ve OCR'lı belgeleri gözden geçirin.")
+    if stats.get("warning_no_documents"):
+        print("⚠️ Kaynak klasörde işlenebilir belge bulunamadı (.md/.txt/.udf/.pdf/.tif). Klasörü kontrol edin.")
     print(f"📂 Hedef Klasör : {dest}")
     print(f"📄 Aktarılan .md: {stats['md_transferred']} adet")
+    print(f"📝 UDF → metin : {stats.get('udf_converted', 0)} adet")
     print(f"👁️ Yerel OCR    : {stats['ocr_converted']} adet")
     print(f"🔄 İndeks Senkron: {stats['index_synced']} kayıt")
     print("\n--- GİZLENEN KİŞİSEL VERİLER ---")

@@ -8,6 +8,7 @@ import os
 import sys
 import tempfile
 import unittest
+import zipfile
 
 # Modülü içeri aktar
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1299,6 +1300,156 @@ class TestBatchAuditFixes(unittest.TestCase):
             self.assertNotIn("](<a/x.psmdcp>)", out)
             self.assertNotIn("](<a/Ustveri.xml>)", out)
 
+
+class TestUdfExtractionAndExport(unittest.TestCase):
+    """Çıplak .udf dosyalarının metne dökülüp maskelenmesi ve boş klasör uyarısı."""
+
+    @staticmethod
+    def _write_fake_udf(path: str, content_text: str, malformed_xml: bool = False) -> None:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if malformed_xml:
+            xml_body = (
+                '<?xml version="1.0" encoding="UTF-8" ?>'
+                f'<template format_id="1.8"><content><![CDATA[{content_text}]]></content>'  # kapanış etiketi eksik
+            )
+        else:
+            xml_body = (
+                '<?xml version="1.0" encoding="UTF-8" ?>'
+                f'<template format_id="1.8"><content><![CDATA[{content_text}]]></content></template>'
+            )
+        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("content.xml", xml_body.encode("utf-8"))
+
+    def test_a_extract_udf_raw_and_invalid_files(self):
+        """Test A: extract_udf_raw metni döndürür; bozuk/ZIP olmayan dosyada '' döner."""
+        with tempfile.TemporaryDirectory() as tmp:
+            udf_ok = os.path.join(tmp, "tutanak.udf")
+            self._write_fake_udf(
+                udf_ok,
+                f"  \r\nDOSYA NO: 2026/123\r\nDavacı\tTCKN: {T1}\r\nTel: 0532 000 00 00\r\n  ",
+            )
+            extracted = UyapRedactor.extract_udf_raw(udf_ok)
+            self.assertIn("DOSYA NO: 2026/123", extracted)
+            self.assertIn("Davacı\tTCKN:", extracted)  # satır içi sekme korunmalı
+            self.assertNotIn("\r", extracted)
+            self.assertEqual(extracted, extracted.strip())
+
+            # Bozuk XML'de CDATA fallback çalışmalı
+            udf_bad_xml = os.path.join(tmp, "bozuk_xml.udf")
+            self._write_fake_udf(udf_bad_xml, "DOSYA NO: 2026/123\nFallback metni", malformed_xml=True)
+            self.assertEqual(UyapRedactor.extract_udf_raw(udf_bad_xml), "DOSYA NO: 2026/123\nFallback metni")
+
+            # ZIP olmayan dosya -> ""
+            not_zip = os.path.join(tmp, "sahte.udf")
+            with open(not_zip, "wb") as f:
+                f.write(b"NOT_A_ZIP_FILE")
+            self.assertEqual(UyapRedactor.extract_udf_raw(not_zip), "")
+
+            # content.xml içermeyen ZIP -> ""
+            no_content = os.path.join(tmp, "bos.udf")
+            with zipfile.ZipFile(no_content, "w") as zf:
+                zf.writestr("other.txt", "merhaba")
+            self.assertEqual(UyapRedactor.extract_udf_raw(no_content), "")
+
+    def test_b_export_folder_with_only_two_udfs(self):
+        """Test B: Yalnızca 2 UDF içeren klasör -> 2 maskeli .md, .udf yok, udf_converted==2, ocr_converted==0."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "Dava_UDF")
+            os.makedirs(src)
+            self._write_fake_udf(
+                os.path.join(src, "01_Dilekce.udf"),
+                f"DOSYA NO: 2026/123\nDavacı TCKN: {T1}\nCep Telefonu: 0532 000 00 00\n"
+                "Mahkemenize sunulan işbu dilekçe ile taleplerimizi arz ederiz.",
+            )
+            self._write_fake_udf(
+                os.path.join(src, "02_Tutanak.udf"),
+                f"DOSYA NO: 2026/123\nDavalı TCKN: {T2}\nTekrar TCKN: {T1}\n"
+                "İletişim: 0532 000 00 00\nDuruşma tutanağı metni burada yer almaktadır.",
+            )
+
+            events = []
+            dest, stats = UyapRedactor.export_isolated_clean_folder(
+                src, progress_cb=lambda evt, msg, st: events.append((evt, msg))
+            )
+
+            self.assertEqual(stats["udf_converted"], 2)
+            self.assertEqual(stats["ocr_converted"], 0)
+            self.assertEqual(stats["md_transferred"], 2)
+            self.assertEqual(stats["ocr_present"], 0)
+            self.assertEqual(stats["low_quality_ocr"], [])
+            self.assertFalse(stats["warning_no_documents"])
+
+            doc_mds = []
+            for root, _dirs, files in os.walk(dest):
+                for f in files:
+                    self.assertFalse(f.lower().endswith(".udf"), f"Hedefte .udf bulundu: {f}")
+                    if f.endswith(".md") and f != UyapRedactor.REPORT_NAME:
+                        doc_mds.append(os.path.join(root, f))
+            self.assertEqual(len(doc_mds), 2)
+
+            combined = ""
+            for p in doc_mds:
+                with open(p, "r", encoding="utf-8") as fh:
+                    txt = fh.read()
+                self.assertNotIn(UyapRedactor.OCR_MARKER, txt)
+                self.assertNotIn("(Yerel OCR)", txt)
+                self.assertNotIn(T1, txt)
+                self.assertNotIn(T2, txt)
+                self.assertNotIn("0532 000 00 00", txt)
+                self.assertIn("DOSYA NO: 2026/123", txt)
+                combined += txt
+
+            self.assertIn("[TCKN_", combined)
+            self.assertIn("[TEL_", combined)
+            self.assertTrue(all(evt == "md" for evt, _ in events))
+
+    def test_c_skip_udf_when_md_derivative_exists(self):
+        """Test C: Aynı dizinde x.udf + x.udf.md (veya x.md) varsa UDF ikinci kez işlenmez."""
+        for md_name in ("x.udf.md", "x.md"):
+            with self.subTest(md_name=md_name), tempfile.TemporaryDirectory() as tmp:
+                src = os.path.join(tmp, "Dava_Cift")
+                os.makedirs(src)
+                self._write_fake_udf(
+                    os.path.join(src, "x.udf"),
+                    f"UDF_KAYNAK_ISARETI DOSYA NO: 2026/123 TCKN: {T1} Cep: 0532 000 00 00 ekstra metin satırı.",
+                )
+                with open(os.path.join(src, md_name), "w", encoding="utf-8") as f:
+                    f.write(
+                        f"# Örnek Belge\n\nMD_KAYNAK_ISARETI DOSYA NO: 2026/123 TCKN: {T1} "
+                        "Bu belge Yargı PRO tarafından oluşturulmuştur."
+                    )
+
+                dest, stats = UyapRedactor.export_isolated_clean_folder(src)
+                self.assertEqual(stats["udf_converted"], 0)
+                self.assertEqual(stats["md_transferred"], 1)
+
+                doc_mds = [
+                    os.path.join(r, fn)
+                    for r, _d, fs in os.walk(dest)
+                    for fn in fs
+                    if fn.endswith(".md") and fn != UyapRedactor.REPORT_NAME
+                ]
+                self.assertEqual(len(doc_mds), 1)
+                with open(doc_mds[0], "r", encoding="utf-8") as fh:
+                    content = fh.read()
+                self.assertIn("MD_KAYNAK_ISARETI", content)
+                self.assertNotIn("UDF_KAYNAK_ISARETI", content)
+                self.assertNotIn(T1, content)
+
+    def test_d_empty_folder_sets_warning_and_calls_error_cb(self):
+        """Test D: Boş klasörde warning_no_documents=True olur ve progress_cb 'error' alır."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "Bos_Dava")
+            os.makedirs(src)
+            events = []
+            _dest, stats = UyapRedactor.export_isolated_clean_folder(
+                src, progress_cb=lambda evt, msg, st: events.append((evt, msg, dict(st)))
+            )
+            self.assertTrue(stats.get("warning_no_documents"))
+            self.assertEqual(stats["md_transferred"], 0)
+            error_events = [(e, m) for e, m, _ in events if e == "error"]
+            self.assertTrue(error_events, "Boş klasörde progress_cb('error', ...) çağrılmalıydı")
+            self.assertIn("işlenebilir belge bulunamadı", error_events[0][1])
 
 
 if __name__ == "__main__":
