@@ -26,6 +26,14 @@ import unicodedata
 from collections import Counter, defaultdict
 from typing import Dict, List, Optional, Tuple
 
+try:
+    from uyap_redactor import UyapRedactor
+except ImportError:
+    _script_dir = os.path.dirname(os.path.abspath(__file__))
+    if _script_dir not in sys.path:
+        sys.path.insert(0, _script_dir)
+    from uyap_redactor import UyapRedactor
+
 TEXT_EXTS = (".md", ".txt", ".json")
 REPORT_NAME = "DAVA_DÖNÜŞÜM_VE_GÜVENLİK_RAPORU.md"
 
@@ -111,6 +119,15 @@ def find_source_text(src: str, ocr_cache: Optional[str], rel: str) -> Optional[s
                     except Exception:
                         return t
                 return t
+    # Öncelik: önce kaynak metin (.md/.txt/.json) ve OCR önbelleği, en son çıplak/arşiv .udf
+    if src and rel.lower().endswith(".md"):
+        udf_rel = rel[:-3] + ".udf"
+        for candidate in (udf_rel, os.path.join("_kaynak", udf_rel)):
+            for form in ("NFC", "NFD"):
+                p = os.path.join(src, unicodedata.normalize(form, candidate))
+                if os.path.isfile(p):
+                    raw = UyapRedactor.extract_udf_raw(p)
+                    return raw if raw else None
     return None
 
 

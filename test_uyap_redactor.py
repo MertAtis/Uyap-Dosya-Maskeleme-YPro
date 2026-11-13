@@ -1451,6 +1451,76 @@ class TestUdfExtractionAndExport(unittest.TestCase):
             self.assertTrue(error_events, "Boş klasörde progress_cb('error', ...) çağrılmalıydı")
             self.assertIn("işlenebilir belge bulunamadı", error_events[0][1])
 
+    def test_e_mixed_yargipro_folder_and_audit(self):
+        """Karışık Yargı PRO düzeni: INDEX.md + _kaynak/a.udf + a.md + _kaynak/b.udf -> uçtan uca ve audit."""
+        import audit_output
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "Dava_Karisik")
+            os.makedirs(src)
+
+            self._write_fake_udf(
+                os.path.join(src, "_kaynak", "a.udf"),
+                f"YARGI_PRO_UDF_HAM_ICERIK DOSYA NO: 2026/301\nDavacı TCKN: {T1}\n"
+                "Bu metin yalnızca ham UDF içindedir ve türev varken kullanılmamalıdır.",
+            )
+            a_md_text = (
+                f"# Belge A\n\nYARGI_PRO_TUREV_MD_ICERIK DOSYA NO: 2026/301\nDavacı TCKN: {T1}\n"
+                "Bu belge Yargı PRO tarafından hazırlanmış en az elli baytlık türev metindir.\n"
+            )
+            with open(os.path.join(src, "a.md"), "w", encoding="utf-8") as f:
+                f.write(a_md_text)
+
+            self._write_fake_udf(
+                os.path.join(src, "_kaynak", "b.udf"),
+                f"B_UDF_HAM_METIN DOSYA NO: 2026/301\nDavalı TCKN: {T2}\n"
+                "Türevi bulunmayan bu UDF belgesi doğrudan metne dökülüp maskelenmelidir.",
+            )
+
+            with open(os.path.join(src, "INDEX.md"), "w", encoding="utf-8") as f:
+                f.write(
+                    "# Dava Belge Dizini\n\n"
+                    "| Tarih | Tür | Yön | Gönderen | No | Dosya | Metin |\n"
+                    "|---|---|---|---|---|---|---|\n"
+                    "| 2026-01-10 | Dilekçe | Gelen | Davacı | 1 | [↗](<_kaynak/a.udf>) | [↗](<a.md>) (10 karakter) |\n"
+                    "| 2026-01-12 | Tutanak | — | Mahkeme | 2 | [↗](<_kaynak/b.udf>) | — |\n"
+                )
+
+            dest, stats = UyapRedactor.export_isolated_clean_folder(src)
+
+            self.assertEqual(stats["udf_converted"], 1)
+            self.assertFalse(os.path.exists(os.path.join(dest, "_kaynak")))
+            for root, _dirs, files in os.walk(dest):
+                for fn in files:
+                    self.assertFalse(fn.lower().endswith(".udf"), f"Hedefte .udf bulundu: {fn}")
+
+            dest_a = os.path.join(dest, "a.md")
+            dest_b = os.path.join(dest, "b.md")
+            self.assertTrue(os.path.isfile(dest_a))
+            self.assertTrue(os.path.isfile(dest_b))
+
+            with open(dest_a, "r", encoding="utf-8") as f:
+                a_out = f.read()
+            self.assertIn("YARGI_PRO_TUREV_MD_ICERIK", a_out)
+            self.assertNotIn("YARGI_PRO_UDF_HAM_ICERIK", a_out)
+            self.assertNotIn(T1, a_out)
+
+            with open(dest_b, "r", encoding="utf-8") as f:
+                b_out = f.read()
+            self.assertIn("B_UDF_HAM_METIN", b_out)
+            self.assertNotIn(T2, b_out)
+
+            with open(os.path.join(dest, "INDEX.md"), "r", encoding="utf-8") as f:
+                idx_out = f.read()
+            self.assertIn("[↗](<a.md>)", idx_out)
+
+            res = audit_output.audit(src, dest)
+            _lines, _det, leak = audit_output.summarize(res)
+            self.assertFalse(leak)
+            self.assertEqual(res["unexpected_files"], [])
+            self.assertEqual(res["broken_links"], [])
+            self.assertEqual(res["files_with_source"], 3)
+
 
 if __name__ == "__main__":
     unittest.main()

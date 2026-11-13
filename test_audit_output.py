@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import unittest
+import zipfile
 from contextlib import redirect_stdout
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -231,6 +232,68 @@ class AuditCase(unittest.TestCase):
         with open(os.path.join(out, "t.md"), "w", encoding="utf-8") as f:
             f.write("TCKN: [TCKN_1]\n")
         res = A.audit(src, out, cache)
+        self.assertEqual(res["files_with_source"], 1)
+        self.assertEqual(res["over"][0][3], T1)
+
+    @staticmethod
+    def _write_udf(path: str, content_text: str) -> None:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        xml_body = (
+            '<?xml version="1.0" encoding="UTF-8" ?>'
+            f'<template format_id="1.8"><content><![CDATA[{content_text}]]></content></template>'
+        )
+        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("content.xml", xml_body.encode("utf-8"))
+
+    def test_udf_source_clean_output_has_no_leaks(self):
+        """UDF kaynak + doğru maskeli çıktı: sızıntı 0, beklenmedik dosya 0, files_with_source == 1."""
+        tmp = tempfile.mkdtemp()
+        src, out = os.path.join(tmp, "src"), os.path.join(tmp, "out")
+        os.makedirs(out)
+        self._write_udf(
+            os.path.join(src, "dilekce.udf"),
+            f"DOSYA NO: 2026/100\nDavacı TCKN: {T1}\nTalep dilekçesi metni.",
+        )
+        with open(os.path.join(out, "dilekce.md"), "w", encoding="utf-8") as f:
+            f.write("DOSYA NO: 2026/100\nDavacı TCKN: [TCKN_1]\nTalep dilekçesi metni.")
+        res = A.audit(src, out)
+        _lines, _det, leak = A.summarize(res)
+        self.assertFalse(leak)
+        self.assertEqual(res["unexpected_files"], [])
+        self.assertEqual(res["files_with_source"], 1)
+
+    def test_udf_source_unmasked_tckn_detected_as_leak(self):
+        """UDF kaynak + TCKN'si maskelenmemiş çıktı: sızıntı >= 1 yakalanmalı."""
+        tmp = tempfile.mkdtemp()
+        src, out = os.path.join(tmp, "src"), os.path.join(tmp, "out")
+        os.makedirs(out)
+        self._write_udf(
+            os.path.join(src, "tutanak.udf"),
+            f"DOSYA NO: 2026/101\nDavacı TCKN: {T1}\nDuruşma tutanağı.",
+        )
+        with open(os.path.join(out, "tutanak.md"), "w", encoding="utf-8") as f:
+            f.write(f"DOSYA NO: 2026/101\nDavacı TCKN: {T1}\nDuruşma tutanağı.")
+        res = A.audit(src, out)
+        _lines, _det, leak = A.summarize(res)
+        self.assertTrue(leak)
+        total_tckn_leaks = len(res["leaks"]["tckn"]) + len(res["leaks"]["tckn_known"])
+        self.assertGreaterEqual(total_tckn_leaks, 1)
+
+    def test_kaynak_udf_matches_top_level_md_output(self):
+        """_kaynak/x.udf kaynak dosyası kökteki x.md çıktısıyla eşleşir."""
+        tmp = tempfile.mkdtemp()
+        src, out = os.path.join(tmp, "src"), os.path.join(tmp, "out")
+        os.makedirs(out)
+        self._write_udf(
+            os.path.join(src, "_kaynak", "x.udf"),
+            f"DOSYA NO: 2026/102\nTaraf TCKN: {T1}\nİçerik satırı.",
+        )
+        with open(os.path.join(out, "x.md"), "w", encoding="utf-8") as f:
+            f.write("DOSYA NO: 2026/102\nTaraf TCKN: [TCKN_1]\nİçerik satırı.")
+        res = A.audit(src, out)
+        _lines, _det, leak = A.summarize(res)
+        self.assertFalse(leak)
+        self.assertEqual(res["unexpected_files"], [])
         self.assertEqual(res["files_with_source"], 1)
         self.assertEqual(res["over"][0][3], T1)
 

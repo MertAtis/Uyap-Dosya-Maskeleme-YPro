@@ -7,10 +7,12 @@ gui.py ve bundle/launcher.sh bileşenlerinin kapsamlı UI/UX ve işlevsel testle
 
 import os
 import sys
+import tempfile
 import unittest
 import queue
 import time
 import subprocess
+import zipfile
 from unittest.mock import MagicMock, patch
 
 # Testlerde açılan uygulamalar (alt süreçler dahil) GitHub güncelleme sorgusu yapmasın
@@ -667,7 +669,7 @@ class TestUyapRedactorApp(unittest.TestCase):
         self.assertEqual(self.app.card_iban.lbl_val.cget("text"), "4")
         self.assertEqual(self.app.card_sicil.lbl_val.cget("text"), "6")
         self.assertEqual(self.app.card_adres.lbl_val.cget("text"), "11")
-        self.assertEqual(self.app.card_files.lbl_val.cget("text"), "15 (5 OCR)")
+        self.assertEqual(self.app.card_files.lbl_val.cget("text"), "15 (0 UDF, 5 OCR)")
 
         # 5. done mesajı
         self.app.is_running = True
@@ -729,6 +731,154 @@ class TestUyapRedactorApp(unittest.TestCase):
 
             err_msg = [m[1] for m in messages if m[0] == "error"][0]
             self.assertIn("Disk dolu!", err_msg)
+
+    @staticmethod
+    def _write_fake_udf(path: str, content_text: str) -> None:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        xml_body = (
+            '<?xml version="1.0" encoding="UTF-8" ?>'
+            f'<template format_id="1.8"><content><![CDATA[{content_text}]]></content></template>'
+        )
+        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("content.xml", xml_body.encode("utf-8"))
+
+    def test_worker_warning_no_documents_queues_no_documents(self):
+        """warning_no_documents=True döndüren export'ta kuyrukta 'no_documents' olmalı, 'done' olmamalı."""
+        with patch.object(gui.UyapRedactor, "export_isolated_clean_folder") as mock_export:
+            mock_export.return_value = (
+                "/tmp/bos (Maskelenmis AI)",
+                {"md_transferred": 0, "udf_converted": 0, "ocr_converted": 0,
+                 "index_synced": 0, "total": 0, "warning_no_documents": True},
+            )
+            self.app._worker("/tmp/bos")
+
+            messages = []
+            while not self.app.msg_queue.empty():
+                messages.append(self.app.msg_queue.get_nowait())
+
+            msg_types = [m[0] for m in messages]
+            self.assertIn("no_documents", msg_types)
+            self.assertNotIn("done", msg_types)
+            status_msgs = [m[1] for m in messages if m[0] == "status"]
+            self.assertIn("İşlenebilir belge bulunamadı.", status_msgs)
+
+    def test_worker_summary_contains_udf_converted_count(self):
+        """Normal sonuçta özet metni 'UDF'den Metne Dökülen: 2 adet' satırını içerir."""
+        with patch.object(gui.UyapRedactor, "export_isolated_clean_folder") as mock_export:
+            mock_export.return_value = (
+                "/tmp/dava (Maskelenmis AI)",
+                {"md_transferred": 5, "udf_converted": 2, "ocr_converted": 1,
+                 "index_synced": 3, "total": 10},
+            )
+            self.app._worker("/tmp/dava")
+
+            messages = []
+            while not self.app.msg_queue.empty():
+                messages.append(self.app.msg_queue.get_nowait())
+
+            done_payloads = [m[1] for m in messages if m[0] == "done"]
+            self.assertEqual(len(done_payloads), 1)
+            summary_text, _dest = done_payloads[0]
+            self.assertIn("UDF'den Metne Dökülen: 2 adet", summary_text)
+
+    def test_check_queue_no_documents_warns_without_asking_finder(self):
+        """_check_queue 'no_documents' mesajında showwarning çağırır, askyesno çağırmaz."""
+        self.mock_warn.reset_mock()
+        self.mock_yesno.reset_mock()
+        self.app.is_running = True
+        self.app.btn_run.config(state="disabled", text="İşleniyor...")
+        no_doc_msg = "Seçilen klasörde işlenebilir belge bulunamadı."
+        self.app.msg_queue.put(("no_documents", (no_doc_msg, "/tmp/bos_dest")))
+        self.app._check_queue()
+
+        self.assertFalse(self.app.is_running)
+        self.assertEqual(self.app.btn_run.state, "normal")
+        self.assertEqual(self.app.btn_run.label.cget("text"), gui.RUN_BUTTON_TEXT)
+        self.mock_warn.assert_called_once_with("Belge Bulunamadı", no_doc_msg)
+        self.mock_yesno.assert_not_called()
+
+    def test_e2e_worker_two_udfs_real_export(self):
+        """Gerçek uçtan uca (patch'siz): 2 sahte UDF -> hedefte 2 .md, [TCKN_ içerir, .udf yok."""
+        fake_tckn = "10000000146"
+        with tempfile.TemporaryDirectory() as tmp:
+            src_dir = os.path.join(tmp, "Dava_2_UDF")
+            tmp_out = os.path.join(tmp, "Cikti")
+            os.makedirs(src_dir)
+            os.makedirs(tmp_out)
+
+            self._write_fake_udf(
+                os.path.join(src_dir, "01_Dilekce.udf"),
+                f"DOSYA NO: 2026/100\nDavacı TCKN: {fake_tckn}\n"
+                "Mahkemeye sunulan işbu dilekçede taleplerimiz açıklanmaktadır.",
+            )
+            self._write_fake_udf(
+                os.path.join(src_dir, "02_Tutanak.udf"),
+                f"DOSYA NO: 2026/100\nİlgili TCKN: {fake_tckn}\n"
+                "Duruşma zaptı içeriği ve tarafların beyanları burada yer almaktadır.",
+            )
+
+            self.app.is_running = True
+            self.app._worker(src_dir, out_parent=tmp_out)
+
+            queued_types = [m[0] for m in list(self.app.msg_queue.queue)]
+            self.assertIn("done", queued_types)
+            self.app._check_queue()
+            self.assertFalse(self.app.is_running)
+
+            dest = self.app.last_dest_folder
+            self.assertTrue(dest and os.path.isdir(dest))
+            self.assertEqual(self.app.card_files.lbl_val.cget("text"), "2 (2 UDF, 0 OCR)")
+
+            doc_mds = []
+            for root, _dirs, files in os.walk(dest):
+                for f in files:
+                    self.assertFalse(f.lower().endswith(".udf"), f"Hedefte .udf bulundu: {f}")
+                    if f.endswith(".md") and f != gui.UyapRedactor.REPORT_NAME:
+                        doc_mds.append(os.path.join(root, f))
+            self.assertEqual(len(doc_mds), 2)
+
+            combined = ""
+            for p in doc_mds:
+                with open(p, "r", encoding="utf-8") as fh:
+                    txt = fh.read()
+                self.assertNotIn(fake_tckn, txt)
+                combined += txt
+            self.assertIn("[TCKN_", combined)
+
+    def test_e2e_worker_single_udf_drag_and_drop(self):
+        """Tek dosya sürükle-bırak: [tek_udf_yolu] -> hedefte 1 .md."""
+        fake_tckn = "10000000146"
+        with tempfile.TemporaryDirectory() as tmp:
+            tek_udf = os.path.join(tmp, "tek_evrak.udf")
+            tmp_out = os.path.join(tmp, "Cikti")
+            os.makedirs(tmp_out)
+            self._write_fake_udf(
+                tek_udf,
+                f"DOSYA NO: 2026/200\nDavacı TCKN: {fake_tckn}\n"
+                "Tek dosya sürükle-bırak test belgesi yeterli uzunlukta metin içerir.",
+            )
+
+            self.app.is_running = True
+            self.app._worker([tek_udf], out_parent=tmp_out)
+
+            queued_types = [m[0] for m in list(self.app.msg_queue.queue)]
+            self.assertIn("done", queued_types)
+            self.app._check_queue()
+            self.assertFalse(self.app.is_running)
+
+            dest = self.app.last_dest_folder
+            self.assertTrue(dest and os.path.isdir(dest))
+            doc_mds = [
+                os.path.join(r, f)
+                for r, _d, fs in os.walk(dest)
+                for f in fs
+                if f.endswith(".md") and f != gui.UyapRedactor.REPORT_NAME
+            ]
+            self.assertEqual(len(doc_mds), 1)
+            with open(doc_mds[0], "r", encoding="utf-8") as fh:
+                txt = fh.read()
+            self.assertNotIn(fake_tckn, txt)
+            self.assertIn("[TCKN_", txt)
 
     def test_update_queue_messages(self):
         """Otomatik güncelleme kuyruk mesajlarının (update_available, update_up_to_date) işlenmesi."""

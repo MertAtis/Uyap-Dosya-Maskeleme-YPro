@@ -37,7 +37,7 @@ from tkinter import ttk, filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
 
 # Uygulama Sürümü ve Otomatik Güncelleme Kaynağı
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.3.2"
 RUN_BUTTON_TEXT = "▶  Başlat"
 GITHUB_REPO = "MertAtis/Uyap-Dosya-Maskeleme-YPro"
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -1284,8 +1284,9 @@ class UyapRedactorApp(_AppBase):
                     self.card_sicil.update_value(payload.get("sicil", 0))
                     self.card_adres.update_value(payload.get("adres", 0))
                     md_cnt = payload.get("md_transferred", 0)
+                    udf_cnt = payload.get("udf_converted", 0)
                     ocr_cnt = payload.get("ocr_converted", 0)
-                    self.card_files.update_value(f"{md_cnt} ({ocr_cnt} OCR)")
+                    self.card_files.update_value(f"{md_cnt} ({udf_cnt} UDF, {ocr_cnt} OCR)")
                 elif msg_type == "done":
                     self.is_running = False
                     self.btn_run.config(state="normal", text=RUN_BUTTON_TEXT)
@@ -1297,6 +1298,11 @@ class UyapRedactorApp(_AppBase):
                     )
                     if res and dest_f and os.path.exists(dest_f):
                         subprocess.run(["open", dest_f])
+                elif msg_type == "no_documents":
+                    self.is_running = False
+                    self.btn_run.config(state="normal", text=RUN_BUTTON_TEXT)
+                    no_doc_msg, _dest_f = payload if isinstance(payload, tuple) else (payload, self.last_dest_folder)
+                    messagebox.showwarning("Belge Bulunamadı", no_doc_msg)
                 elif msg_type == "error":
                     self.is_running = False
                     self.btn_run.config(state="normal", text=RUN_BUTTON_TEXT)
@@ -1594,29 +1600,40 @@ class UyapRedactorApp(_AppBase):
             self.msg_queue.put(("progress", (100, 100)))
             self.msg_queue.put(("stats", final_stats))
 
-            summary_msg = (
-                f"Maskeli klasör oluşturuldu ({elapsed:.1f} sn).\n\n"
-                f"📂 Hedef Klasör: {os.path.basename(dest_folder)}\n"
-                f"📄 Aktarılan .md Belgesi: {final_stats.get('md_transferred', 0)} adet\n"
-                f"👁️ Yerel OCR ile Çözülen Taranmış Ek: {final_stats.get('ocr_converted', 0)} adet\n"
-                f"🔄 İndeks Senkronizasyonu: {final_stats.get('index_synced', 0)} satır güncellendi\n\n"
-                f"🔒 Gizlenen Kişisel Veriler (Toplam: {final_stats.get('total', 0)}):\n"
-                f"  • TCKN: {final_stats.get('tckn', 0)}\n"
-                f"  • Cep Telefonu: {final_stats.get('telefon', 0)}\n"
-                f"  • Kimlik Seri No: {final_stats.get('seri_no', 0)}\n"
-                f"  • Kimlik MRZ Kodu: {final_stats.get('mrz', 0)}\n"
-                f"  • IBAN / Kart: {final_stats.get('iban', 0)}\n"
-                f"  • Hesap / Müşteri No: {final_stats.get('hesap', 0)}\n"
-                f"  • Sicil No: {final_stats.get('sicil', 0)}\n"
-                f"  • Açık Adres: {final_stats.get('adres', 0)}\n\n"
-                f"✅ Bu klasöre orijinal UDF, PDF, TIFF dosyası aktarılmadı.\n"
-                f"ℹ️ Aynı numaralı etiket = aynı değer. Otomatik maskeleme hatasız değildir; paylaşmadan önce\n"
-                f"   klasördeki DAVA_DÖNÜŞÜM_VE_GÜVENLİK_RAPORU.md dosyasına ve OCR uyarılarına göz atın.\n"
-                f"🎯 Yapay zekâya doğrudan bu temiz klasörü verebilirsiniz."
-            )
-            self.msg_queue.put(("log", f"\n{'='*64}\n{summary_msg}\n{'='*64}\n"))
-            self.msg_queue.put(("status", "İşlem başarıyla tamamlandı. İzole klasör AI analizine hazır."))
-            self.msg_queue.put(("done", (summary_msg, dest_folder)))
+            if final_stats.get("warning_no_documents"):
+                no_doc_msg = (
+                    "Seçilen klasörde işlenebilir belge bulunamadı.\n\n"
+                    "Desteklenen türler: .udf, .md, .txt, .pdf, .tif/.tiff, .png/.jpg\n\n"
+                    "Lütfen doğru dava klasörünü seçtiğinizden emin olun."
+                )
+                self.msg_queue.put(("log", f"\n⚠️ {no_doc_msg}\n"))
+                self.msg_queue.put(("status", "İşlenebilir belge bulunamadı."))
+                self.msg_queue.put(("no_documents", (no_doc_msg, dest_folder)))
+            else:
+                summary_msg = (
+                    f"Maskeli klasör oluşturuldu ({elapsed:.1f} sn).\n\n"
+                    f"📂 Hedef Klasör: {os.path.basename(dest_folder)}\n"
+                    f"📄 Aktarılan .md Belgesi: {final_stats.get('md_transferred', 0)} adet\n"
+                    f"📝 UDF'den Metne Dökülen: {final_stats.get('udf_converted', 0)} adet\n"
+                    f"👁️ Yerel OCR ile Çözülen Taranmış Ek: {final_stats.get('ocr_converted', 0)} adet\n"
+                    f"🔄 İndeks Senkronizasyonu: {final_stats.get('index_synced', 0)} satır güncellendi\n\n"
+                    f"🔒 Gizlenen Kişisel Veriler (Toplam: {final_stats.get('total', 0)}):\n"
+                    f"  • TCKN: {final_stats.get('tckn', 0)}\n"
+                    f"  • Cep Telefonu: {final_stats.get('telefon', 0)}\n"
+                    f"  • Kimlik Seri No: {final_stats.get('seri_no', 0)}\n"
+                    f"  • Kimlik MRZ Kodu: {final_stats.get('mrz', 0)}\n"
+                    f"  • IBAN / Kart: {final_stats.get('iban', 0)}\n"
+                    f"  • Hesap / Müşteri No: {final_stats.get('hesap', 0)}\n"
+                    f"  • Sicil No: {final_stats.get('sicil', 0)}\n"
+                    f"  • Açık Adres: {final_stats.get('adres', 0)}\n\n"
+                    f"✅ Bu klasöre orijinal UDF, PDF, TIFF dosyası aktarılmadı.\n"
+                    f"ℹ️ Aynı numaralı etiket = aynı değer. Otomatik maskeleme hatasız değildir; paylaşmadan önce\n"
+                    f"   klasördeki DAVA_DÖNÜŞÜM_VE_GÜVENLİK_RAPORU.md dosyasına ve OCR uyarılarına göz atın.\n"
+                    f"🎯 Yapay zekâya doğrudan bu temiz klasörü verebilirsiniz."
+                )
+                self.msg_queue.put(("log", f"\n{'='*64}\n{summary_msg}\n{'='*64}\n"))
+                self.msg_queue.put(("status", "İşlem başarıyla tamamlandı. İzole klasör AI analizine hazır."))
+                self.msg_queue.put(("done", (summary_msg, dest_folder)))
 
         except Exception as e:
             import traceback

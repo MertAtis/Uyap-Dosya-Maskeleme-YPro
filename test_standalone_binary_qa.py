@@ -366,6 +366,43 @@ def _send_cmd_key_when_frontmost(pid: int, key: str, attempts: int = 10) -> str:
     return res.stdout.strip() or "NOT_FOUND"
 
 
+def _wait_for_window(
+    pid: int,
+    title_substr: str,
+    timeout: float = 20.0,
+    interval: float = 0.5,
+    proc=None,
+) -> str:
+    """Pencere başlıklarını AppleScript ile yoklar; title_substr bulununca veya süreç ölünce döner."""
+    ascript = f'''
+    tell application "System Events"
+        set procs to every process whose unix id is {pid}
+        if (count of procs) > 0 then
+            set theProc to item 1 of procs
+            set winTitles to {{}}
+            repeat with w in (every window of theProc)
+                set end of winTitles to (name of w as string)
+            end repeat
+            return (winTitles as string)
+        else
+            return "NOT_FOUND"
+        end if
+    end tell
+    '''
+    deadline = time.monotonic() + timeout
+    last_output = ""
+    while True:
+        if proc is not None and proc.poll() is not None:
+            return last_output
+        res = subprocess.run(["osascript", "-e", ascript], capture_output=True, text=True)
+        last_output = res.stdout.strip()
+        if title_substr in last_output:
+            return last_output
+        if time.monotonic() >= deadline:
+            return last_output
+        time.sleep(interval)
+
+
 class Test5_LiveStandaloneBinaryProcess(unittest.TestCase):
     """2. ve 3. Adım C: Bağımsız ikili dosyanın çalıştırılması, osascript ile tespiti ve temiz sonlanma."""
 
@@ -373,30 +410,13 @@ class Test5_LiveStandaloneBinaryProcess(unittest.TestCase):
         """İkili dosyanın başlatılması, Window Server'da pencere tespiti ve SIGTERM ile temiz kapanma."""
         proc = subprocess.Popen([BINARY_PATH], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         pid = proc.pid
-        time.sleep(2.0)
 
         try:
+            # Pencere görünene kadar bekle (ilk açılışta Gatekeeper gecikmesine dayanıklı)
+            output = _wait_for_window(pid, "UYAP Kişisel Veri Maskeleme", proc=proc)
+
             # Sürecin canlı olduğunu doğrula
             self.assertIsNone(proc.poll(), f"Binary başlatılamadı veya erken kapandı: PID {pid}")
-
-            # AppleScript ile Window Server'dan pencere başlığı ve boyutunu doğrula
-            ascript = f'''
-            tell application "System Events"
-                set procs to every process whose unix id is {pid}
-                if (count of procs) > 0 then
-                    set theProc to item 1 of procs
-                    set winTitles to {{}}
-                    repeat with w in (every window of theProc)
-                        set end of winTitles to (name of w as string)
-                    end repeat
-                    return (winTitles as string)
-                else
-                    return "NOT_FOUND"
-                end if
-            end tell
-            '''
-            res = subprocess.run(["osascript", "-e", ascript], capture_output=True, text=True)
-            output = res.stdout.strip()
             self.assertIn("UYAP Kişisel Veri Maskeleme", output)
 
             # SIGTERM sinyali ile temiz kapanmayı doğrula (takılı kalmadan sonlanması)
@@ -417,9 +437,9 @@ class Test5_LiveStandaloneBinaryProcess(unittest.TestCase):
         """Canlı çalışan bağımsız binary'ye macOS Command-Q göndererek destroy ile temiz kapanmasını test etme."""
         proc = subprocess.Popen([BINARY_PATH], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         pid = proc.pid
-        time.sleep(2.0)
 
         try:
+            _wait_for_window(pid, "UYAP Kişisel Veri Maskeleme", proc=proc)
             self.assertIsNone(proc.poll(), f"Binary başlatılamadı: PID {pid}")
 
             # Ön plana al ve yalnızca gerçekten öndeyse Command-q gönder
@@ -442,9 +462,9 @@ class Test5_LiveStandaloneBinaryProcess(unittest.TestCase):
         """Canlı çalışan bağımsız binary'ye macOS Command-W göndererek kapanmasını test etme."""
         proc = subprocess.Popen([BINARY_PATH], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         pid = proc.pid
-        time.sleep(2.0)
 
         try:
+            _wait_for_window(pid, "UYAP Kişisel Veri Maskeleme", proc=proc)
             self.assertIsNone(proc.poll(), f"Binary başlatılamadı: PID {pid}")
 
             # Ön plana al ve yalnızca gerçekten öndeyse Command-w gönder
