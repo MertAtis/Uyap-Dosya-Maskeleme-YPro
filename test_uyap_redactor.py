@@ -2261,3 +2261,29 @@ class TestAileKlasoruBulgulari2(unittest.TestCase):
     def test_adliye_adresi_korunur(self):
         t = "**İHBAR EDEN\t:** AYDIN 1 AİLE MAHKEMESİ\n**Adres:** Adliye Sarayı Hasanefendi Mah. Adnan Menderes Blv. No:1 Efeler/AYDIN"
         self.assertIn("Hasanefendi Mah.", self.R(t))
+
+
+class TestKoyAdresi(unittest.TestCase):
+    """Ceza dosyası testinde bulunan: 'X Köyü X Küme Evleri No:' adresinde köy adının açık kalması."""
+
+    R = staticmethod(lambda t: UyapRedactor.redact_text(t)[0])
+
+    def test_kayitli_onekli_koy_adresi(self):
+        t = ("doğumlu, ili, ilçesi, köy/mahallesi, cilt, aile sıra no, sıra no'da nüfusa\n"
+             "kayıtlı Örnekyayla Köyü Örnekyayla Küme Evleri No: 128 Burdur\nMerkez/ BURDUR ikamet eder.")
+        out = self.R(t)
+        self.assertNotIn("Örnekyayla", out)
+        self.assertIn("kayıtlı [ADRES_", out)
+
+    def test_satir_sonuna_dusen_koy_adi(self):
+        t = ("SANIK: ALİ VELİ, 13/05/1997 BURDUR doğumlu, Örnekyayla\n"
+             "Köyü Örnekyayla Küme Evleri No: 128 Burdur Merkez/ BURDUR adresinde oturur.")
+        out = self.R(t)
+        self.assertNotIn("Örnekyayla", out)
+        self.assertIn("adresinde oturur.", out)
+
+    def test_nufus_kayit_koyu_ve_muhtarlik_korunur(self):
+        t1 = "Burdur ili, Merkez ilçesi, Örnekyayla köyü, cilt 12, aile sıra no 34'te nüfusa kayıtlı"
+        self.assertEqual(self.R(t1), t1)
+        t2 = "Örnekyayla Köyü muhtarlığından alınan yazıda"
+        self.assertEqual(self.R(t2), t2)

@@ -1708,8 +1708,9 @@ class UyapRedactor:
             r'(?i)(?P<lead>(?:^|(?<=[\s\|\#\:;\,\.\^\(\-\/\*"“”])))'
             r'(?P<addr>'
             r'(?:(?:^|(?<=[\r\n\|\#\:;\,\.\^\(\-\/\*"“”]))[ \t]*(?:[A-ZÇĞİÖŞÜa-zçğıöşü0-9]+[ \t]+){1,2}'
-            r'|[A-ZÇĞİÖŞÜ0-9][A-Za-zÇĞİÖŞÜçğıöşü0-9]*[ \t]+(?=(?:Mahallesi|Mah\.?|Mh\.?)[\s\,\.\^\-]))?'
-            r'\b(?:Mahallesi|Mah\.?|Mh\.?|Cadde(?:si)?|Cad\.?|Cd\.?|Sokak|Sokağ[ıi]|Sok\.?|Sk\.?|5k\.?|Bulvar[ıi]|Bulv\.?|Blv\.?|Küme\s*Evler[i]?|Toki\s+Evleri)[\s\,\.\^\-]+'
+            r'|[A-ZÇĞİÖŞÜ0-9][A-Za-zÇĞİÖŞÜçğıöşü0-9]*[ \t]+(?=(?:Mahallesi|Mah\.?|Mh\.?)[\s\,\.\^\-])'
+            r'|[A-ZÇĞİÖŞÜ][A-Za-zÇĞİÖŞÜçğıöşü]*\s+(?=Köy(?:ü)?[ \t]))?'
+            r'\b(?:Mahallesi|Mah\.?|Mh\.?|Köy(?:ü)?|Cadde(?:si)?|Cad\.?|Cd\.?|Sokak|Sokağ[ıi]|Sok\.?|Sk\.?|5k\.?|Bulvar[ıi]|Bulv\.?|Blv\.?|Küme\s*Evler[i]?|Toki\s+Evleri)[\s\,\.\^\-]+'
             r'(?:\|¢|[^\r\n\|]){0,100}?'
             r'(?:\b(?:No|Ne|N(?=\s*[:.]\s*\d)|[İiIıl]ç\s*Kap[ıi](?:\s*No)?|Kat|K|Daire|D|Blok|Blk|Apt|Apartman[ıi]|Sitesi|Evleri)|\|¢\s*Kap[ıi](?:\s*No)?)(?:[\s\.\-\:\^\/]*[0-9A-Za-z]|\s+No\b)'
             r'(?:\|¢|[^\r\n\|]){0,100}?'
@@ -1723,6 +1724,12 @@ class UyapRedactor:
             addr = m.group('addr')
             if re.search(cls.MASK_ANY_RE, addr):
                 return m.group(0)
+            # Baştaki bağlam sözcükleri ("kayıtlı Güneyyayla Köyü ...", "doğumlu, halen ...") adres değildir;
+            # adrese katılırsa "kayıtlı" nüfus şablonu sanılıp adresin tamamı açık kalır.
+            pre_kw = re.match(r'(?i)[ \t]*(?:(?:nüfusa\s+)?kay[ıi]tl[ıi]|doğumlu,?|halen|ve|olup|ikamet\s+eden)[ \t]+', addr)
+            lead_extra = ""
+            if pre_kw:
+                lead_extra, addr = pre_kw.group(0), addr[pre_kw.end():]
             # Adres cümle içinde geçiyorsa eşleşme satır sonuna kadar uzayabilir ("... İncirliova/AYDIN olup
             # mahkememizin ... TMK 411. madde gereğince"). Kapı no + daire/kat + "İlçe/İL" sonrasında kes:
             # kalan cümle korunur ve hukuki ifadeler adresin tamamını "adres değil" saydırmaz.
@@ -1737,7 +1744,8 @@ class UyapRedactor:
             if core and len(re.findall(r'[A-Za-zÇĞİÖŞÜçğıöşü]{2,}', addr[core.end():])) >= 2:
                 rest = addr[core.end():]
                 addr = addr[:core.end()]
-            if cls._skip_address(m.string, m.start('addr'), m.start('addr') + len(addr), addr):
+            a_start = m.start('addr') + len(lead_extra)
+            if cls._skip_address(m.string, a_start, a_start + len(addr), addr):
                 return m.group(0)
             # "12.03.2025YENİ MAH. ..." / "12.03.2025 YENİ MAH. ...": tarihin yılı adrese dahil edilmez
             keep = ""
@@ -1748,7 +1756,7 @@ class UyapRedactor:
                     if not addr.strip():
                         return m.group(0)
             count += 1
-            return f"{m.group('lead')}{keep}{cls._mask('adres', addr, registry)}{rest}"
+            return f"{m.group('lead')}{lead_extra}{keep}{cls._mask('adres', addr, registry)}{rest}"
 
         text = p3.sub(repl3, text)
 
