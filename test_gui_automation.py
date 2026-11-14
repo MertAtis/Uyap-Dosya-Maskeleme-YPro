@@ -1085,9 +1085,9 @@ class TestPersonPseudonymGUI(unittest.TestCase):
         self.assertFalse(hasattr(self.app, "btn_restore_names"))
         self.assertFalse(hasattr(self.app, "_restore_names_action"))
 
-    def test_mask_names_checkbox_defaults_true_and_uncheck_passes_false(self):
+    def test_mask_names_and_judicial_checkboxes_default_true_and_independent(self):
         self.assertTrue(self.app.mask_names_var.get())
-        self.app.mask_names_var.set(False)
+        self.assertTrue(self.app.mask_judicial_names_var.get())
 
         with tempfile.TemporaryDirectory() as d:
             self.app.folder_var.set(d)
@@ -1096,6 +1096,7 @@ class TestPersonPseudonymGUI(unittest.TestCase):
             def fake_export(src, *args, **kwargs):
                 captured["src"] = src
                 captured["mask_names"] = kwargs.get("mask_names")
+                captured["mask_judicial_names"] = kwargs.get("mask_judicial_names")
                 return os.path.join(d, "out"), {
                     "tckn": 0, "telefon": 0, "seri_no": 0, "mrz": 0, "iban": 0,
                     "hesap": 0, "sicil": 0, "adres": 0, "kisi": 0, "kisi_sayisi": 0,
@@ -1113,11 +1114,19 @@ class TestPersonPseudonymGUI(unittest.TestCase):
                     return m
                 mock_thread.side_effect = run_sync
 
-                self.app._start_process()
-                self.assertIs(captured.get("mask_names"), False)
+                for mn, mj in ((True, True), (False, True), (True, False), (False, False)):
+                    captured.clear()
+                    self.app.mask_names_var.set(mn)
+                    self.app.mask_judicial_names_var.set(mj)
+                    self.app._start_process()
+                    self.assertIs(captured.get("mask_names"), mn)
+                    self.assertIs(captured.get("mask_judicial_names"), mj)
+                    # Her iki kutu state'i işlem sırasında disabled iken _check_queue sonra yeniden normalleşmeli
+                    with patch.object(messagebox, "askyesno", return_value=False):
+                        self.app._check_queue()
+                    self.assertEqual(str(self.app.chk_mask_names.cget("state")), "normal")
+                    self.assertEqual(str(self.app.chk_mask_judicial_names.cget("state")), "normal")
 
-            with patch.object(messagebox, "askyesno", return_value=False):
-                self.app._check_queue()
             log_content = self.app.log_text.get("1.0", tk.END)
             self.assertNotIn("KİŞİ ETİKETLERİ", log_content)
 

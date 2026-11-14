@@ -1032,14 +1032,17 @@ class TestLeakFixes(unittest.TestCase):
             "Sicili 476175",
             "Baro Sicil No : Burdur Barosu , 490",
             "Av. Ayşe ÖRNEK (16475) ADRES:",
-            "Ticaret Sicil No: 862070",
-            "Tc. Sici No. 233076 6619 345",
-            "İstanbul Ticaret Sidi Memurtugu, 366587/3 616",
         ]
         for c in cases:
             out = red(c)
             self.assertIn("[SİCİL_GİZLENDİ]", out, c)
         self.assertNotIn("476175", red("Sicili 476175"))
+        # Ticaret sicil numaraları tüzel kişiye ait olup açık bırakılır
+        for trade_line in (
+            "Ticaret Sicil No: 862070",
+            "Tic. Sicil No: 233076",
+        ):
+            self.assertEqual(red(trade_line), trade_line)
 
     def test_ocr_form_sicil_lines(self):
         out = red("DOLDURAN ADLİ KOLLUK\n231336-ALİ ÖRNEK\nGÖREVLİSİNİN ADI-SOYADI SİCİLİ,")
@@ -2771,7 +2774,6 @@ class TestKisiKesfi(unittest.TestCase):
             "DAVACI : Örnek İnşaat Ltd. Şti.",
             "DAVALI : Maliye Hazinesi",
             "VEKİLİ : Av. Ayşe Kaya",
-            "Hâkim Mehmet Demir 112233",
             "Bilirkişi Ali Veli",
             "DAVALI : Türkiye İş Bankası A.Ş.",
             "KONU : Alacak Davası",
@@ -2788,6 +2790,11 @@ class TestKisiKesfi(unittest.TestCase):
                 UyapRedactor.collect_persons_from_text(line + "\n", reg)
                 reg.freeze_persons()
                 self.assertFalse(reg.has_persons(), f"Negatif satırdan kişi üretildi: {line!r} -> {reg.person_map()}")
+        # Hâkim adı + sicil artık yargı rolü olarak kaydedilir
+        reg_j = MaskRegistry()
+        UyapRedactor.collect_persons_from_text("Hâkim Mehmet Demir 112233\n", reg_j)
+        reg_j.freeze_persons()
+        self.assertEqual(reg_j.person_map(), {"[HAKİM_1]": "Mehmet Demir"})
 
     def test_rol_cogunlugu_tiebreak_ve_freeze(self):
         reg = MaskRegistry()
@@ -2888,13 +2895,17 @@ class TestKisiUctanUca(unittest.TestCase):
                 json.dump({"taraflar": [{"sifat": "Tanık", "adSoyad": "Fatma Çelik"}]}, f, ensure_ascii=False)
 
             before_tmp = set(os.listdir(tmp))
-            out1, stats1 = UyapRedactor.export_isolated_clean_folder(src, dest1, mask_names=True)
+            # Yeni varsayılan: taraf + tanık + yargı personeli maskeli; avukat/bilirkişi açık
+            out1, stats1 = UyapRedactor.export_isolated_clean_folder(src, dest1)
             after_tmp = set(os.listdir(tmp))
             # Kaynak ve hedef dışında yeni dosya/klasör oluşturulmamalı
             self.assertEqual(after_tmp - before_tmp, {"out_masked"})
             self.assertNotIn("esleme_dosyasi", stats1)
-            self.assertEqual(stats1["kisi_sayisi"], 2)
-            self.assertEqual(stats1["kisi_listesi"], [("[DAVACI_1]", "Ahmet Yılmaz"), ("[TANIK_1]", "Fatma Çelik")])
+            self.assertEqual(stats1["kisi_sayisi"], 3)
+            self.assertEqual(
+                set(stats1["kisi_listesi"]),
+                {("[DAVACI_1]", "Ahmet Yılmaz"), ("[TANIK_1]", "Fatma Çelik"), ("[HAKİM_1]", "Mehmet Demir")},
+            )
 
             # Çıktı dosya adları ve INDEX.md bağlantısı
             out_files = []
@@ -2907,8 +2918,10 @@ class TestKisiUctanUca(unittest.TestCase):
                     self.assertNotIn("Fatma", rel)
                     with open(os.path.join(root_d, fn), "r", encoding="utf-8") as rf:
                         content = rf.read()
-                    for raw in ("Ahmet Yılmaz", "AHMET YILMAZ", "Fatma Çelik"):
+                    for raw in ("Ahmet Yılmaz", "AHMET YILMAZ", "Fatma Çelik", "Mehmet Demir"):
                         self.assertNotIn(raw, content, f"{rel} içinde ham ad-soyad sızıntısı: {raw}")
+            with open(os.path.join(out1, "[DAVACI_1] Dilekçe.md"), "r", encoding="utf-8") as rf:
+                self.assertIn("Av. Ayşe Kaya", rf.read())
 
             self.assertIn("[DAVACI_1] Dilekçe.md", out_files)
             with open(os.path.join(out1, "INDEX.md"), "r", encoding="utf-8") as f:
@@ -2922,7 +2935,7 @@ class TestKisiUctanUca(unittest.TestCase):
                 rapor = f.read()
             self.assertIn("hiçbir yere yazılmadı", rapor)
 
-            # CLI stdout kişi listesini gösterir, diske yazmaz
+            # CLI varsayılan (bayraksız) kişi listesini gösterir, diske yazmaz
             dest_cli = os.path.join(tmp, "out_cli")
             old_argv = sys.argv
             try:
@@ -2934,18 +2947,62 @@ class TestKisiUctanUca(unittest.TestCase):
                 self.assertIn("👤 KİŞİ ETİKETLERİ (yalnızca bu ekranda gösterilir, hiçbir dosyaya kaydedilmez)", cli_out)
                 self.assertIn("[DAVACI_1] = Ahmet Yılmaz", cli_out)
                 self.assertIn("[TANIK_1] = Fatma Çelik", cli_out)
+                self.assertIn("[HAKİM_1] = Mehmet Demir", cli_out)
+
+                # CLI --taraf-isimlerini-koru: taraf açık, yargı yine maskeli
+                dest_cli_koru = os.path.join(tmp, "out_cli_koru")
+                sys.argv = ["uyap_redactor.py", src, "--out", dest_cli_koru, "--taraf-isimlerini-koru"]
+                buf_k = io.StringIO()
+                with redirect_stdout(buf_k):
+                    cli_main()
+                self.assertTrue(os.path.isfile(os.path.join(dest_cli_koru, "Ahmet Yılmaz Dilekçe.md")))
+                txt_koru = open(os.path.join(dest_cli_koru, "Ahmet Yılmaz Dilekçe.md"), encoding="utf-8").read()
+                self.assertIn("Ahmet Yılmaz", txt_koru)
+                self.assertIn("[HAKİM_1]", txt_koru)
+                self.assertNotIn("Mehmet Demir", txt_koru)
+
+                # CLI geriye uyumlu --isimleri-koru: --taraf-isimlerini-koru ile aynı (taraf açık, yargı maskeli)
+                dest_cli_old_koru = os.path.join(tmp, "out_cli_old_koru")
+                sys.argv = ["uyap_redactor.py", src, "--out", dest_cli_old_koru, "--isimleri-koru"]
+                with redirect_stdout(io.StringIO()):
+                    cli_main()
+                txt_old_koru = open(os.path.join(dest_cli_old_koru, "Ahmet Yılmaz Dilekçe.md"), encoding="utf-8").read()
+                self.assertIn("Ahmet Yılmaz", txt_old_koru)
+                self.assertIn("[HAKİM_1]", txt_old_koru)
+                self.assertNotIn("Mehmet Demir", txt_old_koru)
+
+                # CLI geriye uyumlu etkisiz --taraf-isimlerini-maskele: varsayılanla aynı
+                dest_cli_noop = os.path.join(tmp, "out_cli_noop")
+                sys.argv = ["uyap_redactor.py", src, "--out", dest_cli_noop, "--taraf-isimlerini-maskele"]
+                with redirect_stdout(io.StringIO()):
+                    cli_main()
+                self.assertTrue(os.path.isfile(os.path.join(dest_cli_noop, "[DAVACI_1] Dilekçe.md")))
             finally:
                 sys.argv = old_argv
 
-            # mask_names=False
+            # mask_names=False (taraf isimlerini koru, yargı maskelemesi açık): yalnızca Hâkim Mehmet Demir maskelenir
             out2, stats2 = UyapRedactor.export_isolated_clean_folder(src, dest2, mask_names=False)
-            self.assertEqual(stats2.get("kisi_sayisi", 0), 0)
-            self.assertEqual(stats2.get("kisi_listesi"), [])
+            self.assertEqual(stats2.get("kisi_sayisi", 0), 1)
+            self.assertEqual(stats2.get("kisi_listesi"), [("[HAKİM_1]", "Mehmet Demir")])
             self.assertTrue(os.path.isfile(os.path.join(out2, "Ahmet Yılmaz Dilekçe.md")))
             with open(os.path.join(out2, "Ahmet Yılmaz Dilekçe.md"), "r", encoding="utf-8") as f:
                 d_pres = f.read()
             self.assertIn("Ahmet Yılmaz", d_pres)
             self.assertIn("[TCKN_1]", d_pres)
+            self.assertIn("[HAKİM_1]", d_pres)
+            self.assertNotIn("Mehmet Demir", d_pres)
+
+            # mask_names=False ve mask_judicial_names=False: hiçbir ad maskelenmez
+            dest3 = os.path.join(tmp, "out_all_open")
+            out3, stats3 = UyapRedactor.export_isolated_clean_folder(
+                src, dest3, mask_names=False, mask_judicial_names=False
+            )
+            self.assertEqual(stats3.get("kisi_sayisi", 0), 0)
+            self.assertEqual(stats3.get("kisi_listesi"), [])
+            with open(os.path.join(out3, "Ahmet Yılmaz Dilekçe.md"), "r", encoding="utf-8") as f:
+                d_all_open = f.read()
+            self.assertIn("Ahmet Yılmaz", d_all_open)
+            self.assertIn("Mehmet Demir", d_all_open)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -3445,7 +3502,7 @@ class TestOcrKisiKesfi(unittest.TestCase):
             with patch.dict(os.environ, {}, clear=False):
                 os.environ.pop("UYAP_OCR_CACHE_DIR", None)
                 with patch.object(UyapRedactor, "extract_scanned_raw", return_value=scan_raw):
-                    out_dir, stats = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+                    out_dir, stats = UyapRedactor.export_isolated_clean_folder(src, dest)
             self.assertEqual(stats["kisi_listesi"], [("[DAVACI_1]", "Zeynep Arslan")])
             with open(os.path.join(out_dir, "notlar.md"), encoding="utf-8") as f:
                 notlar_out = f.read()
@@ -3487,7 +3544,7 @@ class TestOcrKisiKesfi(unittest.TestCase):
             with patch.dict(os.environ, {}, clear=False):
                 os.environ.pop("UYAP_OCR_CACHE_DIR", None)
                 with patch.object(UyapRedactor, "extract_scanned_raw", return_value=scan_two):
-                    out_dir, stats = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+                    out_dir, stats = UyapRedactor.export_isolated_clean_folder(src, dest)
             self.assertEqual(stats["kisi_listesi"], [("[TANIK_1]", "Murat Kılıç")])
             with open(os.path.join(out_dir, "tutanak.md"), encoding="utf-8") as f:
                 t_out = f.read()
@@ -3505,7 +3562,7 @@ class TestOcrKisiKesfi(unittest.TestCase):
             with patch.dict(os.environ, {}, clear=False):
                 os.environ.pop("UYAP_OCR_CACHE_DIR", None)
                 with patch.object(UyapRedactor, "extract_scanned_raw", return_value=scan_one):
-                    out_dir, stats = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+                    out_dir, stats = UyapRedactor.export_isolated_clean_folder(src, dest)
             self.assertEqual(stats["kisi_listesi"], [])
             with open(os.path.join(out_dir, "tutanak.md"), encoding="utf-8") as f:
                 t_out = f.read()
@@ -3539,7 +3596,7 @@ class TestOcrKisiKesfi(unittest.TestCase):
             with patch.dict(os.environ, {}, clear=False):
                 os.environ.pop("UYAP_OCR_CACHE_DIR", None)
                 with patch.object(UyapRedactor, "extract_scanned_raw", return_value=scan_corp):
-                    out_dir, stats = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+                    out_dir, stats = UyapRedactor.export_isolated_clean_folder(src, dest)
             self.assertEqual(stats["kisi_listesi"], [])
             with open(os.path.join(out_dir, "fatura.md"), encoding="utf-8") as f:
                 out = f.read()
@@ -3563,7 +3620,11 @@ class TestOcrKisiKesfi(unittest.TestCase):
                     return_value="DAVALI : Zeynep Arslan\nYeterli uzunlukta taranmış belge metni içeriği.\n",
                 ) as m_ocr:
                     _, stats = UyapRedactor.export_isolated_clean_folder(
-                        src, dest, mask_names=False, progress_cb=lambda ev, msg, st: events.append((ev, msg))
+                        src,
+                        dest,
+                        mask_names=False,
+                        mask_judicial_names=False,
+                        progress_cb=lambda ev, msg, st: events.append((ev, msg)),
                     )
             self.assertEqual(m_ocr.call_count, 2)
             self.assertFalse(any(ev == "sync" and "Ön tarama (OCR)" in msg for ev, msg in events))
@@ -3597,7 +3658,6 @@ class TestOcrKisiKesfi(unittest.TestCase):
                     out_dir, stats = UyapRedactor.export_isolated_clean_folder(
                         src,
                         dest,
-                        mask_names=True,
                         progress_cb=lambda ev, msg, st: progress_log.append(
                             (ev, msg, st["processed_items"], st["total_work"])
                         ),
@@ -3628,7 +3688,7 @@ class TestOcrKisiKesfi(unittest.TestCase):
                 os.environ.pop("UYAP_OCR_CACHE_DIR", None)
                 with patch.object(UyapRedactor, "OCR_PRESCAN_MAX_MEM_BYTES", 150):
                     with patch.object(UyapRedactor, "extract_scanned_raw", side_effect=_fake_ocr) as m_ocr:
-                        out_dir, stats = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+                        out_dir, stats = UyapRedactor.export_isolated_clean_folder(src, dest)
 
             # b1 (<=150 byte) 1 kez, b2 (>150 byte) 2 kez => toplam 3 okuma (>2)
             self.assertGreater(m_ocr.call_count, 2)
@@ -3657,9 +3717,9 @@ class TestFinalPolishAndAIComprehensibility(unittest.TestCase):
                     "TANIK : Hasan Arslan\n"
                     "Talep.\n"
                 )
-            out_dir, _ = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+            out_dir, _ = UyapRedactor.export_isolated_clean_folder(src, dest)
             report = open(os.path.join(out_dir, UyapRedactor.REPORT_NAME), encoding="utf-8").read()
-            self.assertIn("## Dosyadaki anonim taraf ve kişi etiketleri (gerçek ad içermez)", report)
+            self.assertIn("## Dosyadaki anonim yargı ve taraf etiketleri (gerçek ad içermez)", report)
             self.assertIn("- **DAVACI:** `[DAVACI_1]`", report)
             self.assertIn("- **DAVALI:** `[DAVALI_1]`", report)
             self.assertIn("- **TANIK:** `[TANIK_1]`", report)
@@ -3679,7 +3739,7 @@ class TestFinalPolishAndAIComprehensibility(unittest.TestCase):
                     "Keşif yeri: Çamlıca Mah. Lale Cad. No:8 Üsküdar/İstanbul\n"
                     "Davacı Ali Kaya olay sonrası Ali Kaya Merkezi ve Ali Kaya Köyü civarındaydı.\n"
                 )
-            out_dir, _ = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+            out_dir, _ = UyapRedactor.export_isolated_clean_folder(src, dest)
             out = open(os.path.join(out_dir, "tutanak.md"), encoding="utf-8").read()
             self.assertIn("DAVACI : [DAVACI_1]", out)
             self.assertIn("Davacı [DAVACI_1] olay sonrası", out)
@@ -3691,9 +3751,15 @@ class TestFinalPolishAndAIComprehensibility(unittest.TestCase):
     def test_cli_single_file_and_in_place_person_discovery(self):
         import uyap_redactor
         with tempfile.TemporaryDirectory() as tmp:
+            # 1) Tek dosya yolu - varsayılan mod (bayraksız: taraf + yargı maskeli, avukat açık)
             single_md = os.path.join(tmp, "tek_belge.md")
             with open(single_md, "w", encoding="utf-8") as wf:
-                wf.write("DAVACI : Zeynep Arslan\nT.C. Kimlik No: 10000000146\n")
+                wf.write(
+                    "DAVACI : Zeynep Arslan\n"
+                    "VEKİLİ : Av. Ayşe Kaya\n"
+                    "HÂKİM : Mehmet Demir (112233)\n"
+                    "T.C. Kimlik No: 10000000146\n"
+                )
 
             with patch.object(sys, "argv", ["uyap_redactor.py", single_md]):
                 uyap_redactor.main()
@@ -3702,19 +3768,87 @@ class TestFinalPolishAndAIComprehensibility(unittest.TestCase):
             self.assertTrue(os.path.isdir(out_dir))
             out_txt = open(os.path.join(out_dir, "tek_belge.md"), encoding="utf-8").read()
             self.assertIn("[DAVACI_1]", out_txt)
+            self.assertIn("[HAKİM_1]", out_txt)
             self.assertIn("[TCKN_1]", out_txt)
+            self.assertIn("Av. Ayşe Kaya", out_txt)
             self.assertNotIn("Zeynep Arslan", out_txt)
+            self.assertNotIn("Mehmet Demir", out_txt)
 
+            # 2) Tek dosya yolu - --taraf-isimlerini-koru (taraf açık, yargı maskeli)
+            single_koru_out = os.path.join(tmp, "tek_belge_taraf_acik")
+            with patch.object(
+                sys,
+                "argv",
+                ["uyap_redactor.py", single_md, "--out", single_koru_out, "--taraf-isimlerini-koru"],
+            ):
+                uyap_redactor.main()
+            out_koru_txt = open(os.path.join(single_koru_out, "tek_belge.md"), encoding="utf-8").read()
+            self.assertIn("Zeynep Arslan", out_koru_txt)
+            self.assertIn("[HAKİM_1]", out_koru_txt)
+            self.assertNotIn("Mehmet Demir", out_koru_txt)
+
+            # 3) --in-place yolu - varsayılan mod ve --taraf-isimlerini-koru modu
             inplace_dir = os.path.join(tmp, "inplace_case")
             os.makedirs(inplace_dir, exist_ok=True)
             inplace_md = os.path.join(inplace_dir, "dilekce.md")
             with open(inplace_md, "w", encoding="utf-8") as wf:
-                wf.write("DAVACI : Zeynep Arslan\nDavacı Zeynep Arslan beyan eder.\n")
+                wf.write(
+                    "DAVACI : Zeynep Arslan\n"
+                    "HÂKİM : Mehmet Demir (112233)\n"
+                    "Davacı Zeynep Arslan beyan eder.\n"
+                )
             with patch.object(sys, "argv", ["uyap_redactor.py", inplace_dir, "--in-place"]):
                 uyap_redactor.main()
             inplace_out = open(inplace_md, encoding="utf-8").read()
             self.assertIn("[DAVACI_1]", inplace_out)
+            self.assertIn("[HAKİM_1]", inplace_out)
             self.assertNotIn("Zeynep Arslan", inplace_out)
+            self.assertNotIn("Mehmet Demir", inplace_out)
+
+            inplace_open_dir = os.path.join(tmp, "inplace_case_open")
+            os.makedirs(inplace_open_dir, exist_ok=True)
+            inplace_open_md = os.path.join(inplace_open_dir, "dilekce.md")
+            with open(inplace_open_md, "w", encoding="utf-8") as wf:
+                wf.write("DAVACI : Zeynep Arslan\nHÂKİM : Mehmet Demir (112233)\n")
+            with patch.object(
+                sys,
+                "argv",
+                ["uyap_redactor.py", inplace_open_dir, "--in-place", "--taraf-isimlerini-koru"],
+            ):
+                uyap_redactor.main()
+            inplace_open_out = open(inplace_open_md, encoding="utf-8").read()
+            self.assertIn("Zeynep Arslan", inplace_open_out)
+            self.assertIn("[HAKİM_1]", inplace_open_out)
+            self.assertNotIn("Mehmet Demir", inplace_open_out)
+
+            # 4) --taraf-isimlerini-koru + --yargi-isimlerini-koru birlikte (--out ve --in-place)
+            single_all_open_out = os.path.join(tmp, "tek_belge_tum_acik")
+            with patch.object(
+                sys,
+                "argv",
+                ["uyap_redactor.py", single_md, "--out", single_all_open_out, "--taraf-isimlerini-koru", "--yargi-isimlerini-koru"],
+            ):
+                uyap_redactor.main()
+            all_open_txt = open(os.path.join(single_all_open_out, "tek_belge.md"), encoding="utf-8").read()
+            self.assertIn("Zeynep Arslan", all_open_txt)
+            self.assertIn("Mehmet Demir", all_open_txt)
+            self.assertIn("[TCKN_1]", all_open_txt)
+
+            inplace_legacy_dir = os.path.join(tmp, "inplace_case_legacy")
+            os.makedirs(inplace_legacy_dir, exist_ok=True)
+            inplace_legacy_md = os.path.join(inplace_legacy_dir, "dilekce.md")
+            with open(inplace_legacy_md, "w", encoding="utf-8") as wf:
+                wf.write("DAVACI : Zeynep Arslan\nHÂKİM : Mehmet Demir (112233)\n")
+            with patch.object(
+                sys,
+                "argv",
+                ["uyap_redactor.py", inplace_legacy_dir, "--in-place", "--isimleri-koru"],
+            ):
+                uyap_redactor.main()
+            inplace_legacy_out = open(inplace_legacy_md, encoding="utf-8").read()
+            self.assertIn("Zeynep Arslan", inplace_legacy_out)
+            self.assertIn("[HAKİM_1]", inplace_legacy_out)
+            self.assertNotIn("Mehmet Demir", inplace_legacy_out)
 
     def test_ptt_teslimat_not_person_and_subsequent_address_masked(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -3727,7 +3861,7 @@ class TestFinalPolishAndAIComprehensibility(unittest.TestCase):
                     "PTT Teslimat TCKN : 100*****146\n"
                     "Adres : Feneryolu Mah. Bağdat Cad. No:110 D:9 Kadıköy/İstanbul\n"
                 )
-            out_dir, stats = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+            out_dir, stats = UyapRedactor.export_isolated_clean_folder(src, dest)
             out = open(os.path.join(out_dir, "tebligat.md"), encoding="utf-8").read()
             self.assertIn("[BORÇLU_1]", out)
             self.assertNotIn("PTT Teslimat", {name for _, name in stats["kisi_listesi"]})
@@ -3746,7 +3880,7 @@ class TestFinalPolishAndAIComprehensibility(unittest.TestCase):
                     "Kredi Kartı : 4532 1111 2222 3337\n"
                     "Kısmi Kart : 4532 **** **** 3337\n"
                 )
-            out_dir, _ = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+            out_dir, _ = UyapRedactor.export_isolated_clean_folder(src, dest)
             out = open(os.path.join(out_dir, "kart.md"), encoding="utf-8").read()
             self.assertNotIn("4532 1111 2222 3337", out)
             self.assertNotIn("3337", out)
@@ -3763,7 +3897,7 @@ class TestFinalPolishAndAIComprehensibility(unittest.TestCase):
                     "Yıldırım\n"
                     "Borçlu Hakan Yıldırım ödeme yapmadı.\n"
                 )
-            out_dir, _ = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+            out_dir, _ = UyapRedactor.export_isolated_clean_folder(src, dest)
             out = open(os.path.join(out_dir, "icra.md"), encoding="utf-8").read()
             self.assertIn("[BORÇLU_1]", out)
             self.assertNotIn("Hakan", out)
@@ -3795,7 +3929,7 @@ class TestFinalPolishAndAIComprehensibility(unittest.TestCase):
                     "SSÇ : Mert Can\n"
                     "Duruşmada adli süreçteki çocuk Arda Taş ve SSÇ Mert Can söz aldı.\n"
                 )
-            out_dir, _ = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+            out_dir, _ = UyapRedactor.export_isolated_clean_folder(src, dest)
             out = open(os.path.join(out_dir, "durusma.md"), encoding="utf-8").read()
             self.assertNotIn("Arda Taş", out)
             self.assertNotIn("Mert Can", out)
@@ -3804,8 +3938,11 @@ class TestFinalPolishAndAIComprehensibility(unittest.TestCase):
             self.assertNotIn("[SSÇ_", out)
             for s in ("34567", "98765", "112233"):
                 self.assertNotIn(s, out)
-            for keep in ("Murat Sönmez", "Fatih Yıldız", "Selin Koç"):
-                self.assertIn(keep, out)
+            for masked_j in ("Murat Sönmez", "Fatih Yıldız", "Selin Koç"):
+                self.assertNotIn(masked_j, out)
+            self.assertIn("[HAKİM_1]", out)
+            self.assertIn("[SAVCI_1]", out)
+            self.assertIn("[KÂTİP_1]", out)
 
     def test_disjoint_role_two_and_three_token_persons_not_merged(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -3817,7 +3954,7 @@ class TestFinalPolishAndAIComprehensibility(unittest.TestCase):
                     "TANIK : Mehmet Ali Yılmaz\n"
                     "Davacı Mehmet Yılmaz ile tanık Mehmet Ali Yılmaz ayrı kişilerdir.\n"
                 )
-            out_dir, _ = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+            out_dir, _ = UyapRedactor.export_isolated_clean_folder(src, dest)
             out = open(os.path.join(out_dir, "kisiler.md"), encoding="utf-8").read()
             self.assertIn("[DAVACI_1]", out)
             self.assertIn("[TANIK_1]", out)
@@ -3835,7 +3972,7 @@ class TestFinalPolishAndAIComprehensibility(unittest.TestCase):
             os.symlink(secret, os.path.join(src, "dis_bag.md"))
             with open(os.path.join(src, "nfd.md"), "w", encoding="utf-8") as wf:
                 wf.write(f"DAVACI : {nfd_name}\nBeyan sahibi {nfd_name} oldu.\n")
-            out_dir, _ = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+            out_dir, _ = UyapRedactor.export_isolated_clean_folder(src, dest)
             out = open(os.path.join(out_dir, "nfd.md"), encoding="utf-8").read()
             self.assertIn("[DAVACI_1]", out)
             self.assertNotIn("Şükran", out)
@@ -3855,7 +3992,7 @@ class TestFinalPolishAndAIComprehensibility(unittest.TestCase):
                     "DAVALI : Sürücü Kemal Kaya\n"
                     "Hakan Demir ve Kemal Kaya dinlendi.\n"
                 )
-            out_dir, stats = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+            out_dir, stats = UyapRedactor.export_isolated_clean_folder(src, dest)
             out = open(os.path.join(out_dir, "karma.md"), encoding="utf-8").read()
             for pii in ("Nevin Şen", "10000000146", "Ali Yıldız", "Veli Aksu", "Hakan Demir", "Kemal Kaya"):
                 self.assertNotIn(pii, out)
