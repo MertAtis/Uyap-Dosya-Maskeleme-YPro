@@ -3895,6 +3895,68 @@ class TestFinalPolishAndAIComprehensibility(unittest.TestCase):
                 ext_txt = UyapRedactor.extract_pdf_raw(p)
                 self.assertIn("10000000146", ext_txt)
 
+    def test_nufus_vertical_child_two_given_names_unified_and_notary_wrapped_addresses(self):
+        """Nüfus tablosundaki 3 kelimeli çocuk, 2 ön adıyla birleşir; sarılı '/ İl' ve noter adresi doğru işlenir."""
+        nufus_doc = (
+            "NÜFUS KAYIT ÖRNEĞİ (AİLE)\n"
+            "Eşi\n10000000146\nDENİZ\nDEMİR\nBURDUR\nAYŞE\nALİ\n"
+            "Kendisi\n10000000236\nMERT\nDEMİR\nBURDUR\nFATMA\nHASAN\n"
+            "Oğlu\n10000000326\nCAN\xa0EFE\nDEMİR\nBURDUR\n"
+        )
+        dilekce_doc = (
+            "BURDUR AİLE MAHKEMESİ'NE\n"
+            "DAVACI : DENİZ DEMİR - 10000000146\n"
+            "Adres: Örnek Mah. Çınar Sk. No: 27a3 / 6 Merkez / BURDUR\n"
+            "DAVALI : MERT DEMİR - 10000000236\n"
+            "1) Bu evlilikten 2017 doğumlu CAN EFE adında bir adet müşterek çocukları bulunmaktadır.\n"
+        )
+        protokol_doc = (
+            "PROTOKOL\n"
+            "Bu evlilikten 2017 doğumlu CAN EFE isimli müşterek çocukları vardır.\n"
+            "Tarafların müşterek çocukları olan CAN EFE'nin velayeti anne DENİZ DEMİR'de kalacaktır.\n"
+            "Müşterek çocuk CAN EFE ortak karar ile yaşayacaktır.\n"
+        )
+        vekalet_doc = (
+            "BURDUR 1. NOTERİ\n"
+            "SEMA KORKMAZ\n"
+            "KONAK MAH.GAZI\n"
+            "CD.15/1 15100 MERKEZ\n"
+            "/ BURDUR\n"
+            "DAVACI : DENİZ DEMİR 10000000146\n"
+            "Örnek Mah. Çınar Sk. No: 27a3 / 6 Merkez / BURDUR\n"
+            "VEKİL : Av. KEREM YILDIZ\n"
+            "Adres : Bahçelievler Mah. Park Bulvarı No:4/2 Daire:8 Merkez /\n"
+            "BURDUR\n"
+        )
+
+        reg = MaskRegistry()
+        for doc in (nufus_doc, dilekce_doc, protokol_doc, vekalet_doc):
+            UyapRedactor.collect_persons_from_text(doc, reg)
+        reg.freeze_persons()
+
+        self.assertEqual(reg.person_count_by_role().get("KİŞİ"), 1)
+        red_dilekce, _ = UyapRedactor.redact_text(dilekce_doc, registry=reg)
+        red_protokol, _ = UyapRedactor.redact_text(protokol_doc, registry=reg)
+        red_vekalet, _ = UyapRedactor.redact_text(vekalet_doc, registry=reg)
+        red_nufus, _ = UyapRedactor.redact_text(nufus_doc, registry=reg)
+
+        for red in (red_dilekce, red_protokol, red_nufus):
+            self.assertNotIn("CAN EFE", red)
+        self.assertIn("[KİŞİ_1]", red_dilekce)
+        self.assertIn("[KİŞİ_1]'nin", red_protokol)
+        self.assertIn("[KİŞİ_1]", red_nufus)
+        self.assertNotIn("DEMİR\nHASAN", red_nufus)
+
+        self.assertNotIn("27a3", red_vekalet)
+        self.assertNotIn("3 / 6", red_vekalet)
+        self.assertIn("(Merkez/Burdur)", red_vekalet)
+        # Satır sonuna sarılan "/\nBURDUR" adrese dahil edilmeli (tek başına sızmamalı)
+        self.assertNotRegex(red_vekalet, r"\[ADRES_\d+\]\s*(?:\([^)]+\))?\s*/?\s*\n\s*BURDUR\b")
+        # Noter kurum adresi korunmalı
+        self.assertIn("BURDUR 1. NOTERİ", red_vekalet)
+        self.assertIn("KONAK MAH.GAZI", red_vekalet)
+
+
 
 
 

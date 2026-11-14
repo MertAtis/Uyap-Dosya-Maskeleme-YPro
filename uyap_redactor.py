@@ -148,6 +148,7 @@ class MaskRegistry:
         self._person_all_caps: Set[str] = set()
         self._person_strong: Set[str] = set()
         self._person_tckns: Dict[str, Set[str]] = {}
+        self._person_aliases: Dict[str, Set[Tuple[str, ...]]] = {}
         self._variant_to_label: Dict[Tuple[str, ...], str] = {}
         self._abbrev_to_label: Dict[Tuple[str, str], str] = {}
         self._honorific_to_label: Dict[str, str] = {}
@@ -404,6 +405,7 @@ class MaskRegistry:
         self._person_all_caps.discard(key)
         self._person_strong.discard(key)
         self._person_tckns.pop(key, None)
+        self._person_aliases.pop(key, None)
         if key in self._person_order:
             self._person_order.remove(key)
 
@@ -439,6 +441,12 @@ class MaskRegistry:
             lab = self._person_labels[k]
             ftoks = self._person_tokens[k]
             self._variant_to_label.setdefault(ftoks, lab)
+
+        # 1b. Birleştirilen kısa takma adlar (ör. Nüfus'ta 3 kelimeli çocukla birleşen 2 ön ad)
+        for k in self._person_order:
+            lab = self._person_labels[k]
+            for atoks in self._person_aliases.get(k, ()):
+                self._variant_to_label.setdefault(atoks, lab)
 
         # 2. 2 belirteçli adlarda ters sıra ("YILMAZ Ahmet")
         for k in self._person_order:
@@ -554,6 +562,9 @@ class MaskRegistry:
             if 3 <= len(ftoks) <= 4:
                 pair = tuple(sorted((ftoks[0], ftoks[-1])))
                 long_by_pair.setdefault(pair, []).append(lk)
+                pref_pair = tuple(sorted((ftoks[0], ftoks[1])))
+                if pref_pair != pair:
+                    long_by_pair.setdefault(pref_pair, []).append(lk)
 
         if not long_by_pair:
             return
@@ -583,6 +594,9 @@ class MaskRegistry:
                 self._person_strong.add(lk)
             if x_tckns:
                 self._person_tckns.setdefault(lk, set()).update(x_tckns)
+            aliases = self._person_aliases.setdefault(lk, set())
+            aliases.add(xtoks)
+            aliases.update(self._person_aliases.get(xk, ()))
             idx_x = self._person_order.index(xk)
             idx_l = self._person_order.index(lk)
             if idx_x < idx_l:
@@ -2222,7 +2236,7 @@ class UyapRedactor:
     )
     _ADDR_INST_RE = re.compile(
         r'(?i)bankas[ıi]|\bbanka\b|bankac[ıi]l[ıi]k|\bA\.\s?Ş\b|\bT\.A\.Ş|genel\s+müdürlü|'
-        r'operasyon\s+merkezi|adalet\s+saray|adliye|mahkemesi|noterli|barosu|icra\s+dairesi|'
+        r'operasyon\s+merkezi|adalet\s+saray|adliye|mahkemesi|noter(?:i|li(?:ği|gi)?)?|barosu|icra\s+dairesi|'
         r'başkanl[ıi]ğ|\bPTT\b|belediye|ticaret\s+sicil|mersis|valili|kaymakaml|müdürlüğü|şubesi|'
         r'ltd\.?\s*şti|holding|sigorta|hastane|üniversite|polis\s+merkezi|karakol|jandarma|'
         r'menkul\s+k[ıi]ymet|katılım\s+bankas|iş\s+merkezi|towers|plaza|\bcenter\b'
@@ -2291,7 +2305,7 @@ class UyapRedactor:
         line = text[ls:le]
         prev: List[str] = []
         pos = ls - 1
-        while pos > 0 and len(prev) < 2:
+        while pos > 0 and len(prev) < 3:
             ps = text.rfind('\n', 0, pos) + 1
             pl = text[ps:pos].strip()
             if pl:
@@ -2347,23 +2361,18 @@ class UyapRedactor:
             return "kurum"
         if prev and cls._ADDR_HTS_RE.search(prev[0]):
             return "olay"
-        # Taraf satırı bir şirket/kurumsa ("DAVALILAR : 1.- X Sigorta A.Ş, (V.D. No: ...)") alttaki
-        # adres kurum adresidir; satırda kişi kimliği (T.C./TCKN) varsa kişi sayılır.
+        # Yakından uzağa (prev[0] -> prev[1] -> prev[2]) bağlam önceliği:
+        # ilk açık kişi kimliği/rolü (şirket olmayan) -> 'kisi'; ilk kurum/noter/şirket/mersis -> 'kurum'.
         _no_person_id = r'(?i)T\.?\s?C\.?\s*(?:Kimlik|No)|TCKN|\[TCKN_'
-        if prev and cls._ADDR_STRONG_INST_RE.search(prev[0]) and not re.search(_no_person_id, prev[0]):
-            return "kurum"
-        # Şirket adı ile adres arasında yalnız şirket künyesi satırı varsa (VKN/MERSİS/sicil/tel/KEP)
-        if len(prev) >= 2 and cls._ADDR_STRONG_INST_RE.search(prev[1]) and \
-                not re.search(_no_person_id, prev[1]) and \
-                re.search(r'(?i)vergi|\bVKN\b|V\.\s?D\.|mersis|ticaret\s+sicil|\btel\b|telefon|faks|\bKEP\b|e-?posta|web',
-                          prev[0]) and not re.search(_no_person_id, prev[0]):
-            return "kurum"
-        if any(cls._ADDR_PERSON_RE.search(x) for x in prev):
-            return "kisi"
-        if prev and cls._ADDR_OLAY_RE.search(prev[0]):
-            return "olay"
-        if prev and cls._ADDR_INST_RE.search(prev[0]) and not re.search(_no_person_id, prev[0]):
-            return "kurum"
+        for idx, p_line in enumerate(prev):
+            if idx == 0 and cls._ADDR_OLAY_RE.search(p_line):
+                return "olay"
+            has_pid = bool(re.search(_no_person_id, p_line))
+            is_strong_inst = bool(cls._ADDR_STRONG_INST_RE.search(p_line)) and not has_pid
+            if has_pid or (cls._ADDR_PERSON_RE.search(p_line) and not is_strong_inst):
+                return "kisi"
+            if is_strong_inst or cls._ADDR_INST_RE.search(p_line):
+                return "kurum"
         return "kisi"
 
     @classmethod
@@ -2406,7 +2415,7 @@ class UyapRedactor:
         p1 = re.compile(
             r'(?i)(?P<pre>\b(?:Doğrulama|Dogrulama|Takip|İnternet|Internet|Web|KEP|E-?\s*Posta|Mail|yeni)\s+)?'
             r'(?P<label>(?:(?:İkam[ae]t(?:g[aâ]h)?|İş\s*yeri|Tebligat)\s*)?Adres(?:i)?[ \t\*]*[:\t]+[ \t\*]*)'
-            r'(?P<addr>[^\r\n]+?)'
+            r'(?P<addr>[^\r\n]+?(?:/[ \t]*\r?\n[ \t]*[A-ZÇĞİÖŞÜa-zçğıöşü]{2,25}(?=[ \t]*\r?\n|$))?)'
             r'(?=(?:\s*(?:'
             r'(?:Anne|Baba)\s*Ad[ıi]|'
             r'Doğum\s*(?:Yeri|Tarihi)|'
@@ -2422,6 +2431,14 @@ class UyapRedactor:
         def repl1(m: re.Match) -> str:
             nonlocal count
             addr_val = m.group('addr').strip()
+            trail_line = ""
+            if "\n" in addr_val:
+                first_l, second_l = addr_val.split("\n", 1)
+                if _fold_tr(second_l.strip()) in cls._IL_CANON_MAP:
+                    addr_val = f"{first_l.rstrip()} {second_l.strip()}"
+                else:
+                    trail_line = "\n" + second_l
+                    addr_val = first_l.rstrip()
             # "E-Tebligat Adresidir" gibi cümle sonu ibarelerini yanlışlıkla etiket sanma
             if not addr_val or len(addr_val) < 5 or re.search(mask_adres_re, addr_val):
                 return m.group(0)
@@ -2439,7 +2456,7 @@ class UyapRedactor:
                     return m.group(0)
                 head, addr_val = split
             count += 1
-            return f"{m.group('pre') or ''}{m.group('label')}{head}{cls._mask('adres', addr_val, registry)}"
+            return f"{m.group('pre') or ''}{m.group('label')}{head}{cls._mask('adres', addr_val, registry)}{trail_line}"
 
         text = p1.sub(repl1, text)
 
@@ -2525,9 +2542,9 @@ class UyapRedactor:
             r'(?i)(?P<lead>(?:^|(?<=[\s\|\#\:;\,\.\^\(\-\/\*"“”])))'
             r'(?P<addr>'
             r'(?:(?:^|(?<=[\r\n\|\#\:;\,\.\^\(\-\/\*"“”]))[ \t]*(?:[A-ZÇĞİÖŞÜa-zçğıöşü0-9]+[ \t]+){1,2}'
-            r'|[A-ZÇĞİÖŞÜ0-9][A-Za-zÇĞİÖŞÜçğıöşü0-9]*[ \t]+(?=(?:Mahallesi|Mah\.?|Mh\.?)[\s\,\.\^\-])'
+            r'|[A-ZÇĞİÖŞÜ0-9][A-Za-zÇĞİÖŞÜçğıöşü0-9]*[ \t]+(?=(?:Mahallesi|Mah\.?|Mh\.?)(?:[\s\,\.\^\-]|(?<=\.)[A-ZÇĞİÖŞÜa-zçğıöşü]))'
             r'|[A-ZÇĞİÖŞÜ][A-Za-zÇĞİÖŞÜçğıöşü]*\s+(?=Köy(?:ü)?[ \t]))?'
-            r'\b(?:Mahallesi|Mah\.?|Mh\.?|Köy(?:ü)?|Cadde(?:si)?|Cad\.?|Cd\.?|Sokak|Sokağ[ıi]|Sok\.?|Sk\.?|5k\.?|Bulvar[ıi]|Bulv\.?|Blv\.?|Küme\s*Evler[i]?|Toki\s+Evleri)[\s\,\.\^\-]+'
+            r'\b(?:Mahallesi|Mah\.?|Mh\.?|Köy(?:ü)?|Cadde(?:si)?|Cad\.?|Cd\.?|Sokak|Sokağ[ıi]|Sok\.?|Sk\.?|5k\.?|Bulvar[ıi]|Bulv\.?|Blv\.?|Küme\s*Evler[i]?|Toki\s+Evleri)(?:[\s\,\.\^\-]+|(?<=\.)(?=[A-ZÇĞİÖŞÜa-zçğıöşü]))'
             r'(?:\|¢|[^\r\n\|]){0,100}?'
             r'(?:'
             r'\b(?:No|Nu|Ne)(?:[ \t]*[:.\-\^\/]+[ \t]*[0-9A-Za-z]|[ \t]+\d)'
@@ -2584,8 +2601,8 @@ class UyapRedactor:
             # kalan cümle korunur ve hukuki ifadeler adresin tamamını "adres değil" saydırmaz.
             rest = ""
             core = re.search(
-                r'(?i)(?:\b(?:No|Nu|Ne|[İiIıl]ç[ \t]*Kap[ıi](?:[ \t]*No)?)\s*[:.]?\s*\d+[A-Za-z]?(?:\s*/\s*\d+)?'
-                r'|\b(?:Kat|Daire|D|K(?![ \t]*[:.]?[ \t]*(?:19|20)\d{2}[ \t]*/))\s*[:.]?\s*\d+[A-Za-z]?\b)'
+                r'(?i)(?:\b(?:No|Nu|Ne|[İiIıl]ç[ \t]*Kap[ıi](?:[ \t]*No)?)\s*[:.]?\s*\d+[A-Za-z0-9]*(?:\s*/\s*[0-9A-Za-z]+)?'
+                r'|\b(?:Kat|Daire|D|K(?![ \t]*[:.]?[ \t]*(?:19|20)\d{2}[ \t]*/))\s*[:.]?\s*\d+[A-Za-z0-9]*\b)'
                 r'(?:\s*(?:[İiIıl]ç\s*Kap[ıi](?:\s*No)?|Daire|Kat|D|K(?![ \t]*[:.]?[ \t]*(?:19|20)\d{2}[ \t]*/)|Blok)\s*[:.]?\s*[0-9A-Za-z]{1,4}\b)*'
                 r'(?:\s*,?\s*(?:(?-i:[A-ZÇĞİÖŞÜ][A-Za-zÇĞİÖŞÜçğıöşü]+)[ \t]+)?(?-i:[A-ZÇĞİÖŞÜ][A-Za-zÇĞİÖŞÜçğıöşü]+)\s*/\s*(?-i:[A-ZÇĞİÖŞÜ][A-Za-zÇĞİÖŞÜçğıöşü]+)'
                 r'|\s+(?-i:[A-ZÇĞİÖŞÜ][a-zçğıöşü]+)\s+(?-i:[A-ZÇĞİÖŞÜ]{3,})\b)?',
@@ -3258,7 +3275,7 @@ class UyapRedactor:
     )
     _PROSE_KIN_RE = re.compile(
         r'(?<![A-Za-zÇĞİÖŞÜçğıöşüâîûÂÎÛ])'
-        r'(?i:m[uü][şs]terek[ \t]+[çc]ocuk(?:lar[ıiIİ])?|ortak[ \t]+[çc]ocuk(?:lar[ıiIİ])?|'
+        r'(?i:(?:m[uü][şs]terek|ortak)[ \t]+[çc]ocuk(?:lar[ıiIİ])?(?:[ \t]+olan)?|'
         r'[çc]ocu[ğg]u|k[uü][çc][uü]k|o[ğg]lu|k[ıiIİ]z[ıiIİ]|e[şs]i|annesi|babas[ıiIİ]|karde[şs]i|'
         r'a[ğg]abeyi|ablas[ıiIİ]|torunu|kay[ıiIİ]nvalidesi|kay[ıiIİ]npederi|kom[şs]usu|(?:i[şs][ \t]+)?arkada[şs][ıiIİ])'
         r'[ \t]+(?P<name>' + _CAP_TOK_RE_STR + r'(?:[ \t]+' + _CAP_TOK_RE_STR + r'){1,3})'
@@ -3266,7 +3283,7 @@ class UyapRedactor:
     _PROSE_ISIMLI_RE = re.compile(
         r'(?<![A-Za-zÇĞİÖŞÜçğıöşüâîûÂÎÛ])'
         r'(?P<name>' + _CAP_TOK_RE_STR + r'(?:[ \t]+' + _CAP_TOK_RE_STR + r'){1,3})'
-        r'(?=[ \t]+(?i:isimli[ \t]+(?:kom[şs]u|şah[ıiIİ]s|şahs|ki[şs]i)[A-Za-zÇĞİÖŞÜçğıöşüâîûÂÎÛ]*)(?![A-Za-zÇĞİÖŞÜçğıöşüâîûÂÎÛ]))'
+        r'(?=[ \t]+(?i:(?:isimli|adl[ıiIİ]|ad[ıiIİ]nda)[ \t]+(?:(?:bir[ \t]+adet[ \t]+)?(?:m[uü][şs]terek[ \t]+[çc]ocuk|ortak[ \t]+[çc]ocuk|kom[şs]u|şah[ıiIİ]s|şahs|ki[şs]i)[A-Za-zÇĞİÖŞÜçğıöşüâîûÂÎÛ]*))(?![A-Za-zÇĞİÖŞÜçğıöşüâîûÂÎÛ]))'
     )
     _TCKN_ANCHOR_RE = re.compile(
         r'(?:[,;\-\u2013\u2014(/]?[ \t]*)'
@@ -3838,6 +3855,18 @@ class UyapRedactor:
                             if not near_off and role_d != "__OFFICIAL__" and _valid_person(combined, after_c=after_ln):
                                 registry.add_person(combined, role_d, strong=True)
                             break
+
+            # E. Nüfus kayıt örneği dikey satır yapısı: "Kendisi / Eşi / Oğlu / Kızı" -> "<11 haneli TCKN>" -> "<ADI>" -> "<SOYADI>"
+            if i + 3 < len(lines) and _fold_tr(stripped) in {"kendisi", "esi", "oglu", "kizi"}:
+                tckn_ln = re.sub(r'\D', '', _ocr_digits(lines[i + 1].strip()))
+                if len(tckn_ln) == 11 or lines[i + 1].strip().startswith("[TCKN_"):
+                    fn_e, _ = cls._extract_name_from_segment(lines[i + 2].strip())
+                    ln_e, _ = cls._extract_name_from_segment(lines[i + 3].strip())
+                    if fn_e and ln_e:
+                        cand_e = f"{fn_e} {ln_e}"
+                        tckn_e = tckn_ln if len(tckn_ln) == 11 else None
+                        if _valid_person(cand_e, allow_short_last=True):
+                            registry.add_person(cand_e, "KİŞİ", strong=True, tckn=tckn_e)
 
             # D2. İmza bloğu: yalnızca hemen önceki satır (kendisinden önce başka içerik olmadan)
             # tek başına rol başlığıysa ("## Davacı", "TANIK:") ve mevcut satırda başka içerik yoksa
