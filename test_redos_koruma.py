@@ -61,6 +61,9 @@ class TestRedosKoruma(unittest.TestCase):
             "Telefon: 05" + (" " * n) + "Metin\n",
             "IBAN: TR" + (" " * n) + "Metin\n",
             "Hesap No: " + ("A" * n) + " / " + ("B" * n) + "\n",
+            "HAKİM\n: " + ("*" * n) + " " + ("Ali " * min(n, 1000)) + "\n",
+            "DAVALILAR\n: 1- Ali Veli\n" + "".join(f"  {k}- Ahmet Kaya\n" for k in range(2, min(n, 500) + 2)),
+            "davalılar " + ("Ali Veli, " * min(n, 1000)) + "arasında\n",
         ]
         return "".join(parts)
 
@@ -148,12 +151,53 @@ class TestRedosKoruma(unittest.TestCase):
             ("HÂKİM : [HAKİM_1] (34567)", "HÂKİM : [HAKİM_1] ([SİCİL_"),
             ("| Hâkim | [HAKİM_1] | 112233 |", "[SİCİL_"),
             ("Hâkim Ayşe Kaya\n112233", "[SİCİL_"),
+            ("HAKİM\n: Ayşe ÖRNEKOĞLU KAYA  445566", "[SİCİL_"),
+            ("HAKİM\n: [HAKİM_1]  445566", "[SİCİL_"),
+            ("HAKİM\n: Ayşe ÖRNEKOĞLU KAYA\n445566", "[SİCİL_"),
         ]
         for raw, expected_prefix in samples:
             with self.subTest(raw=raw):
                 out, cnt = self._run_timed("sicil_sample", UyapRedactor.redact_sicil, raw)
                 self.assertEqual(cnt, 1, f"Beklenen sicil sayısı 1, çıktı: {out!r}")
                 self.assertIn(expected_prefix, out)
+
+    def test_new_table_and_list_patterns_n5000_linear(self) -> None:
+        # 1. Tablo düzeni başlık + 5000 satır
+        txt_table_5000 = "T.C. ANKARA 1. ASLİYE HUKUK MAHKEMESİ\nHAKİM\n: " + ("*\t " * 1000) + "\n" + ("Boş satır metni\n" * 5000)
+        reg1 = MaskRegistry()
+        self._run_timed("sicil/table_5000", UyapRedactor.redact_sicil, txt_table_5000)
+        self._run_timed("collect/table_5000", UyapRedactor.collect_persons_from_text, txt_table_5000, reg1)
+
+        # 2. Liste + 5000 öğe (çok satırlı)
+        txt_list_5000 = "DAVALILAR\n: 1- Kişi Bir\n" + "".join(f"  {i}- Deneme Kelime\n" for i in range(2, 5002))
+        reg2 = MaskRegistry()
+        self._run_timed("collect/list_5000", UyapRedactor.collect_persons_from_text, txt_list_5000, reg2)
+
+        # 3. Cümle içi çoğul taraf + 5000 öğe / gürültülü ayrım
+        txt_prose_5000 = "Davalılar " + ("Deneme Kelime, " * 5000) + "arasında.\n"
+        reg3 = MaskRegistry()
+        self._run_timed("collect/prose_plural_5000", UyapRedactor.collect_persons_from_text, txt_prose_5000, reg3)
+
+        # 4. Çok sütunlu sekme/boşluk + 5000 parça
+        txt_cols_5000 = "HAKİM : " + ("Ali\t" * 5000) + "\n"
+        reg4 = MaskRegistry()
+        self._run_timed("collect/cols_5000", UyapRedactor.collect_persons_from_text, txt_cols_5000, reg4)
+
+        # 5. Satır içi 5000 yıldız/ayraçlı _HEADER_COLON_RE kötü girdisi
+        txt_hdr_evil = ("*" * 5000) + "A" * 50 + "\n"
+        reg5 = MaskRegistry()
+        self._run_timed("collect/hdr_evil_5000", UyapRedactor.collect_persons_from_text, txt_hdr_evil, reg5)
+
+    def test_madde_isareti_ve_blok_baglami_kotu_girdiler_linear(self) -> None:
+        """TUR A2: madde işareti ayıklama ve blok-yerel yargı bağlamı büyük/kötü girdilerde doğrusal kalır."""
+        self._run_timed("extract/bullet_spaces_200k", UyapRedactor._extract_name_from_segment, "- " + " " * 200000 + "x")
+        self._run_timed("extract/dash_run_100k", UyapRedactor._extract_name_from_segment, "- " * 100000)
+        txt_bullets = "TANIKLAR\n: - Ali Veli\n" + "\n".join(f"  - Ali Veli{i}" for i in range(5000)) + "\n"
+        self._run_timed("collect/bullets_5000", UyapRedactor.collect_persons_from_text, txt_bullets, MaskRegistry())
+        txt_blocks = "T.C. X MAHKEMESİ\n" + "BAŞKAN\n: Ali Veli\n" * 3000
+        self._run_timed("collect/baskan_blocks_3000", UyapRedactor.collect_persons_from_text, txt_blocks, MaskRegistry())
+        txt_ctx = "\n".join("Katip 445566 e-imzalıdır" for _ in range(5000))
+        self._run_timed("collect/ctx_lines_5000", UyapRedactor.collect_persons_from_text, txt_ctx, MaskRegistry())
 
 
 if __name__ == "__main__":
