@@ -990,6 +990,28 @@ class UyapRedactorApp(_AppBase):
                                           command=self._select_output_folder, padx=10, pady=4)
         self.btn_out_browse.grid(row=0, column=1)
 
+        # 3b. Kişi takma adları seçeneği
+        self.mask_names_var = tk.BooleanVar(value=True)
+        self.options_row = tk.Frame(self.out_row, bg=Theme.BG_CANVAS)
+        self.options_row.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(5, 0))
+        self.options_row.columnconfigure(0, weight=1)
+        self.chk_mask_names = tk.Checkbutton(
+            self.options_row,
+            text="Ad-soyadları takma adla değiştir ([DAVACI_1], [TANIK_2] …)",
+            variable=self.mask_names_var,
+            font=Theme.font_text(10),
+            fg=Theme.TEXT_PRIMARY,
+            bg=Theme.BG_CANVAS,
+            activebackground=Theme.BG_CANVAS,
+            activeforeground=Theme.TEXT_PRIMARY,
+            selectcolor=Theme.BG_SURFACE,
+            highlightthickness=0,
+            bd=0,
+            anchor="w",
+            justify="left",
+        )
+        self.chk_mask_names.grid(row=0, column=0, sticky="w")
+
         # 4. İstatistik kartları
         self.stats_frame = tk.Frame(main, bg=Theme.BG_CANVAS)
         self.stats_frame.grid(row=2, column=0, sticky="ew", pady=(0, 6))
@@ -1110,6 +1132,9 @@ class UyapRedactorApp(_AppBase):
             self.status_row.columnconfigure(1, weight=2, uniform="st")
             self.lbl_status.grid(row=0, column=0, sticky="ew", padx=(0, 8))
             self.progress.grid(row=0, column=1, sticky="ew")
+
+        # Seçenekler satırı
+        self.chk_mask_names.config(wraplength=380 if narrow else 0)
 
         # İkincil metinler yalnızca geniş düzende
         if narrow:
@@ -1292,6 +1317,7 @@ class UyapRedactorApp(_AppBase):
                     self.is_running = False
                     self.btn_run.config(state="normal", text=RUN_BUTTON_TEXT)
                     self.btn_open_folder.config(state="normal")
+                    self.chk_mask_names.config(state="normal")
                     summary_text, dest_f = payload if isinstance(payload, tuple) else (payload, self.last_dest_folder)
                     res = messagebox.askyesno(
                         "İşlem Başarıyla Tamamlandı",
@@ -1302,11 +1328,13 @@ class UyapRedactorApp(_AppBase):
                 elif msg_type == "no_documents":
                     self.is_running = False
                     self.btn_run.config(state="normal", text=RUN_BUTTON_TEXT)
+                    self.chk_mask_names.config(state="normal")
                     no_doc_msg, _dest_f = payload if isinstance(payload, tuple) else (payload, self.last_dest_folder)
                     messagebox.showwarning("Belge Bulunamadı", no_doc_msg)
                 elif msg_type == "error":
                     self.is_running = False
                     self.btn_run.config(state="normal", text=RUN_BUTTON_TEXT)
+                    self.chk_mask_names.config(state="normal")
                     messagebox.showerror("Hata Oluştu", payload)
                 elif msg_type == "update_available":
                     info, manual = payload
@@ -1362,6 +1390,7 @@ class UyapRedactorApp(_AppBase):
                     self.is_running = False
                     self.btn_run.config(state="normal", text=RUN_BUTTON_TEXT)
                     self.btn_update.config(state="normal")
+                    self.chk_mask_names.config(state="normal")
                     messagebox.showerror(
                         "Güncelleme Hatası",
                         f"Otomatik güncelleme sırasında bir sorun oluştu:\n{payload}"
@@ -1452,6 +1481,7 @@ class UyapRedactorApp(_AppBase):
         self.is_running = True
         self.btn_run.config(state="disabled", text="Güncelleniyor...")
         self.btn_update.config(state="disabled", text="⬇️ İndiriliyor...")
+        self.chk_mask_names.config(state="disabled")
         self.progress["value"] = 0
         self.lbl_status.config(text=f"v{new_ver} güncellemesi indiriliyor...")
         self._log(f"\n⬇️ [GÜNCELLEME] v{new_ver} paketi indiriliyor ve yerinde kuruluyor...\n")
@@ -1516,6 +1546,7 @@ class UyapRedactorApp(_AppBase):
         self.is_running = True
         self.btn_run.config(state="disabled", text="İşleniyor...")
         self.btn_open_folder.config(state="disabled")
+        self.chk_mask_names.config(state="disabled")
         self.progress["value"] = 0
 
         # İstatistikleri sıfırla
@@ -1528,10 +1559,17 @@ class UyapRedactorApp(_AppBase):
         self.card_adres.update_value("0")
         self.card_files.update_value("0")
 
-        thread = threading.Thread(target=self._worker, args=(srcs[0] if len(srcs) == 1 and os.path.isdir(srcs[0]) else srcs, out_parent), daemon=True)
+        mask_names = bool(self.mask_names_var.get())
+        thread = threading.Thread(
+            target=self._worker,
+            args=(srcs[0] if len(srcs) == 1 and os.path.isdir(srcs[0]) else srcs, out_parent, mask_names),
+            daemon=True,
+        )
         thread.start()
 
-    def _worker(self, folder, out_parent=None):
+    def _worker(self, folder, out_parent=None, mask_names=None):
+        if mask_names is None:
+            mask_names = bool(self.mask_names_var.get())
         start_time = time.time()
         stage_root = None
         dest_arg = None
@@ -1559,7 +1597,8 @@ class UyapRedactorApp(_AppBase):
                         f"🔒 [MASKE] {msg_or_path} -> TCKN:{last_st.get('tckn', 0)}, "
                         f"Tel:{last_st.get('telefon', 0)}, Seri:{last_st.get('seri_no', 0)}, "
                         f"MRZ:{last_st.get('mrz', 0)}, IBAN:{last_st.get('iban', 0)}, "
-                        f"Sicil:{last_st.get('sicil', 0)}, Adres:{last_st.get('adres', 0)}\n"
+                        f"Sicil:{last_st.get('sicil', 0)}, Adres:{last_st.get('adres', 0)}, "
+                        f"Kişi:{last_st.get('kisi', 0)}\n"
                     ))
                 self.msg_queue.put(("stats", stats))
             elif evt == "ocr":
@@ -1585,16 +1624,17 @@ class UyapRedactorApp(_AppBase):
                 dest_arg = os.path.join(out_parent, name)
             if dest_arg:
                 dest_folder, final_stats = UyapRedactor.export_isolated_clean_folder(
-                    folder, dest_arg, progress_cb=progress_cb)
+                    folder, dest_arg, progress_cb=progress_cb, mask_names=mask_names)
             elif stage_root:
                 # Hazırlık klasörü geçici olduğundan varsayılan çıktı ilk kaynağın yanına yazılır
                 first = self.sources[0] if self.sources else folder
                 dest_arg = os.path.join(os.path.dirname(os.path.abspath(first)),
                                         os.path.basename(folder) + " (Maskelenmis AI)")
                 dest_folder, final_stats = UyapRedactor.export_isolated_clean_folder(
-                    folder, dest_arg, progress_cb=progress_cb)
+                    folder, dest_arg, progress_cb=progress_cb, mask_names=mask_names)
             else:
-                dest_folder, final_stats = UyapRedactor.export_isolated_clean_folder(folder, progress_cb=progress_cb)
+                dest_folder, final_stats = UyapRedactor.export_isolated_clean_folder(
+                    folder, progress_cb=progress_cb, mask_names=mask_names)
             self.last_dest_folder = dest_folder
             elapsed = time.time() - start_time
 
@@ -1635,13 +1675,21 @@ class UyapRedactorApp(_AppBase):
                     f"  • IBAN / Kart: {final_stats.get('iban', 0)}\n"
                     f"  • Hesap / Müşteri No: {final_stats.get('hesap', 0)}\n"
                     f"  • Sicil No: {final_stats.get('sicil', 0)}\n"
-                    f"  • Açık Adres: {final_stats.get('adres', 0)}\n\n"
+                    f"  • Açık Adres: {final_stats.get('adres', 0)}\n"
+                    f"  • Kişi Ad-Soyad (Takma Ad): {final_stats.get('kisi_sayisi', 0)} kişi ({final_stats.get('kisi', 0)} geçiş)\n\n"
                     f"✅ Bu klasöre orijinal UDF, PDF, TIFF dosyası aktarılmadı.\n"
                     f"ℹ️ Aynı numaralı etiket = aynı değer. Otomatik maskeleme hatasız değildir; paylaşmadan önce\n"
                     f"   klasördeki DAVA_DÖNÜŞÜM_VE_GÜVENLİK_RAPORU.md dosyasına ve OCR uyarılarına göz atın.\n"
                     f"🎯 Yapay zekâya doğrudan bu temiz klasörü verebilirsiniz."
                 )
-                self.msg_queue.put(("log", f"\n{'='*64}\n{summary_msg}\n{'='*64}\n"))
+                kisi_listesi = final_stats.get("kisi_listesi") or []
+                kisi_log = ""
+                if kisi_listesi:
+                    kisi_log = (
+                        "\n👤 KİŞİ ETİKETLERİ (yalnızca bu ekranda gösterilir, hiçbir dosyaya kaydedilmez)\n"
+                        + "".join(f"  {lab} = {real_name}\n" for lab, real_name in kisi_listesi)
+                    )
+                self.msg_queue.put(("log", f"\n{'='*64}\n{summary_msg}\n{'='*64}\n{kisi_log}"))
                 self.msg_queue.put(("status", "İşlem başarıyla tamamlandı. İzole klasör AI analizine hazır."))
                 self.msg_queue.put(("done", (summary_msg, dest_folder)))
 

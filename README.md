@@ -20,7 +20,7 @@
 
 - **🔒 Çevrimdışı Çalışma:** Hiçbir harici API'ye, sunucuya veya buluta veri göndermez. Tüm işlem yerel Python çekirdeği ile RAM üzerinde gerçekleşir.
 - **🛡️ Orijinale Dokunmama (Non-Destructive):** Orijinal `.udf`, `.pdf`, `.doc`, `.docx`, `.xlsx`, `.eyp`, `.zip`, `.tif`/`.tiff`, `.png`/`.jpg`/`.heic` dosyalarınıza kesinlikle dokunmaz. İşlem yalnızca ayrı bir izole çıktı klasörüne maskelenmiş `.md` metinleri üretir.
-- **⚖️ Hukuki Bütünlük:** Olay örgüsü, tarihler, para miktarları, mahkeme esas/karar numaraları, kanun maddeleri, olay yeri, kurum adresleri, anne/baba adları ve taraf ad-soyadları korunacak biçimde tasarlanmıştır. Kural tabanlı maskeleme hatasız değildir; çıktıyı paylaşmadan önce rapordaki OCR uyarılarına göz atın.
+- **⚖️ Hukuki Bütünlük:** Olay örgüsü, tarihler, para miktarları, mahkeme esas/karar numaraları, kanun maddeleri, olay yeri, kurum/şirket adları, kurum adresleri, hâkim/savcı/bilirkişi/vekil adları ve anne/baba adları korunacak biçimde tasarlanmıştır. Taraf ve tanık ad-soyadları varsayılan olarak rol bazlı tutarlı takma adlarla (`[DAVACI_1]`, `[TANIK_2]`, `[KİŞİ_1]`) değiştirilir (isterseniz kapatılabilir). Kural tabanlı maskeleme hatasız değildir; çıktıyı paylaşmadan önce rapordaki uyarılara göz atın.
 - **📱 Cep Telefonu ve İletişim Koruması:** Müvekkil ve taraf cep telefonlarının tüm Türkiye formatlarını (`05xx`, `+90 5xx`, boşluklu, parantezli) tespit ederek maskeler.
 - **🪪 Kimlik Kartı & MRZ Koruma:** Taranmış evraklardaki kimlik fotokopilerinde yer alan yeni/eski seri numaralarını ve 3 satırlı ICAO/MRZ şeritlerini (`I<TUR...`) kapatır.
 - **🔄 Otomatik INDEX.md Senkronizasyonu:** OCR sonradan tamamlansa dahi `INDEX.md` dosyasını tarayarak güncel `.md` bağlantılarını ve karakter sayılarını otomatik olarak tabloya işler.
@@ -35,7 +35,7 @@
 
 ## 🎯 Hedef Kişisel Veri Kategorileri
 
-Maskeler **tutarlı ve numaralıdır**: aynı değer tüm belgelerde aynı etiketi alır (`[TCKN_1]` her yerde aynı kişidir), farklı değerler farklı numara alır. Değer-etiket eşleme tablosu bilerek hiçbir dosyaya yazılmaz; yalnızca işlem sırasında bellekte tutulur.
+Maskeler **tutarlı ve numaralıdır**: aynı değer tüm belgelerde aynı etiketi alır (`[TCKN_1]` ve `[DAVACI_1]` her yerde aynı kişidir), farklı değerler farklı numara alır. Kişi ad-soyadları dahil **hiçbir değer-etiket eşlemesi hiçbir dosyaya yazılmaz** (yalnızca işlem sırasında bellekte tutulur); işlem tamamlandığında kişi etiket listesi yalnızca o anki ekran çıktısında (GUI günlük alanı / terminal stdout) gösterilir.
 
 | Veri Türü | Maskeleme Formatı | Açıklama |
 | :--- | :--- | :--- |
@@ -47,9 +47,19 @@ Maskeler **tutarlı ve numaralıdır**: aynı değer tüm belgelerde aynı etike
 | **Banka Hesap / Müşteri No** | `[HESAP_1]` | Yalnızca hesap bağlamında: "... numaralı hesap", "Hesap No:", hesap listesi tablolarındaki Hesap/Müşteri No sütunları |
 | **Banka Kartı No** | `[KART_1]` | Luhn doğrulamalı 16 hane ve banka tarafından kısmen maskelenmiş kart numaraları |
 | **Sicil No** | `[SİCİL_1]` | Hâkim, savcı, kâtip, bilirkişi, kolluk, baro ve ticaret sicil numaraları |
-| **Açık Kişi Adresi** | `[ADRES_1]` | Kişilere ait ikamet/iş/tebligat adresleri. Kurum adresleri (banka, adliye, noter, baro, PTT, şirket antedi), olay yeri ve nüfus kayıt yerleri korunur |
+| **Açık Kişi Adresi** | `[ADRES_1] (İlçe/İl)` | Kişilere ait ikamet/iş/tebligat adreslerinde açık adres gizlenir, ilçe/il korunur. Kurum adresleri (banka, adliye, noter, baro, PTT, şirket antedi), olay yeri ve nüfus kayıt yerleri korunur |
+| **Ad-Soyad (taraf/tanık)** | `[DAVACI_1]`, `[DAVALI_1]`, `[TANIK_1]`, `[KİŞİ_1]` … | Dava klasöründeki gerçek kişi taraflar, tanıklar, müştekiler, sanıklar ve imzalar tüm belgelerde tutarlı rol takma adıyla değiştirilir (isteğe bağlı olarak devre dışı bırakılabilir; vekil, hâkim, savcı, bilirkişi ve şirket/kurum adları korunur) |
 
 Registry kullanılmadan doğrudan `redact_text()` çağrıldığında eski sabit etiketler (`[TCKN_GİZLENDİ]` vb.) üretilir.
+
+---
+
+## 🪪 Kişi Takma Adlandırma
+
+- **Nasıl Çalışır:** Klasördeki metinler ve `uyap-project.json` ön-taranarak taraf/tanık rolleri çıkarılır; baskın role göre `[DAVACI_1]`, `[TANIK_2]`, `[KİŞİ_1]` gibi tutarlı etiketler atanır ve Türkçe eklerle (`[DAVACI_1]'ın`) uyumlu biçimde tüm belgeler ile dosya adlarında/linklerde uygulanır.
+- **Devre Dışı Bırakma:** GUI'de *"Ad-soyadları takma adla değiştir"* onay kutusunun işaretini kaldırarak veya terminalde `--isimleri-koru` parametresiyle isimleri olduğu gibi bırakabilirsiniz.
+- **Sıfır Diske Yazma İlkesi:** Kişi eşlemeleri dahil hiçbir değer-etiket eşlemesi diske, rapora veya `INDEX.md` dosyasına yazılmaz; yalnızca işlem tamamlandığında GUI günlük alanında ve terminal çıktısında geçici olarak listelenir.
+- **Bilinen Sınırlar:** Kurum/şirket adları, avukat/vekil, hâkim, savcı, bilirkişi ve anne/baba tekil adları bilerek korunur; yalnızca "Ahmet" veya yalnızca "Yılmaz" şeklinde tek başına geçen sözcükler yanlış eşleşmeyi önlemek için değiştirilmez.
 
 ---
 
@@ -96,6 +106,9 @@ python3 gui.py
 
 # Doğrudan terminalden maskelemek için:
 python3 uyap_redactor.py "/dosya/yolu/Dava Klasoru"
+
+# Taraf/tanık ad-soyadlarını maskelemeden korumak için:
+python3 uyap_redactor.py "/dosya/yolu/Dava Klasoru" --isimleri-koru
 
 # Yalnızca INDEX.md dosyasını senkronize etmek için:
 python3 uyap_redactor.py "/dosya/yolu/Dava Klasoru" --sync-index

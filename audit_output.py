@@ -29,20 +29,30 @@ from collections import Counter, defaultdict
 from typing import Dict, List, Optional, Tuple
 
 try:
-    from uyap_redactor import UyapRedactor, _tr_lower
+    from uyap_redactor import UyapRedactor, MaskRegistry, _tr_lower
 except ImportError:
     _script_dir = os.path.dirname(os.path.abspath(__file__))
     if _script_dir not in sys.path:
         sys.path.insert(0, _script_dir)
-    from uyap_redactor import UyapRedactor, _tr_lower
+    from uyap_redactor import UyapRedactor, MaskRegistry, _tr_lower
 
 TEXT_EXTS = (".md", ".txt", ".json")
 REPORT_NAME = "DAVA_DÖNÜŞÜM_VE_GÜVENLİK_RAPORU.md"
 
-# Hem eski sabit ([TCKN_GİZLENDİ]) hem numaralı ([TCKN_3]) etiketler
-MASK_KINDS = r'(?:TCKN|IBAN|KART|HESAP|TEL|SERİ_NO|MRZ|SİCİL|ADRES)'
+PERSON_KINDS = frozenset(MaskRegistry.PERSON_ROLES)
+_PERSON_KIND_ALTS = "|".join(re.escape(r) for r in MaskRegistry.PERSON_ROLES)
+
+# Hem eski sabit ([TCKN_GİZLENDİ]) hem numaralı ([TCKN_3]) etiketler + kişi takma adları
+MASK_KINDS = r'(?:TCKN|IBAN|KART|HESAP|TEL|SERİ_NO|MRZ|SİCİL|ADRES|' + _PERSON_KIND_ALTS + r')'
 MASK_RE = re.compile(
     r'\[(?:[A-ZÇĞİÖŞÜ_]+_GİZLENDİ|' + MASK_KINDS + r'_\d+)\]'
+)
+_IL_ALTS = "|".join(re.escape(il) for il in sorted(UyapRedactor._IL_ADLARI, key=len, reverse=True))
+ADRES_HINT_RE = re.compile(
+    r'\[ADRES_\d+\] \((?:[A-ZÇĞİÖŞÜ][a-zçğıöşü]+/)?(?:' + _IL_ALTS + r')\)'
+)
+MASK_WITH_HINT_RE = re.compile(
+    r'(?:' + ADRES_HINT_RE.pattern + r'|' + MASK_RE.pattern + r')'
 )
 
 # Eski etiket adı -> tür
@@ -456,7 +466,7 @@ def scan_leaks(rel: str, text: str, known_tckns, known_ibans, out: Dict, check_a
         return  # aracın kendi raporu veya dosya yolu için adres taraması yapılmaz
     for i, line in enumerate(lines):
         # Satırda başka maske etiketi varsa bile maskesiz kalmış adres parçası taranır
-        scan_line = MASK_RE.sub(" ", line)
+        scan_line = MASK_WITH_HINT_RE.sub(" ", line)
         # Dilekçe formu şablon ifadesi "(caddesi / sokağı)" adres değildir
         scan_line = TEMPLATE_ADDR_RE.sub(" ", scan_line)
         # Markdown bağlantıları (yol/dosya adı) ve belge-numarası ifadeleri adres belirteci sayılmaz
@@ -551,12 +561,12 @@ ANALYSIS_RE = {
 }
 
 
-def extract_mask_pieces(src_line: str, out_line: str) -> Optional[List[Tuple[str, str]]]:
-    """Çıktı satırındaki her maskenin yerine geçtiği kaynak parçasını döndürür."""
-    parts = MASK_RE.split(out_line)
-    labels = MASK_RE.findall(out_line)
-    if not labels:
+def _extract_with_regex(src_line: str, out_line: str, rx: re.Pattern) -> Optional[List[Tuple[str, str]]]:
+    parts = rx.split(out_line)
+    raw_labels = rx.findall(out_line)
+    if not raw_labels:
         return []
+    labels = [re.match(MASK_RE.pattern, lab).group(0) for lab in raw_labels]
     pattern = "^" + "(.*?)".join(re.escape(p) for p in parts) + "$"
     try:
         m = re.match(pattern, src_line, re.S)
@@ -567,6 +577,16 @@ def extract_mask_pieces(src_line: str, out_line: str) -> Optional[List[Tuple[str
     return list(zip(labels, m.groups()))
 
 
+def extract_mask_pieces(src_line: str, out_line: str) -> Optional[List[Tuple[str, str]]]:
+    """Çıktı satırındaki her maskenin yerine geçtiği kaynak parçasını döndürür."""
+    res = _extract_with_regex(src_line, out_line, MASK_RE)
+    if res is not None:
+        return res
+    if ADRES_HINT_RE.search(out_line):
+        return _extract_with_regex(src_line, out_line, MASK_WITH_HINT_RE)
+    return None
+
+
 def analysis_flags(piece: str) -> List[str]:
     return [k for k, r in ANALYSIS_RE.items() if r.search(piece)]
 
@@ -574,7 +594,16 @@ def analysis_flags(piece: str) -> List[str]:
 # ---------------------------------------------------------------------------
 # C) Tutarlılık için normalize anahtar
 # ---------------------------------------------------------------------------
+_PERSON_ABBREV_RE = re.compile(r'^[A-ZÇĞİÖŞÜÂÎÛ]\.\s+')
+
+
 def norm_value(kind: str, piece: str) -> Optional[str]:
+    if kind in PERSON_KINDS:
+        cleaned = (piece or "").strip()
+        if not cleaned or _PERSON_ABBREV_RE.match(cleaned):
+            return None
+        key = MaskRegistry.person_key(cleaned)
+        return key or None
     p = ocr_digits(piece)
     d = re.sub(r'\D', '', p)
     if kind == "TCKN":
@@ -823,7 +852,7 @@ def audit(src: str, out: str, ocr_cache: Optional[str] = None) -> Dict:
                             res["unaligned"].append((rel, jj + 1, [s_lines[ii]], [o_lines[jj]]))
                         continue
                     for label, piece in pieces:
-                        if MASK_RE.fullmatch(piece.strip() or "-"):
+                        if MASK_WITH_HINT_RE.fullmatch(piece.strip() or "-"):
                             continue  # kaynakta zaten maskeli
                         kind = mask_kind(label)
                         res["over"].append((rel, jj + 1, label, piece, analysis_flags(piece)))

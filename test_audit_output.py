@@ -469,6 +469,56 @@ class AuditCase(unittest.TestCase):
         self.assertTrue(leak)
         self.assertTrue(any("Maskesiz yer adı (etiket önünde): 1" in ln for ln in lines))
 
+    def test_adres_locality_hint_no_leak_no_overmasking_no_inconsistency(self):
+        """[ADRES_N] (İlçe/İl) ipucu sızıntı, fazla maskeleme, hizalama hatası veya tutarsızlık sayılmaz."""
+        s = (
+            "Adres: Caferağa Mah. Moda Cad. No:12 D:3 Kadıköy/İstanbul Tel: 0532 111 22 33\n"
+            "Tebligat adresi: Caferağa Mah. Moda Cad. No:12 D:3\n"
+            "İkametgah Adresi: Cumhuriyet Mah. Lale Sok. No:7 Şanlıurfa\n"
+        )
+        o = (
+            "Adres: [ADRES_1] (Kadıköy/İstanbul) Tel: [TEL_1]\n"
+            "Tebligat adresi: [ADRES_1]\n"
+            "İkametgah Adresi: [ADRES_2] (Şanlıurfa)\n"
+        )
+        src, out = self._case({"a.md": s}, {"a.md": o})
+        res = A.audit(src, out)
+        _lines, _det, leak = A.summarize(res)
+        self.assertFalse(leak)
+        self.assertEqual(res["leaks"]["addr_kisi"], [])
+        self.assertEqual(res["leaks"]["addr_prefix"], [])
+        self.assertEqual(res["unaligned"], [])
+        flagged_over = [x for x in res["over"] if x[4]]
+        self.assertEqual(flagged_over, [])
+        self.assertEqual(res["consistency_value_multi_label"], {})
+        self.assertEqual(res["consistency_label_multi_value"], {})
+
+    def test_person_pseudonym_labels_consistency_and_no_false_positives(self):
+        """[DAVACI_N]/[TANIK_N] kişi etiketleri hizalıdır; farklı yazım/sıra tutarsızlık sayılmaz."""
+        s = (
+            "DAVACI : Ahmet Yılmaz\n"
+            "Duruşmada AHMET YILMAZ dinlendi.\n"
+            "Kayıtta Ahmet Yilmaz ve YILMAZ Ahmet olarak geçti.\n"
+            "Davacı A. Yılmaz beyanda bulundu.\n"
+            "TANIK : Fatma Çelik ifade verdi.\n"
+        )
+        o = (
+            "DAVACI : [DAVACI_1]\n"
+            "Duruşmada [DAVACI_1] dinlendi.\n"
+            "Kayıtta [DAVACI_1] ve [DAVACI_1] olarak geçti.\n"
+            "Davacı [DAVACI_1] beyanda bulundu.\n"
+            "TANIK : [TANIK_1] ifade verdi.\n"
+        )
+        src, out = self._case({"a.md": s}, {"a.md": o})
+        res = A.audit(src, out)
+        _lines, _det, leak = A.summarize(res)
+        self.assertFalse(leak)
+        self.assertEqual(res["unaligned"], [])
+        flagged_over = [x for x in res["over"] if x[4]]
+        self.assertEqual(flagged_over, [])
+        self.assertEqual(res["consistency_value_multi_label"], {})
+        self.assertEqual(res["consistency_label_multi_value"], {})
+
 
 if __name__ == "__main__":
     unittest.main()

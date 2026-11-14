@@ -17,7 +17,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
     sys.path.insert(0, current_dir)
 
-from uyap_redactor import UyapRedactor
+from uyap_redactor import UyapRedactor, MaskRegistry
 
 
 class TestUyapRedactor(unittest.TestCase):
@@ -2302,12 +2302,12 @@ class TestAdresGuvenlikAgi(unittest.TestCase):
             ),
             (
                 'küçüğün "Gül Mahallesi Lale (Gül) Sokak No:6 Çine/AYDIN" olduğu, TMK 411. madde gereğince',
-                ["Gül Mahallesi", "Çine", "AYDIN"],
-                ['" olduğu, TMK 411. madde'],
+                ["Gül Mahallesi", "AYDIN"],
+                ['(Çine/Aydın)', '" olduğu, TMK 411. madde'],
             ),
-            ("Çamlık Mevkii Kavak Sitesi B Blok D:4 Pamukkale/DENİZLİ", ["Çamlık", "Kavak", "DENİZLİ"], []),
-            ("Yeni Mahallesi 1234 Sokak 28/3 Efeler/AYDIN", ["Yeni", "28/3", "AYDIN"], []),
-            ("Kurtuluş Mh. Atatürk Cd. Nu:15 İzmir", ["Kurtuluş", "Atatürk", "İzmir"], []),
+            ("Çamlık Mevkii Kavak Sitesi B Blok D:4 Pamukkale/DENİZLİ", ["Çamlık", "Kavak", "DENİZLİ"], ["(Pamukkale/Denizli)"]),
+            ("Yeni Mahallesi 1234 Sokak 28/3 Efeler/AYDIN", ["Yeni", "28/3", "AYDIN"], ["(Efeler/Aydın)"]),
+            ("Kurtuluş Mh. Atatürk Cd. Nu:15 İzmir", ["Kurtuluş", "Atatürk", "Nu:15"], ["(İzmir)"]),
             (
                 "doğumlu, Güneyyayla\nKöyü Güneyyayla Küme Evleri No: 128 Burdur\nMerkez/ BURDUR ikamet eder.",
                 ["Güneyyayla", "128", "BURDUR"],
@@ -2373,11 +2373,941 @@ class TestAdresGuvenlikAgi(unittest.TestCase):
         reg = MaskRegistry()
         a, _ = UyapRedactor.redact_text("Çamlık Mevkii Kavak Sitesi B Blok D:4 Pamukkale/DENİZLİ", registry=reg)
         b, _ = UyapRedactor.redact_text("Çamlık Mevkii Kavak Sitesi B Blok D:4 DENİZLİ", registry=reg)
-        self.assertEqual(a, "[ADRES_1]")
-        self.assertEqual(b, "[ADRES_1]")
+        self.assertEqual(a, "[ADRES_1] (Pamukkale/Denizli)")
+        self.assertEqual(b, "[ADRES_1] (Denizli)")
 
         reg2 = MaskRegistry()
         c, _ = UyapRedactor.redact_text("Kurtuluş Mh. Atatürk Cd. No:15 İzmir", registry=reg2)
         d, _ = UyapRedactor.redact_text("Kurtuluş Mh. Atatürk Cd. Nu:15 İzmir", registry=reg2)
-        self.assertEqual(c, "[ADRES_1]")
-        self.assertEqual(d, "[ADRES_1]")
+        self.assertEqual(c, "[ADRES_1] (İzmir)")
+        self.assertEqual(d, "[ADRES_1] (İzmir)")
+
+
+class TestAdresIlIlceIpucu(unittest.TestCase):
+    """Adres etiketlerinin dışına eklenen ilçe/il ipucu ve kenar durumları (sentetik veri)."""
+
+    def test_il_listesi_81_il(self):
+        self.assertEqual(len(UyapRedactor._IL_ADLARI), 81)
+        self.assertEqual(len(set(UyapRedactor._IL_ADLARI)), 81)
+
+    def test_bitti_olcutu_tablosu(self):
+        reg1 = MaskRegistry()
+        out1, _ = UyapRedactor.redact_text(
+            "Adres: Caferağa Mah. Moda Cad. No:12 D:3 Kadıköy/İstanbul Tel: 0532 111 22 33",
+            registry=reg1,
+        )
+        self.assertEqual(out1, "Adres: [ADRES_1] (Kadıköy/İstanbul) Tel: [TEL_1]")
+
+        out2, _ = UyapRedactor.redact_text(
+            "Tebligat adresi: Caferağa Mahallesi Moda Caddesi No 12 Daire 3 KADIKÖY İSTANBUL",
+            registry=reg1,
+        )
+        self.assertEqual(out2, "Tebligat adresi: [ADRES_1] (Kadıköy/İstanbul)")
+
+        cases = [
+            (
+                "İkametgah Adresi: Güneyyayla Köyü No:14 Akseki / ANTALYA",
+                "İkametgah Adresi: [ADRES_1] (Akseki/Antalya)",
+            ),
+            (
+                "Adres: Ankara Caddesi No:5 Daire:2",
+                "Adres: [ADRES_1]",
+            ),
+            (
+                "Adres: Atatürk Mah. 1234 Sok. No:5 D:2 Bornova İzmir",
+                "Adres: [ADRES_1] (Bornova/İzmir)",
+            ),
+            (
+                "Adres: Cumhuriyet Mah. Lale Sok. No:7 Şanlıurfa",
+                "Adres: [ADRES_1] (Şanlıurfa)",
+            ),
+        ]
+        for raw, expected in cases:
+            out, _ = UyapRedactor.redact_text(raw, registry=MaskRegistry())
+            self.assertEqual(out, expected, raw)
+
+    def test_registrysiz_cagri_eski_etiketi_korur(self):
+        out, _ = UyapRedactor.redact_text(
+            "Adres: Caferağa Mah. Moda Cad. No:12 D:3 Kadıköy/İstanbul"
+        )
+        self.assertEqual(out, "Adres: [ADRES_GİZLENDİ]")
+        self.assertNotIn("Kadıköy", out)
+        self.assertNotIn("İstanbul", out)
+
+    def test_kurum_adresi_aynen_kalir(self):
+        inst = "Türkiye İş Bankası A.Ş. Kadıköy Şubesi, Söğütlüçeşme Cad. No:10 Kadıköy/İstanbul"
+        out, _ = UyapRedactor.redact_text(inst, registry=MaskRegistry())
+        self.assertEqual(out, inst)
+
+    def test_ipuculu_ve_ipucusuz_ayni_numarayi_alir(self):
+        reg = MaskRegistry()
+        a, _ = UyapRedactor.redact_text(
+            "Adres: Caferağa Mah. Moda Cad. No:12 D:3 Kadıköy/İstanbul", registry=reg
+        )
+        b, _ = UyapRedactor.redact_text(
+            "Tebligat adresi: Caferağa Mahallesi Moda Caddesi No 12 Daire 3", registry=reg
+        )
+        self.assertEqual(a, "[ADRES_1] (Kadıköy/İstanbul)".replace("[ADRES_1]", "Adres: [ADRES_1]"))
+        self.assertEqual(b, "Tebligat adresi: [ADRES_1]")
+        self.assertEqual(reg.distinct("adres"), 1)
+        self.assertEqual(reg.occurrences["adres"], 2)
+
+    def test_koy_mahalle_sokak_kapi_no_ciktiya_girmez(self):
+        raw = "İkametgah Adresi: Güneyyayla Köyü Çiçek Mah. Lale Sok. No:14 D:3 Akseki / ANTALYA"
+        out, _ = UyapRedactor.redact_text(raw, registry=MaskRegistry())
+        for forbidden in ("Güneyyayla", "Köyü", "Çiçek", "Mah", "Lale", "Sok", "No:14", "14", "D:3"):
+            self.assertNotIn(forbidden, out)
+        self.assertIn("(Akseki/Antalya)", out)
+
+    def test_cok_satirli_adres_il_ilce_tam_bir_kez_gorunur(self):
+        raw1 = "Adres: Caferağa Mah. Moda Cad. No:12\nKadıköy/İstanbul"
+        out1, _ = UyapRedactor.redact_text(raw1, registry=MaskRegistry())
+        self.assertEqual(out1.count("Kadıköy/İstanbul"), 1, out1)
+
+        raw2 = "Caferağa Mah. Moda Cad. No:12\nK:2 D:3\nKadıköy/İstanbul"
+        out2, _ = UyapRedactor.redact_text(raw2, registry=MaskRegistry())
+        self.assertEqual(out2.count("Kadıköy/İstanbul"), 1, out2)
+
+    def test_ilcesi_ili_merkez_ve_eski_il_adlari(self):
+        self.assertEqual(
+            UyapRedactor._address_locality("Güneyyayla Köyü No:14 Akseki İlçesi Antalya İli"),
+            "Akseki/Antalya",
+        )
+        self.assertEqual(
+            UyapRedactor._address_locality("Cumhuriyet Mah. No:5 Merkez/Burdur"),
+            "Merkez/Burdur",
+        )
+        self.assertEqual(
+            UyapRedactor._address_locality("Atatürk Mah. No:5 Afyon"),
+            "Afyonkarahisar",
+        )
+        self.assertEqual(
+            UyapRedactor._address_locality("Atatürk Mah. No:5 İçel"),
+            "Mersin",
+        )
+        self.assertEqual(
+            UyapRedactor._address_locality("Atatürk Mah. No:5 İzmit/Kocaeli"),
+            "Kocaeli",
+        )
+
+    def test_cift_yazim_onlenir_ve_devam_satirlari_ipucuyu_bozmaz(self):
+        reg = MaskRegistry()
+        dup_out, _ = UyapRedactor.redact_text(
+            "Adres: Caferağa Mah. Moda Cad. No:12 Kadıköy/İstanbul, Kadıköy/İstanbul",
+            registry=reg,
+        )
+        self.assertEqual(dup_out.count("Kadıköy/İstanbul"), 1, dup_out)
+
+        cont_in = (
+            "Yakalama Adresi: Lale Mah. Gül Sk. No:12 Kadıköy/İstanbul\n"
+            "İç Kapı No: 2 Kadıköy / İstanbul Tel: 0216 333 44 55"
+        )
+        cont_out, stats = UyapRedactor.redact_text(cont_in, registry=MaskRegistry())
+        self.assertEqual(cont_out.count("[ADRES_1]"), 2, cont_out)
+        self.assertNotIn("[ADRES_2]", cont_out)
+        self.assertIn("[ADRES_1] (Kadıköy/İstanbul)", cont_out)
+        self.assertNotIn("İç Kapı No", cont_out)
+        self.assertEqual(stats["adres"], 2)
+
+
+class TestKapsamSozlesmesi(unittest.TestCase):
+    """Sentetik dava dilekçesi üzerinden 'maskelenenler / korunanlar' kapsam sözleşmesi."""
+
+    # Algoritmik olarak geçerli ama tamamen uydurma TCKN'ler
+    TCKN_DAVACI = "10000000146"
+    TCKN_TANIK = "20000000114"
+
+    DAVA_DILEKCESI = (
+        "T.C.\n"
+        "İSTANBUL ANADOLU 5. ASLİYE HUKUK MAHKEMESİNE\n"
+        "ESAS NO: 2024/623 E.\n"
+        "KARAR NO: 2024/815 K.\n"
+        "\n"
+        "DAVACI : Ali Kaya\n"
+        "T.C. Kimlik No : 10000000146\n"
+        "Anne Adı: Emine  Baba Adı: Hüseyin  Doğum Tarihi: 14.05.1985\n"
+        "Adres : Caferağa Mah. Moda Cad. No:12 D:3 Kadıköy/İstanbul\n"
+        "Cep Tel : 0532 410 22 33\n"
+        "\n"
+        "VEKİLİ : Av. Zeynep Aksoy\n"
+        "İstanbul Barosu Sicil No: 49812\n"
+        "E-posta: ornek.avukat@example.com\n"
+        "Sabit Tel: 0212 234 56 78\n"
+        "\n"
+        "DAVALI : Örnek Lojistik Ticaret A.Ş.\n"
+        "VKN: 1234567890  Mersis No: 0123456789012345\n"
+        "KEP Adresi: sirket@hs01.kep.tr\n"
+        "\n"
+        "TANIK : Hasan Arslan\n"
+        "Tanık T.C. Kimlik No : 20000000114\n"
+        "İkametgah Adresi: Bahçelievler Mah. 120 Sok. No:8 D:1 Çankaya/Ankara\n"
+        "Tanık GSM: +90 544 520 33 44\n"
+        "\n"
+        "KONU : Haksız fiil nedeniyle 125.000,00 TL maddi tazminat istemidir.\n"
+        "\n"
+        "AÇIKLAMALAR :\n"
+        "1. 12.03.2024 tarihinde saat 14:30 sıralarında davacı Ali Kaya sevk ve idaresindeki 34 ABC 123 plakalı araç seyir halindeyken,\n"
+        "Olay Yeri: Barbaros Bulvarı No:40 Beşiktaş/İstanbul önünde meydana gelmiştir.\n"
+        "2. Davacı Ali Kaya (TCKN: 10000000146) tarafından yapılan ödeme aşağıdaki hesaba gönderilmiştir:\n"
+        "Ödeme IBAN: TR330006100511123456789012\n"
+        "3. Kurum kayıtları ve banka şube yazıları dosyadadır:\n"
+        "İstanbul Anadolu Adliyesi, Kartal Mah. E-5 Cad. No:10 Kartal/İstanbul\n"
+        "Türkiye İş Bankası A.Ş. Kadıköy Şubesi, Söğütlüçeşme Cad. No:10 Kadıköy/İstanbul\n"
+        "\n"
+        "HUKUKİ SEBEPLER : TBK m. 49, 6100 sayılı HMK m. 107 ve ilgili mevzuat.\n"
+        "SONUÇ VE İSTEM : Yukarıda açıklanan nedenlerle 125.000,00 TL alacağın tahsiline karar verilmesini arz ederim.\n"
+        "\n"
+        "Hâkim Ayşe Yılmaz (112233)\n"
+        "Zabıt Kâtibi Murat Şahin (223344)\n"
+    )
+
+    def test_maskelenenler_ve_korunanlar_sozlesmesi(self):
+        reg = MaskRegistry()
+        out, stats = UyapRedactor.redact_text(self.DAVA_DILEKCESI, registry=reg)
+
+        # 1. Maskelenmesi zorunlu ham değerler çıktıda geçmemeli
+        must_hide = [
+            self.TCKN_DAVACI,
+            self.TCKN_TANIK,
+            "0532 410 22 33",
+            "+90 544 520 33 44",
+            "TR330006100511123456789012",
+            "49812",
+            "112233",
+            "223344",
+            "Caferağa Mah.",
+            "Moda Cad. No:12",
+            "Bahçelievler Mah.",
+            "120 Sok. No:8",
+        ]
+        for raw in must_hide:
+            self.assertNotIn(raw, out, f"Ham değer sızdı: {raw}")
+
+        # İlgili maske etiketleri bulunmalı
+        self.assertIn("[TCKN_1]", out)
+        self.assertIn("[TCKN_2]", out)
+        self.assertIn("[TEL_1]", out)
+        self.assertIn("[TEL_2]", out)
+        self.assertIn("[IBAN_1]", out)
+        self.assertIn("[SİCİL_1]", out)
+        self.assertIn("[SİCİL_2]", out)
+        self.assertIn("[SİCİL_3]", out)
+        self.assertIn("[ADRES_1] (Kadıköy/İstanbul)", out)
+        self.assertIn("[ADRES_2] (Çankaya/Ankara)", out)
+
+        # Aynı TCKN iki yerde aynı etiketi alır; farklı kişi farklı etiket alır
+        self.assertEqual(out.count("[TCKN_1]"), 2)
+        self.assertEqual(out.count("[TCKN_2]"), 1)
+        self.assertGreaterEqual(stats["tckn"], 3)
+
+        # 2. Aynen korunması zorunlu değerler
+        must_keep = [
+            "Ali Kaya",
+            "Zeynep Aksoy",
+            "Hasan Arslan",
+            "Ayşe Yılmaz",
+            "Murat Şahin",
+            "DAVACI",
+            "DAVALI",
+            "VEKİLİ",
+            "TANIK",
+            "Anne Adı: Emine",
+            "Baba Adı: Hüseyin",
+            "Doğum Tarihi: 14.05.1985",
+            "12.03.2024 tarihinde saat 14:30 sıralarında",
+            "125.000,00 TL",
+            "2024/623 E.",
+            "2024/815 K.",
+            "TBK m. 49",
+            "6100 sayılı HMK m. 107",
+            "34 ABC 123",
+            "Olay Yeri: Barbaros Bulvarı No:40 Beşiktaş/İstanbul önünde meydana gelmiştir.",
+            "Örnek Lojistik Ticaret A.Ş.",
+            "İstanbul Anadolu Adliyesi, Kartal Mah. E-5 Cad. No:10 Kartal/İstanbul",
+            "Türkiye İş Bankası A.Ş. Kadıköy Şubesi, Söğütlüçeşme Cad. No:10 Kadıköy/İstanbul",
+            "0212 234 56 78",
+            "ornek.avukat@example.com",
+            "sirket@hs01.kep.tr",
+            "VKN: 1234567890",
+            "Mersis No: 0123456789012345",
+        ]
+        for expected in must_keep:
+            self.assertIn(expected, out, f"Korunması gereken veri kayboldu: {expected}")
+
+        # 3. Maskelenmemiş satırlar girdiyle bayt bayt aynıdır
+        in_lines = UyapRedactor.normalize_spaces(self.DAVA_DILEKCESI).splitlines()
+        out_lines = out.splitlines()
+        self.assertEqual(len(in_lines), len(out_lines))
+        for src_line, dst_line in zip(in_lines, out_lines):
+            if "[" not in dst_line:
+                self.assertEqual(dst_line, src_line)
+
+    def test_unvan_ad_soyad_parantezli_sicil_regresyonu(self):
+        """Sözleşme testi bulgusu: 'Hâkim Ad Soyad (112233)' biçimi maskelenmeli; para/sayılı/esas korunmalı."""
+        reg = MaskRegistry()
+        out, _ = UyapRedactor.redact_text(
+            "Hâkim Ayşe Yılmaz (112233)\n"
+            "Zabıt Kâtibi Murat Şahin (223344)\n"
+            "Hâkim kararı ile 150000 TL ödenmesine karar verildi.\n",
+            registry=reg,
+        )
+        self.assertIn("Hâkim Ayşe Yılmaz ([SİCİL_1])", out)
+        self.assertIn("Zabıt Kâtibi Murat Şahin ([SİCİL_2])", out)
+        self.assertNotIn("112233", out)
+        self.assertNotIn("223344", out)
+        self.assertIn("150000 TL", out)
+
+
+class TestDuzyaziCaddeAdiKorunur(unittest.TestCase):
+    """Madde 4: Düzyazıdaki tekil cadde/sokak adları korunur, cümlenin kalanı yutulmaz."""
+
+    def test_duzyazi_cadde_sokak_cumleleri_aynen_kalir(self):
+        cases = [
+            "Olay Atatürk Caddesi üzerindeki ofiste gerçekleşmiştir. Davalı sonra kaçmıştır.",
+            "Davacı o gün Bağdat Caddesi üzerinde yürürken davalı ile karşılaşmış ve tartışmıştır.",
+            "2. A. Yılmaz olay günü Ahmet Yılmaz Caddesi üzerindeki ofise gitmiş, Mehmet DEMİR'e ihtar çekmiştir. Yılmaz o gün yalnızdı; Ahmet de bunu doğrular.",
+            "Kaza İnönü Bulvarı üzerinde meydana gelmiştir.",
+            "Araç Cumhuriyet Caddesi ile Lale Sokak kesişiminde durmuştur. Sürücü araçtan inmiştir.",
+        ]
+        for s in cases:
+            with self.subTest(case=s):
+                out, stats = UyapRedactor.redact_text(s, registry=MaskRegistry())
+                self.assertEqual(out, s)
+                self.assertEqual(stats["total"], 0)
+
+    def test_acik_adres_maskelenir_cumle_devami_korunur(self):
+        s = "Davalı Atatürk Caddesi No:15 Daire:3 Bornova/İzmir adresinde oturmaktadır. Kendisine ulaşılamamıştır."
+        out, _ = UyapRedactor.redact_text(s, registry=MaskRegistry())
+        self.assertEqual(
+            out,
+            "Davalı [ADRES_1] (Bornova/İzmir) adresinde oturmaktadır. Kendisine ulaşılamamıştır.",
+        )
+
+
+class TestKisiKesfi(unittest.TestCase):
+    """Madde 2 & 5: Kişi keşfi kalıpları (A-E), negatif kurallar ve D/D2 rol sınırı."""
+
+    def test_disk_esleme_ve_geri_cevirme_api_yok(self):
+        self.assertFalse(hasattr(UyapRedactor, "restore_names"))
+        self.assertFalse(hasattr(UyapRedactor, "restore_names_in_file"))
+        self.assertFalse(hasattr(UyapRedactor, "get_esleme_dir"))
+        self.assertFalse(hasattr(MaskRegistry, "export_person_map"))
+        self.assertTrue(hasattr(MaskRegistry, "person_map"))
+
+    def test_kalip_a_b_c_d_d2_e_olumlu(self):
+        # Kalıp A: ROL : Ad Soyad
+        reg_a = MaskRegistry()
+        UyapRedactor.collect_persons_from_text("DAVACI : Ahmet Yılmaz\nMÜŞTEKİ : Elif Şahin\n", reg_a)
+        reg_a.freeze_persons()
+        self.assertEqual(reg_a.person_map(), {"[DAVACI_1]": "Ahmet Yılmaz", "[MÜŞTEKİ_1]": "Elif Şahin"})
+
+        # Kalıp B: Başlık altı Adı Soyadı
+        reg_b = MaskRegistry()
+        UyapRedactor.collect_persons_from_text("## TANIK\nAdı Soyadı : Kemal Aydın\n", reg_b)
+        reg_b.freeze_persons()
+        self.assertEqual(reg_b.person_map(), {"[TANIK_1]": "Kemal Aydın"})
+
+        # Kalıp C: Düzyazı sıfat + Ad Soyad
+        reg_c = MaskRegistry()
+        UyapRedactor.collect_persons_from_text("Duruşmada tanık sıfatıyla Mehmet Can Öztürk dinlendi.\n", reg_c)
+        reg_c.freeze_persons()
+        self.assertEqual(reg_c.person_map(), {"[TANIK_1]": "Mehmet Can Öztürk"})
+
+        # Kalıp D: Tek başına başlık olmadan Adı Soyadı -> [KİŞİ_1]
+        reg_d = MaskRegistry()
+        UyapRedactor.collect_persons_from_text("Adı Soyadı : Zeynep Aksoy\n", reg_d)
+        reg_d.freeze_persons()
+        self.assertEqual(reg_d.person_map(), {"[KİŞİ_1]": "Zeynep Aksoy"})
+
+        # Kalıp D2: Tek başına rol başlığı + hemen altındaki imza sahibi adı
+        reg_d2 = MaskRegistry()
+        UyapRedactor.collect_persons_from_text("ŞÜPHELİ\nHasan Hüseyin Kaya\n", reg_d2)
+        reg_d2.freeze_persons()
+        self.assertEqual(reg_d2.person_map(), {"[ŞÜPHELİ_1]": "Hasan Hüseyin Kaya"})
+
+        # Kalıp E: JSON taraflar
+        reg_e = MaskRegistry()
+        UyapRedactor.collect_persons_from_json(
+            {"taraflar": [{"sifat": "Katılan", "adSoyad": "Canan Yıldız"}]},
+            reg_e,
+        )
+        reg_e.freeze_persons()
+        self.assertEqual(reg_e.person_map(), {"[KATILAN_1]": "Canan Yıldız"})
+
+    def test_d_ve_d2_onceki_satir_icerik_tasiyorsa_rol_atanmaz(self):
+        """Madde 2 regresyon: önceki dolu satır başka içerik taşıyorsa rol None -> [KİŞİ_n]."""
+        tutanak = (
+            "DAVACI : AHMET CAN YILMAZ\n"
+            "DAVALI : MEHMET DEMİR\n"
+            "TANIK : FATMA ŞAHİN, Ali kızı, 1980 doğumlu\n"
+            "Adı Soyadı : Kemal Aydın\n"
+        )
+        reg = MaskRegistry()
+        UyapRedactor.collect_persons_from_text(tutanak, reg)
+        reg.freeze_persons()
+        pmap = reg.person_map()
+        self.assertEqual(pmap.get("[KİŞİ_1]"), "Kemal Aydın")
+        self.assertNotIn("[TANIK_2]", pmap)
+
+        # Standalone başlık çeşitleri (boş satır atlanabilir, ama başka içerik olmamalı)
+        for header, expected_prefix in [
+            ("ŞÜPHELİ\nAdı Soyadı : Selim Kurt\n", "[ŞÜPHELİ_1]"),
+            ("## TANIK\n\nAdı Soyadı : Selim Kurt\n", "[TANIK_1]"),
+            ("MÜŞTEKİ:\nAdı Soyadı : Selim Kurt\n", "[MÜŞTEKİ_1]"),
+        ]:
+            with self.subTest(header=header):
+                r2 = MaskRegistry()
+                UyapRedactor.collect_persons_from_text(header, r2)
+                r2.freeze_persons()
+                self.assertEqual(r2.person_map(), {expected_prefix: "Selim Kurt"})
+
+    def test_olumsuz_ornekler_kesinlikle_kaydedilmez(self):
+        plan_ve_ek_negatifler = [
+            "DAVACI : Örnek İnşaat Ltd. Şti.",
+            "DAVALI : Maliye Hazinesi",
+            "VEKİLİ : Av. Ayşe Kaya",
+            "Hâkim Mehmet Demir 112233",
+            "Bilirkişi Ali Veli",
+            "DAVALI : Türkiye İş Bankası A.Ş.",
+            "KONU : Alacak Davası",
+            "davacı vekili Av. Can Öz",
+            "tanık olarak dinlenen",
+            "Davacı Tarafından sunulan Dava Dilekçesi",
+            "Davalı Banka Genel Müdürlüğü",
+            "Tanık Olarak dinlenen",
+            "Sanık Sıfatıyla ifadesi alınan",
+        ]
+        for line in plan_ve_ek_negatifler:
+            with self.subTest(line=line):
+                reg = MaskRegistry()
+                UyapRedactor.collect_persons_from_text(line + "\n", reg)
+                reg.freeze_persons()
+                self.assertFalse(reg.has_persons(), f"Negatif satırdan kişi üretildi: {line!r} -> {reg.person_map()}")
+
+    def test_rol_cogunlugu_tiebreak_ve_freeze(self):
+        reg = MaskRegistry()
+        reg.add_person("Ahmet Yılmaz", "DAVACI")
+        reg.add_person("AHMET YILMAZ", "TANIK")
+        reg.add_person("Ahmet Yilmaz", "TANIK")
+
+        reg.add_person("Ayşe Demir", "DAVALI")
+        reg.add_person("Ayşe Demir", "DAVACI")
+
+        reg.label("tckn", "10000000146")
+        reg.freeze_persons()
+        reg.add_person("Sonradan Gelen", "DAVACI")
+
+        self.assertEqual(reg.person_map(), {"[TANIK_1]": "Ahmet Yılmaz", "[DAVACI_1]": "Ayşe Demir"})
+        self.assertIsNone(reg.person_label(reg.person_key("Sonradan Gelen")))
+
+
+class TestKisiMaskeleme(unittest.TestCase):
+    """Madde 3 & 5: Türkçe ek, büyük harf, aksansız, ters sıra, baş harf, orta ad ve negatif maskeleme kuralları."""
+
+    def _reg_with(self, *pairs):
+        reg = MaskRegistry()
+        for name, role in pairs:
+            reg.add_person(name, role)
+        reg.freeze_persons()
+        return reg
+
+    def test_ek_tumu_buyuk_aksansiz_ters_bas_harf_orta_ad(self):
+        reg = self._reg_with(("Ahmet Can Yılmaz", "DAVACI"))
+        text = (
+            "Ahmet Can Yılmaz'ın talebiyle,\n"
+            "AHMET CAN YILMAZ'a soru soruldu.\n"
+            "Ahmet Yilmaz’nin beyanı ile Ahmet Yılmaz ve Yılmaz Ahmet ve A. Yılmaz tutanağa geçti.\n"
+        )
+        out, _ = UyapRedactor.redact_text(text, registry=reg)
+        self.assertIn("[DAVACI_1]'ın talebiyle,", out)
+        self.assertIn("[DAVACI_1]'a soru soruldu.", out)
+        self.assertIn("[DAVACI_1]’nin beyanı", out)
+        self.assertEqual(out.count("[DAVACI_1]"), 6)
+
+    def test_negatif_maskeleme_kucuk_tekil_cadde_sirket_etiket_ici(self):
+        reg = self._reg_with(("Ahmet Yılmaz", "DAVACI"))
+        text = (
+            "ahmet yılmaz küçük harfle eşleşmez.\n"
+            "Ahmet bugün yalnız geldi, Yılmaz da doğruladı.\n"
+            "Ahmet Yılmaz Caddesi ve Ahmet Yılmaz İnşaat Ltd. Şti. korunur.\n"
+            "[ADRES_1] (Ahmet Yılmaz/İzmir) ve [DAVACI_1] etiketi bozulmaz.\n"
+        )
+        out, _ = UyapRedactor.redact_text(text, registry=reg)
+        self.assertEqual(out, text)
+
+    def test_belirsiz_bas_harf_maskelenmez(self):
+        reg = self._reg_with(("Ahmet Yılmaz", "DAVACI"), ("Ali Yılmaz", "DAVALI"))
+        text = "A. Yılmaz duruşmada hazır, Ahmet Yılmaz ile Ali Yılmaz dinlendi."
+        out, _ = UyapRedactor.redact_text(text, registry=reg)
+        self.assertIn("A. Yılmaz", out)
+        self.assertIn("[DAVACI_1]", out)
+        self.assertIn("[DAVALI_1]", out)
+
+
+class TestKisiUctanUca(unittest.TestCase):
+    """Madde 1 & 5: İki .md + uyap-project.json + dosya adı/link senkronu, ekran listesi, sıfır disk sızıntısı."""
+
+    def test_end_to_end_mask_names_true_and_false_zero_disk_mapping(self):
+        import io
+        import json
+        import shutil
+        from contextlib import redirect_stdout
+        from urllib.parse import unquote
+        from uyap_redactor import main as cli_main
+
+        tmp = tempfile.mkdtemp(prefix="uyap_e2e_kisi_")
+        src = os.path.join(tmp, "ornek_dava")
+        dest1 = os.path.join(tmp, "out_masked")
+        dest2 = os.path.join(tmp, "out_preserved")
+        try:
+            os.makedirs(src, exist_ok=True)
+            with open(os.path.join(src, "Ahmet Yılmaz Dilekçe.md"), "w", encoding="utf-8") as f:
+                f.write(
+                    "DAVACI : Ahmet Yılmaz\n"
+                    "VEKİLİ : Av. Ayşe Kaya\n"
+                    "DAVALI : Örnek İnşaat Ltd. Şti.\n"
+                    "TCKN: 10000000146\n"
+                    "Adres: Caferağa Mah. Moda Cad. No:12 Kadıköy/İstanbul\n"
+                    "Ahmet Yılmaz'ın 125.000,00 TL alacağının tahsili talep edilmiştir.\n"
+                    "Hâkim Mehmet Demir (112233) huzurunda.\n"
+                )
+            with open(os.path.join(src, "tutanak.md"), "w", encoding="utf-8") as f:
+                f.write(
+                    "Tanık Fatma Çelik yeminli dinlendi.\n"
+                    "Davacı A. Yılmaz duruşmada hazır, AHMET YILMAZ'a soru soruldu.\n"
+                    "Tanık Fatma Çelik'in beyanı tutanağa geçti.\n"
+                )
+            with open(os.path.join(src, "INDEX.md"), "w", encoding="utf-8") as f:
+                f.write("# Dizin\n- [Ahmet Yılmaz Dilekçesi](Ahmet%20Y%C4%B1lmaz%20Dilek%C3%A7e.md)\n- [Tutanak](tutanak.md)\n")
+            with open(os.path.join(src, "uyap-project.json"), "w", encoding="utf-8") as f:
+                json.dump({"taraflar": [{"sifat": "Tanık", "adSoyad": "Fatma Çelik"}]}, f, ensure_ascii=False)
+
+            before_tmp = set(os.listdir(tmp))
+            out1, stats1 = UyapRedactor.export_isolated_clean_folder(src, dest1, mask_names=True)
+            after_tmp = set(os.listdir(tmp))
+            # Kaynak ve hedef dışında yeni dosya/klasör oluşturulmamalı
+            self.assertEqual(after_tmp - before_tmp, {"out_masked"})
+            self.assertNotIn("esleme_dosyasi", stats1)
+            self.assertEqual(stats1["kisi_sayisi"], 2)
+            self.assertEqual(stats1["kisi_listesi"], [("[DAVACI_1]", "Ahmet Yılmaz"), ("[TANIK_1]", "Fatma Çelik")])
+
+            # Çıktı dosya adları ve INDEX.md bağlantısı
+            out_files = []
+            for root_d, _dirs, fns in os.walk(out1):
+                for fn in fns:
+                    rel = os.path.relpath(os.path.join(root_d, fn), out1)
+                    out_files.append(rel)
+                    self.assertNotIn("Ahmet", rel)
+                    self.assertNotIn("Yılmaz", rel)
+                    self.assertNotIn("Fatma", rel)
+                    with open(os.path.join(root_d, fn), "r", encoding="utf-8") as rf:
+                        content = rf.read()
+                    for raw in ("Ahmet Yılmaz", "AHMET YILMAZ", "Fatma Çelik"):
+                        self.assertNotIn(raw, content, f"{rel} içinde ham ad-soyad sızıntısı: {raw}")
+
+            self.assertIn("[DAVACI_1] Dilekçe.md", out_files)
+            with open(os.path.join(out1, "INDEX.md"), "r", encoding="utf-8") as f:
+                idx = f.read()
+            m = re.search(r'\(<?([^)>\n]+Dilek[^>)\n]+\.md)>?\)', idx)
+            self.assertIsNotNone(m)
+            self.assertTrue(os.path.exists(os.path.join(out1, unquote(m.group(1)))))
+
+            # Rapor metni eşleme dosyasının hiçbir yere yazılmadığını belirtir
+            with open(os.path.join(out1, "DAVA_DÖNÜŞÜM_VE_GÜVENLİK_RAPORU.md"), "r", encoding="utf-8") as f:
+                rapor = f.read()
+            self.assertIn("hiçbir yere yazılmadı", rapor)
+
+            # CLI stdout kişi listesini gösterir, diske yazmaz
+            dest_cli = os.path.join(tmp, "out_cli")
+            old_argv = sys.argv
+            try:
+                sys.argv = ["uyap_redactor.py", src, "--out", dest_cli]
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    cli_main()
+                cli_out = buf.getvalue()
+                self.assertIn("👤 KİŞİ ETİKETLERİ (yalnızca bu ekranda gösterilir, hiçbir dosyaya kaydedilmez)", cli_out)
+                self.assertIn("[DAVACI_1] = Ahmet Yılmaz", cli_out)
+                self.assertIn("[TANIK_1] = Fatma Çelik", cli_out)
+            finally:
+                sys.argv = old_argv
+
+            # mask_names=False
+            out2, stats2 = UyapRedactor.export_isolated_clean_folder(src, dest2, mask_names=False)
+            self.assertEqual(stats2.get("kisi_sayisi", 0), 0)
+            self.assertEqual(stats2.get("kisi_listesi"), [])
+            self.assertTrue(os.path.isfile(os.path.join(out2, "Ahmet Yılmaz Dilekçe.md")))
+            with open(os.path.join(out2, "Ahmet Yılmaz Dilekçe.md"), "r", encoding="utf-8") as f:
+                d_pres = f.read()
+            self.assertIn("Ahmet Yılmaz", d_pres)
+            self.assertIn("[TCKN_1]", d_pres)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TestSenaryoBulgulari2(unittest.TestCase):
+    """Sentetik senaryolarda tespit edilen 6 kök bulgunun odaklanmış regresyon testleri."""
+
+    def test_bulgu_1_yol_ve_baglanti_ayiricili_adlar(self):
+        reg = MaskRegistry()
+        reg.add_person("Elif Demir", "TANIK")
+        reg.add_person("Volkan Tekin", "ŞÜPHELİ")
+        reg.add_person("Turgut Yılmaz", "ŞÜPHELİ")
+        reg.freeze_persons()
+
+        self.assertEqual(
+            UyapRedactor.redact_path_segment("Tanik_Elif_Demir_Beyan.md", registry=reg, is_file=True),
+            "Tanik_[TANIK_1]_Beyan.md",
+        )
+        self.assertEqual(
+            UyapRedactor.redact_path_segment("Volkan-Tekin ifade.md", registry=reg, is_file=True),
+            "[ŞÜPHELİ_1] ifade.md",
+        )
+        self.assertEqual(
+            UyapRedactor.redact_path_segment("Elif.Demir.pdf", registry=reg, is_file=True),
+            "[TANIK_1].pdf",
+        )
+        self.assertEqual(
+            UyapRedactor.redact_path_segment("Supheli_Turgut_Yilmaz_Ifade.md", registry=reg, is_file=True),
+            "Supheli_[ŞÜPHELİ_2]_Ifade.md",
+        )
+
+        # Markdown bağlantı hedefi maskelenirken düz metindeki Elif_Demir korunmalı (yalnız yol/bağlantı kuralı)
+        md_in = "Düz metinde Elif_Demir geçer. Bkz: [Beyan](Ekler/Tanik_Elif_Demir_Beyan.md) ve [İfade](Volkan-Tekin%20ifade.md).\n"
+        md_out, _ = UyapRedactor.redact_text(md_in, registry=reg)
+        self.assertIn("Düz metinde Elif_Demir geçer.", md_out)
+        self.assertIn("[Beyan](Ekler/Tanik_[TANIK_1]_Beyan.md)", md_out)
+        self.assertIn("[İfade](<[ŞÜPHELİ_1] ifade.md>)", md_out)
+
+    def test_bulgu_2_noktalamali_hesap_no_ve_tutar_korumasi(self):
+        tmp = tempfile.mkdtemp(prefix="uyap_bulgu2_")
+        src = os.path.join(tmp, "in")
+        dest = os.path.join(tmp, "out")
+        try:
+            os.makedirs(src, exist_ok=True)
+            with open(os.path.join(src, "01_dekont.md"), "w", encoding="utf-8") as f:
+                f.write("Gönderen (Hesap No: 77192038, tutar: 1.250,00 TL).\n")
+            with open(os.path.join(src, "02_ifade.md"), "w", encoding="utf-8") as f:
+                f.write(
+                    "Ben de 77192038 hesap numarasına gönderdim.\n"
+                    "Tutar: Hesap No: 12500,00 TL, Hesap No: 1.250,00 TL, Hesap No: 20245/623.\n"
+                )
+            out_dir, _ = UyapRedactor.export_isolated_clean_folder(src, dest)
+            out1 = open(os.path.join(out_dir, "01_dekont.md"), encoding="utf-8").read()
+            out2 = open(os.path.join(out_dir, "02_ifade.md"), encoding="utf-8").read()
+            self.assertNotIn("77192038", out1)
+            self.assertNotIn("77192038", out2)
+            self.assertIn("[HESAP_1],", out1)
+            self.assertIn("[HESAP_1] hesap", out2)
+            self.assertIn("12500,00 TL", out2)
+            self.assertIn("1.250,00 TL", out2)
+            self.assertIn("20245/623", out2)
+        finally:
+            import shutil
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_bulgu_3_satir_sonu_sirket_ve_klasor_ici_guvenlik_agi(self):
+        reg = MaskRegistry()
+        UyapRedactor.collect_persons_from_text(
+            "1. Davacı Ömer Akın tarafından davalı Bosphorus Metal\n"
+            "İthalat İhracat Ltd. Şti. aleyhine açılan davada.\n",
+            reg,
+        )
+        reg.freeze_persons()
+        self.assertNotIn("Bosphorus Metal", reg.person_map().values())
+
+        # Klasör içi güvenlik ağı: 01'de tek başına, 02'de Ltd. Şti. ile geçse bile çıkarılmalı
+        tmp = tempfile.mkdtemp(prefix="uyap_bulgu3_")
+        src = os.path.join(tmp, "in")
+        dest = os.path.join(tmp, "out")
+        try:
+            os.makedirs(src, exist_ok=True)
+            with open(os.path.join(src, "01.md"), "w", encoding="utf-8") as f:
+                f.write("**DAVACI:** Caner Aydın\ndavalı Kuzey Metal aleyhine talep.\n")
+            with open(os.path.join(src, "02.md"), "w", encoding="utf-8") as f:
+                f.write("**DAVALI:** Kuzey Metal İthalat İhracat Ltd. Şti.\n")
+            out_dir, stats = UyapRedactor.export_isolated_clean_folder(src, dest)
+            self.assertNotIn("Kuzey Metal", [v for _, v in stats["kisi_listesi"]])
+            out2 = open(os.path.join(out_dir, "02.md"), encoding="utf-8").read()
+            self.assertIn("Kuzey Metal İthalat İhracat Ltd. Şti.", out2)
+        finally:
+            import shutil
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_bulgu_4_sifat_hitap_yakinlik_kirpma(self):
+        reg = MaskRegistry()
+        sample = (
+            "**KONU:** Muris İsmet Karabulut (TCKN: 10101010150) terekesi\n"
+            "Kiraya Veren Ali Kaya (TCKN: 20202020200)\n"
+            "İşveren vekili Murat Demir (TCKN: 30303030350)\n"
+            "Küçük Emir Can (TCKN: 40404040400)\n"
+            "Eşi Fatma Karabulut (TCKN: 50505050550)\n"
+            "İsmet Karabulut'un mirasçıları hazır.\n"
+        )
+        UyapRedactor.collect_persons_from_text(sample, reg)
+        reg.freeze_persons()
+        vals = set(reg.person_map().values())
+        self.assertEqual(
+            vals,
+            {"İsmet Karabulut", "Ali Kaya", "Murat Demir", "Emir Can", "Fatma Karabulut"},
+        )
+        out, _ = UyapRedactor.redact_text("Muris İsmet Karabulut ile İsmet Karabulut aynı kişidir.", registry=reg)
+        self.assertEqual(out.count("[KİŞİ_1]"), 2)
+
+    def test_bulgu_5_uc_dort_belirtecli_soyad_basta(self):
+        # Normal sıra -> sonra SOYAD Ad1 Ad2
+        reg1 = MaskRegistry()
+        reg1.add_person("Fatma Zehra Korkmaz", "DAVALI")
+        reg1.add_person("KORKMAZ Fatma Zehra", None)
+        reg1.add_person("Zeynep Ela Nur Yıldız", "TANIK")
+        reg1.add_person("YILDIZ Zeynep Ela Nur", None)
+        reg1.freeze_persons()
+        self.assertEqual(reg1.person_map(), {"[DAVALI_1]": "Fatma Zehra Korkmaz", "[TANIK_1]": "Zeynep Ela Nur Yıldız"})
+        out1, _ = UyapRedactor.redact_text(
+            "KORKMAZ Fatma Zehra ile Fatma Zehra Korkmaz ve YILDIZ Zeynep Ela Nur hazır; "
+            "ancak rastgele Zeynep Nur Ela Yıldız eşleşmez.",
+            registry=reg1,
+        )
+        self.assertEqual(out1.count("[DAVALI_1]"), 2)
+        self.assertEqual(out1.count("[TANIK_1]"), 1)
+        self.assertIn("Zeynep Nur Ela Yıldız", out1)
+
+        # Önce SOYAD Ad1 Ad2 -> sonra normal sıra
+        reg2 = MaskRegistry()
+        reg2.add_person("KORKMAZ Fatma Zehra", None)
+        reg2.add_person("Fatma Zehra Korkmaz", "DAVALI")
+        reg2.freeze_persons()
+        self.assertEqual(reg2.person_map(), {"[DAVALI_1]": "Fatma Zehra Korkmaz"})
+
+    def test_bulgu_6_bilesik_parantezli_baslik_ve_buyuk_harfli_rol(self):
+        reg = MaskRegistry()
+        text = (
+            "## DAVALI SAVUNMA LAYİHASI\n"
+            "## TANIK VE DELİL NOTU\n"
+            "**BAŞVURAN / DAVACI:** Caner Başaran (TCKN: 17392846550)\n"
+            "- **Alıcı (Davacı):** Caner Başaran\n"
+            "**DAVACI (TÜKETİCİ):** Caner Başaran\n"
+            "**DAVALI/BORÇLU :** Deniz Arslan (TCKN: 20948172600)\n"
+            "Davacı Caner Başaran'ın talebiyle; Davacı Tarafından sunulan Dava Dilekçesi, "
+            "Davalı Banka, Tanık Olarak dinlenen, Sanık Sıfatıyla ve Davacı Vekili Av. Mehmet Öz.\n"
+        )
+        UyapRedactor.collect_persons_from_text(text, reg)
+        reg.freeze_persons()
+        self.assertEqual(reg.person_map(), {"[DAVACI_1]": "Caner Başaran", "[DAVALI_1]": "Deniz Arslan"})
+
+    def test_gerileme_a_guclu_kanit_sirket_cakismasi(self):
+        tmp = tempfile.mkdtemp(prefix="uyap_reg_a_")
+        src = os.path.join(tmp, "in")
+        dest = os.path.join(tmp, "out")
+        try:
+            os.makedirs(src, exist_ok=True)
+            with open(os.path.join(src, "01.md"), "w", encoding="utf-8") as f:
+                f.write(
+                    "**DAVALILAR** : 1- Mehmet Demir (TCKN: 10000000078)\n"
+                    "Tanık Fatma Şahin, Mehmet Demir İnşaat Ltd. Şti. çalışanıdır.\n"
+                    "Davalı Mehmet Demir duruşmaya gelmedi; Kuzey Metal hakkında ise davacı iddiası var.\n"
+                    "Olayı davalı Kuzey Metal yetkilisinin bildirdiği öne sürüldü.\n"
+                )
+            with open(os.path.join(src, "02.md"), "w", encoding="utf-8") as f:
+                f.write("**DAVALI:** Kuzey Metal İthalat İhracat Ltd. Şti.\n")
+            out_dir, stats = UyapRedactor.export_isolated_clean_folder(src, dest)
+            person_vals = {v for _, v in stats["kisi_listesi"]}
+            self.assertIn("Mehmet Demir", person_vals)
+            self.assertIn("Fatma Şahin", person_vals)
+            # Güçlü kanıtı olmayan (yalnızca B kalıbında geçen) Kuzey Metal şirket nedeniyle çıkarılmalı
+            self.assertNotIn("Kuzey Metal", person_vals)
+            out1 = open(os.path.join(out_dir, "01.md"), encoding="utf-8").read()
+            self.assertIn("1- [DAVALI_1] (TCKN: [TCKN_1])", out1)
+            self.assertIn("Mehmet Demir İnşaat Ltd. Şti.", out1)
+            self.assertIn("Davalı [DAVALI_1] duruşmaya gelmedi", out1)
+        finally:
+            import shutil
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_gerileme_b_iki_belirtec_uc_belirtec_birlestirme(self):
+        # 1. Tekil eşleşme (düz + ters sıra) -> birleşir ve A. Yılmaz kısaltması aktifleşir
+        reg = MaskRegistry()
+        text = (
+            "**DAVACI** : Ahmet Can Yılmaz (T.C. Kimlik No: 10000000146)\n"
+            "Davacı Ahmet Yılmaz talepte bulundu; Yılmaz Ahmet haklıdır.\n"
+        )
+        UyapRedactor.collect_persons_from_text(text, reg)
+        reg.freeze_persons()
+        self.assertEqual(reg.person_map(), {"[DAVACI_1]": "Ahmet Can Yılmaz"})
+        out, _ = UyapRedactor.redact_names("A. Yılmaz ve AHMET YILMAZ ve Yılmaz Ahmet", registry=reg)
+        self.assertEqual(out, "[DAVACI_1] ve [DAVACI_1] ve [DAVACI_1]")
+
+        # 2. İstisna A: her ikisi C kalıbıyla FARKLI TCKN'lere bağlıysa birleşmez
+        reg_diff_tckn = MaskRegistry()
+        UyapRedactor.collect_persons_from_text(
+            "Ahmet Can Yılmaz (TCKN: 10000000146) ve Ahmet Yılmaz (TCKN: 10000000078)\n",
+            reg_diff_tckn,
+        )
+        reg_diff_tckn.freeze_persons()
+        self.assertEqual(len(reg_diff_tckn.person_map()), 2)
+
+        # 3. İstisna B: birden çok 3-4 belirteçli ad aynı (ilk, son) çiftini taşıyorsa birleşmez
+        reg_ambig = MaskRegistry()
+        UyapRedactor.collect_persons_from_text(
+            "**DAVACI:** Ahmet Can Yılmaz\n"
+            "**DAVALI:** Ahmet Murat Yılmaz\n"
+            "Tanık Ahmet Yılmaz beyanda bulundu.\n",
+            reg_ambig,
+        )
+        reg_ambig.freeze_persons()
+        self.assertEqual(len(reg_ambig.person_map()), 3)
+
+
+class TestSenaryoBulgulari3(unittest.TestCase):
+    """Yeni sentetik klasör (d2) denetiminde tespit edilen 6 bulgunun odaklı regresyon testleri."""
+
+    def test_madde_1_baglanti_hedefi_bicimleri(self):
+        tmp = tempfile.mkdtemp(prefix="uyap_bulgu3_m1_")
+        src = os.path.join(tmp, "in")
+        dest = os.path.join(tmp, "out")
+        try:
+            os.makedirs(os.path.join(src, "Ekler"), exist_ok=True)
+            with open(os.path.join(src, "dava.md"), "w", encoding="utf-8") as f:
+                f.write(
+                    "TANIK : Derya Koç\n"
+                    "- [Derya Koç beyanı](Ekler/Tanik_Derya_Koc_beyani.md)\n"
+                    "- [Derya Koç açılı](<Ekler/Tanik_Derya_Koc_beyani.md>)\n"
+                    "- [Derya Koç kodlu](Ekler/Tanik%20Derya%20Koc%20beyani.md)\n"
+                    "- [Derya Koç açılı kodlu](<Ekler/Tanik%20Derya%20Ko%C3%A7%20beyan%C4%B1.md>)\n"
+                )
+            with open(os.path.join(src, "Ekler", "Tanik_Derya_Koc_beyani.md"), "w", encoding="utf-8") as f:
+                f.write("# Beyan 1\nTANIK : Derya Koç\n")
+            with open(os.path.join(src, "Ekler", "Tanik Derya Koc beyani.md"), "w", encoding="utf-8") as f:
+                f.write("# Beyan 2\nTANIK : Derya Koç\n")
+            with open(os.path.join(src, "Ekler", "Tanik Derya Koç beyanı.md"), "w", encoding="utf-8") as f:
+                f.write("# Beyan 3\nTANIK : Derya Koç\n")
+
+            out_dir, _ = UyapRedactor.export_isolated_clean_folder(src, dest)
+            dava_out = open(os.path.join(out_dir, "dava.md"), encoding="utf-8").read()
+            self.assertNotIn("Derya", dava_out)
+            self.assertNotIn("Koc", dava_out)
+            self.assertNotIn("Koç", dava_out)
+
+            targets = re.findall(r'\[[^\]]*\[TANIK_1\][^\]]*\]\(([^)]+)\)', dava_out)
+            self.assertEqual(len(targets), 4)
+            for raw_t in targets:
+                rel_t = raw_t.strip("<>")
+                self.assertIn("[TANIK_1]", rel_t)
+                self.assertTrue(os.path.isfile(os.path.join(out_dir, rel_t)), f"Hedef yok: {rel_t}")
+        finally:
+            import shutil
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_madde_2_cocuk_ve_yakin_adlari(self):
+        reg = MaskRegistry()
+        sample = (
+            "1. Müşterek çocuk Defne Aktaş 2018 doğumludur; müşterek çocukları Kerem Aktaş ve ortak çocuk Ela Aktaş okula gitmektedir.\n"
+            "2. Çocuğu Mert Aktaş, küçük Can Aktaş, oğlu Emre Aktaş, kızı Selin Demir, eşi Burak Kaya hazır bulundu.\n"
+            "3. Annesi Nermin Kaya, babası Kemal Kaya, kardeşi Arda Kaya, ağabeyi Hakan Kaya, ablası Pınar Kaya dinlendi.\n"
+            "4. Torunu Ece Yılmaz, kayınvalidesi Hatice Demir, kayınpederi Rıza Demir, komşusu Tarık Şen, arkadaşı Sinan Kurt, iş arkadaşı Ozan Aydın ifade verdi.\n"
+            "5. Ali Veli Kaya isimli komşu, Fatma Nur Demir isimli şahıs ve Mehmet Can Öz isimli kişi olay yerindeydi.\n"
+            "6. Nüfus: FATMA ŞAHİN, Ali kızı, Hasan oğlu, 1980 doğumlu; annesi Gülten Hanım ve Av. Ayşe Kaya isimli kişi korunur.\n"
+        )
+        UyapRedactor.collect_persons_from_text(sample, reg)
+        reg.freeze_persons()
+        names = set(reg.person_map().values())
+        for expected in (
+            "Defne Aktaş", "Kerem Aktaş", "Ela Aktaş", "Mert Aktaş", "Can Aktaş",
+            "Emre Aktaş", "Selin Demir", "Burak Kaya", "Nermin Kaya", "Kemal Kaya",
+            "Arda Kaya", "Hakan Kaya", "Pınar Kaya", "Ece Yılmaz", "Hatice Demir",
+            "Rıza Demir", "Tarık Şen", "Sinan Kurt", "Ozan Aydın",
+            "Ali Veli Kaya", "Fatma Nur Demir", "Mehmet Can Öz",
+        ):
+            self.assertIn(expected, names)
+        for lab in reg.person_map():
+            self.assertTrue(lab.startswith("[KİŞİ_"), lab)
+        self.assertNotIn("Gülten Hanım", names)
+        self.assertNotIn("Ayşe Kaya", names)
+        self.assertNotIn("Ali", " ".join(n.split()[0] for n in names if n == "Ali"))
+
+    def test_madde_3_on_ad_bey_hanim(self):
+        reg = MaskRegistry()
+        UyapRedactor.collect_persons_from_text(
+            "DAVACI : Selin Nur Aktaş\n"
+            "DAVALI : Orhan Aktaş\n"
+            "TANIK : Ahmet Yılmaz\n"
+            "TANIK : Ahmet Demir\n",
+            reg,
+        )
+        reg.freeze_persons()
+        out, _ = UyapRedactor.redact_text(
+            "Orhan Bey aylık 85.000 TL kazanır. Selin Hanım çalışmaz. "
+            "Selin ağlıyordu. Gülten Hanım ve Ahmet Bey ile Av. Orhan Bey konuşmadı.",
+            registry=reg,
+        )
+        self.assertIn("[DAVALI_1] Bey", out)
+        self.assertIn("[DAVACI_1] Hanım", out)
+        self.assertIn("Selin ağlıyordu.", out)
+        self.assertIn("Gülten Hanım", out)
+        self.assertIn("Ahmet Bey", out)
+        self.assertIn("Av. Orhan Bey", out)
+
+    def test_madde_4_baro_sicili(self):
+        out, _ = UyapRedactor.redact_text(
+            "VEKİLİ : Av. Burak Tuna - Ankara Barosu 23456\n"
+            "Av. Ayşe Yılmaz (İstanbul Barosu No: 12345) ve İzmir Barosu - 9876\n"
+            "Ankara Barosu 2024 yılı faaliyetleri, İstanbul Barosu 1. Bölge, "
+            "Ankara Barosu 2024/1234 E. ve Ankara Barosu 15.01.2024 tarihli yazı.\n",
+            registry=MaskRegistry(),
+        )
+        self.assertIn("Av. Burak Tuna - Ankara Barosu [SİCİL_1]", out)
+        self.assertIn("İstanbul Barosu No: [SİCİL_2]", out)
+        self.assertIn("İzmir Barosu - [SİCİL_3]", out)
+        self.assertNotIn("23456", out)
+        self.assertIn("Ankara Barosu 2024 yılı", out)
+        self.assertIn("İstanbul Barosu 1. Bölge", out)
+        self.assertIn("Ankara Barosu 2024/1234 E.", out)
+        self.assertIn("Ankara Barosu 15.01.2024 tarihli", out)
+
+    def test_madde_5_sirket_merkezi_adresi(self):
+        corp_lines = (
+            "Davalı, Aktaş Otomotiv Sanayi ve Ticaret Ltd. Şti. ortağıdır; şirket merkezi Ostim OSB 1234. Cad. No:8 Yenimahalle/Ankara adresindedir.\n"
+            "Davacı, Yıldız Holding A.Ş. şubesi Barbaros Mah. Atatürk Cad. No:42 Ataşehir/İstanbul adresine başvurdu.\n"
+            "Davalı, Demir Tekstil A.Ş. fabrikası Organize Sanayi 5. Sok. No:11 Nilüfer/Bursa adresindedir.\n"
+        )
+        out_corp, _ = UyapRedactor.redact_text(corp_lines, registry=MaskRegistry())
+        self.assertEqual(out_corp, corp_lines)
+
+        person_lines = (
+            "Davalı, Aktaş Otomotiv Ltd. Şti. ortağıdır; davalının ikamet adresi Lale Mah. 5. Sok. No:2 Çankaya/Ankara adresindedir.\n"
+        )
+        out_person, _ = UyapRedactor.redact_text(person_lines, registry=MaskRegistry())
+        self.assertIn("[ADRES_1]", out_person)
+        self.assertNotIn("Lale Mah.", out_person)
+
+    def test_madde_6_kisi_listesi_sirasi(self):
+        reg = MaskRegistry()
+        reg.add_person("Kisi Bir", None)
+        reg.add_person("Tanik Bir", "TANIK")
+        reg.add_person("Borclu Bir", "BORÇLU")
+        reg.add_person("Alacakli Bir", "ALACAKLI")
+        reg.add_person("Sanik Bir", "SANIK")
+        reg.add_person("Supheli Bir", "ŞÜPHELİ")
+        reg.add_person("Magdur Bir", "MAĞDUR")
+        reg.add_person("Katilan Bir", "KATILAN")
+        reg.add_person("Musteki Bir", "MÜŞTEKİ")
+        reg.add_person("Davali Bir", "DAVALI")
+        reg.add_person("Davali Iki", "DAVALI")
+        reg.add_person("Davaci Bir", "DAVACI")
+        reg.add_person("Davaci Iki", "DAVACI")
+        reg.freeze_persons()
+
+        self.assertEqual(
+            list(reg.person_map().keys()),
+            [
+                "[DAVACI_1]", "[DAVACI_2]",
+                "[DAVALI_1]", "[DAVALI_2]",
+                "[MÜŞTEKİ_1]", "[KATILAN_1]", "[MAĞDUR_1]",
+                "[ŞÜPHELİ_1]", "[SANIK_1]",
+                "[ALACAKLI_1]", "[BORÇLU_1]",
+                "[TANIK_1]", "[KİŞİ_1]",
+            ],
+        )
+
+
+

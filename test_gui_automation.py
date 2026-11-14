@@ -1066,6 +1066,95 @@ class TestAutoUpdater(unittest.TestCase):
                 self.assertEqual(gui.AutoUpdater.get_target_app_path(), "/Applications/UYAP Maskeleme.app")
 
 
+class TestPersonPseudonymGUI(unittest.TestCase):
+    """Ad-soyad takma ad onay kutusu, ekran içi kişi listesi ve geri çevirme butonunun yokluğu."""
+
+    def setUp(self):
+        with patch.object(messagebox, "showinfo"):
+            self.app = UyapRedactorApp()
+            self.app.update_idletasks()
+            self.app.update()
+
+    def tearDown(self):
+        try:
+            self.app.destroy()
+        except tk.TclError:
+            pass
+
+    def test_no_restore_button_exists(self):
+        self.assertFalse(hasattr(self.app, "btn_restore_names"))
+        self.assertFalse(hasattr(self.app, "_restore_names_action"))
+
+    def test_mask_names_checkbox_defaults_true_and_uncheck_passes_false(self):
+        self.assertTrue(self.app.mask_names_var.get())
+        self.app.mask_names_var.set(False)
+
+        with tempfile.TemporaryDirectory() as d:
+            self.app.folder_var.set(d)
+            captured = {}
+
+            def fake_export(src, *args, **kwargs):
+                captured["src"] = src
+                captured["mask_names"] = kwargs.get("mask_names")
+                return os.path.join(d, "out"), {
+                    "tckn": 0, "telefon": 0, "seri_no": 0, "mrz": 0, "iban": 0,
+                    "hesap": 0, "sicil": 0, "adres": 0, "kisi": 0, "kisi_sayisi": 0,
+                    "kisi_listesi": [],
+                    "total": 0, "md_transferred": 1, "udf_converted": 0,
+                    "office_converted": 0, "ocr_converted": 0, "archive_count": 0,
+                    "index_synced": 0, "unprocessed": [],
+                }
+
+            with patch("gui.UyapRedactor.export_isolated_clean_folder", side_effect=fake_export), \
+                    patch("gui.threading.Thread") as mock_thread:
+                def run_sync(target=None, args=(), daemon=None):
+                    m = MagicMock()
+                    m.start.side_effect = lambda: target(*args)
+                    return m
+                mock_thread.side_effect = run_sync
+
+                self.app._start_process()
+                self.assertIs(captured.get("mask_names"), False)
+
+            with patch.object(messagebox, "askyesno", return_value=False):
+                self.app._check_queue()
+            log_content = self.app.log_text.get("1.0", tk.END)
+            self.assertNotIn("KİŞİ ETİKETLERİ", log_content)
+
+    def test_kisi_listesi_printed_only_in_gui_log_when_non_empty(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.app.folder_var.set(d)
+
+            def fake_export(src, *args, **kwargs):
+                return os.path.join(d, "out"), {
+                    "tckn": 0, "telefon": 0, "seri_no": 0, "mrz": 0, "iban": 0,
+                    "hesap": 0, "sicil": 0, "adres": 0, "kisi": 2, "kisi_sayisi": 1,
+                    "kisi_listesi": [("[DAVACI_1]", "Ahmet Yılmaz")],
+                    "total": 2, "md_transferred": 1, "udf_converted": 0,
+                    "office_converted": 0, "ocr_converted": 0, "archive_count": 0,
+                    "index_synced": 0, "unprocessed": [],
+                }
+
+            with patch("gui.UyapRedactor.export_isolated_clean_folder", side_effect=fake_export), \
+                    patch("gui.threading.Thread") as mock_thread:
+                def run_sync(target=None, args=(), daemon=None):
+                    m = MagicMock()
+                    m.start.side_effect = lambda: target(*args)
+                    return m
+                mock_thread.side_effect = run_sync
+                self.app._start_process()
+
+            with patch.object(messagebox, "askyesno", return_value=False) as mock_ask:
+                self.app._check_queue()
+                mock_ask.assert_called_once()
+                dialog_msg = mock_ask.call_args[0][1]
+                self.assertNotIn("Ahmet Yılmaz", dialog_msg)
+
+            log_content = self.app.log_text.get("1.0", tk.END)
+            self.assertIn("👤 KİŞİ ETİKETLERİ (yalnızca bu ekranda gösterilir, hiçbir dosyaya kaydedilmez)", log_content)
+            self.assertIn("[DAVACI_1] = Ahmet Yılmaz", log_content)
+
+
 def run_tests():
     """Testleri çalıştır ve detaylı sonuç döndür."""
     suite = unittest.TestLoader().loadTestsFromModule(sys.modules[__name__])
