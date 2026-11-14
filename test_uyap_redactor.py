@@ -3782,7 +3782,7 @@ class TestFinalPolishAndAIComprehensibility(unittest.TestCase):
         self.assertIn("Kaza mahalli: İzmir Yolu 12. Km Nilüfer/Bursa", out)
         self.assertIn("Olay yeri: Atatürk Bulvarı Kavşağı Çankaya/Ankara", out)
 
-    def test_ssc_role_and_parenthesized_colon_official_sicils(self):
+    def test_asc_and_legacy_ssc_role_with_parenthesized_official_sicils(self):
         with tempfile.TemporaryDirectory() as tmp:
             src, dest = os.path.join(tmp, "src"), os.path.join(tmp, "dest")
             os.makedirs(src, exist_ok=True)
@@ -3791,13 +3791,17 @@ class TestFinalPolishAndAIComprehensibility(unittest.TestCase):
                     "HÂKİM : Murat Sönmez (34567)\n"
                     "C. SAVCISI : Fatih Yıldız (98765)\n"
                     "ZABIT KÂTİBİ : Selin Koç (112233)\n"
-                    "SSÇ : Arda Taş\n"
-                    "Duruşmada SSÇ Arda Taş söz aldı.\n"
+                    "ASÇ : Arda Taş\n"
+                    "SSÇ : Mert Can\n"
+                    "Duruşmada adli süreçteki çocuk Arda Taş ve SSÇ Mert Can söz aldı.\n"
                 )
             out_dir, _ = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
             out = open(os.path.join(out_dir, "durusma.md"), encoding="utf-8").read()
             self.assertNotIn("Arda Taş", out)
-            self.assertIn("[SSÇ_1]", out)
+            self.assertNotIn("Mert Can", out)
+            self.assertIn("[ASÇ_1]", out)
+            self.assertIn("[ASÇ_2]", out)
+            self.assertNotIn("[SSÇ_", out)
             for s in ("34567", "98765", "112233"):
                 self.assertNotIn(s, out)
             for keep in ("Murat Sönmez", "Fatih Yıldız", "Selin Koç"):

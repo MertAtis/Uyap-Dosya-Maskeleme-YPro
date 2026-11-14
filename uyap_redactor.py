@@ -76,7 +76,7 @@ class MaskRegistry:
     """
 
     PERSON_ROLES = (
-        "DAVACI", "DAVALI", "MÜŞTEKİ", "ŞÜPHELİ", "SANIK", "SSÇ",
+        "DAVACI", "DAVALI", "MÜŞTEKİ", "ŞÜPHELİ", "SANIK", "ASÇ",
         "KATILAN", "MAĞDUR", "TANIK", "ALACAKLI", "BORÇLU", "KİŞİ",
     )
 
@@ -90,7 +90,8 @@ class MaskRegistry:
         "muracaatci": "MÜŞTEKİ", "muracaatcilar": "MÜŞTEKİ",
         "supheli": "ŞÜPHELİ", "supheliler": "ŞÜPHELİ",
         "sanik": "SANIK", "saniklar": "SANIK",
-        "ssc": "SSÇ", "suca suruklenen cocuk": "SSÇ", "suca suruklenen cocuklar": "SSÇ",
+        "asc": "ASÇ", "a s c": "ASÇ", "adli surecteki cocuk": "ASÇ", "adli surecteki cocuklar": "ASÇ",
+        "ssc": "ASÇ", "s s c": "ASÇ", "suca suruklenen cocuk": "ASÇ", "suca suruklenen cocuklar": "ASÇ",
         "katilan": "KATILAN", "katilanlar": "KATILAN",
         "mudahil": "KATILAN", "mudahiller": "KATILAN",
         "asli mudahil": "KATILAN", "feri mudahil": "KATILAN",
@@ -271,7 +272,7 @@ class MaskRegistry:
         """Belgedeki taraf sıfatını kanonik rol etiketine eşler; bilinmiyorsa None."""
         if not role:
             return None
-        cleaned = re.sub(r'[\s\-_/]+', ' ', _fold_tr(role)).strip()
+        cleaned = re.sub(r'[\s\-_/.]+', ' ', _fold_tr(role)).strip()
         if not cleaned:
             return None
         if cleaned in cls._ROLE_ALIAS_MAP:
@@ -974,6 +975,7 @@ class UyapRedactor:
         "magdur", "magdurlar", "katilan", "katilanlar", "alacakli", "alacaklilar",
         "borclu", "borclular", "mirasci", "mirascilari", "mirascilar", "vasi", "kayyim",
         "kucuk", "kisitli", "digerleri", "diger", "vd", "vs", "hasimsiz", "sifatiyla",
+        "asc", "ssc", "adli", "surecteki", "suca", "suruklenen", "cocuk",
         "muris", "muteveffa", "merhum", "merhume", "muvekkile", "bay", "bayan", "bey", "hanim",
         "esi", "kardesi", "oglu", "kizi", "annesi", "babasi",
         "agabeyi", "ablasi", "torunu", "kayinvalidesi", "kayinpederi", "komsusu", "arkadasi", "cocugu", "musterek",
@@ -3241,7 +3243,7 @@ class UyapRedactor:
         re.IGNORECASE,
     )
     _HEADER_COLON_RE = re.compile(
-        r'^(?:[#>*\-\s]|\d{1,2}[.\)])*(?:\*\*|__)?(?P<hdr>[A-Za-zÇĞİÖŞÜçğıöşüâîûÂÎÛ/\-\s()]{2,50}?)(?:\*\*|__)?[ \t]*:[ \t]*(?:\*\*|__)?(?P<rest>.*)$'
+        r'^(?:[#>*\-\s]|\d{1,2}[.\)])*(?:\*\*|__)?(?P<hdr>[A-Za-zÇĞİÖŞÜçğıöşüâîûÂÎÛ/\-\s().]{2,50}?)(?:\*\*|__)?[ \t]*:[ \t]*(?:\*\*|__)?(?P<rest>.*)$'
     )
     _LIST_ITEM_START_RE = re.compile(r'^[ \t]*(?:\*\*)?\d{1,2}[ \t]*[.\-\)]+[ \t]*(?:\*\*)?(?P<rest>.+)$')
     _INLINE_SPLIT_RE = re.compile(r'(?:^|[ \t]+)(?:\*\*)?\d{1,2}[ \t]*[.\-\)]+[ \t]*(?:\*\*)?')
@@ -3249,7 +3251,7 @@ class UyapRedactor:
         r'(?<![A-Za-zÇĞİÖŞÜçğıöşüâîûÂÎÛ])'
         r'(?i:(?P<role>(?:kar[şs][ıiı][ \t]+)?(?:davac[ıiIİ]|daval[ıiIİ])|m[uü][şs]tek[iıİ]|[şs][iıİ]k[aâ]yet[çc][iıİ]|m[uü]racaat[çc][ıiIİ]|'
         r'[şs][uü]phel[iıİ]|san[ıiIİ]k|kat[ıiIİ]lan|m[uü]dah[iıİ]l|ma[ğg]dur|tan[ıiIİ]k|alacakl[ıiIİ]|bor[çc]lu|'
-        r's\.?s\.?[cç]\.?|su[çc]a[ \t]+s[uü]r[uü]klenen[ \t]+[çc]ocuk)'
+        r'a\.?s\.?[cç]\.?|adli[ \t]+s[uü]re[cç]teki[ \t]+[çc]ocuk|s\.?s\.?[cç]\.?|su[çc]a[ \t]+s[uü]r[uü]klenen[ \t]+[çc]ocuk)'
         r'(?:[ \t]+s[ıiIİ]fat[ıiIİ]yla)?)'
         r'(?:[ \t]+(?i:m[uü]vekk[iıİ]l(?:e|im|imiz)?|k[uü][çc][uü]k|muris|merhum[e]?|m[uü]teveffa))?'
         r'[ \t]+(?P<name>' + _CAP_TOK_RE_STR + r'(?:[ \t]+' + _CAP_TOK_RE_STR + r'){1,3})'
