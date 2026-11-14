@@ -76,7 +76,7 @@ class MaskRegistry:
     """
 
     PERSON_ROLES = (
-        "DAVACI", "DAVALI", "MÜŞTEKİ", "ŞÜPHELİ", "SANIK",
+        "DAVACI", "DAVALI", "MÜŞTEKİ", "ŞÜPHELİ", "SANIK", "SSÇ",
         "KATILAN", "MAĞDUR", "TANIK", "ALACAKLI", "BORÇLU", "KİŞİ",
     )
 
@@ -90,6 +90,7 @@ class MaskRegistry:
         "muracaatci": "MÜŞTEKİ", "muracaatcilar": "MÜŞTEKİ",
         "supheli": "ŞÜPHELİ", "supheliler": "ŞÜPHELİ",
         "sanik": "SANIK", "saniklar": "SANIK",
+        "ssc": "SSÇ", "suca suruklenen cocuk": "SSÇ", "suca suruklenen cocuklar": "SSÇ",
         "katilan": "KATILAN", "katilanlar": "KATILAN",
         "mudahil": "KATILAN", "mudahiller": "KATILAN",
         "asli mudahil": "KATILAN", "feri mudahil": "KATILAN",
@@ -565,6 +566,11 @@ class MaskRegistry:
             if len(cands) != 1:
                 continue
             lk = cands[0]
+            # Farklı açık taraf rollerine sahip kişiler (örn. DAVACI vs TANIK) birleştirilmez
+            x_roles = {r for r in self._person_roles.get(xk, ()) if r != "KİŞİ"}
+            l_roles = {r for r in self._person_roles.get(lk, ()) if r != "KİŞİ"}
+            if x_roles and l_roles and x_roles.isdisjoint(l_roles):
+                continue
             x_tckns = self._person_tckns.get(xk)
             l_tckns = self._person_tckns.get(lk)
             if x_tckns and l_tckns and x_tckns.isdisjoint(l_tckns):
@@ -699,6 +705,9 @@ class UyapRedactor:
         "adapazarı": "Sakarya",
     }
     _IL_CANON_MAP: Dict[str, str] = {
+        **{_fold_tr(il): il for il in _IL_ADLARI},
+        **{_fold_tr(k): v for k, v in _IL_ES_ANLAM.items()},
+        **{_tr_lower(il).replace("i", "ı", 1): il for il in _IL_ADLARI if _tr_lower(il).startswith("i")},
         **{_tr_lower(il): il for il in _IL_ADLARI},
         **_IL_ES_ANLAM,
     }
@@ -861,8 +870,10 @@ class UyapRedactor:
 
     @classmethod
     def normalize_spaces(cls, text: str) -> str:
-        """NBSP ve diğer Unicode boşlukları düz boşluğa çevirir; sıfır genişlikli karakterleri siler."""
-        return text.translate(cls._SPACE_TRANS) if text else text
+        """NBSP ve diğer Unicode boşlukları düz boşluğa çevirir, sıfır genişlikli karakterleri siler ve NFC normalize eder."""
+        if not text:
+            return text
+        return unicodedata.normalize("NFC", text.translate(cls._SPACE_TRANS))
 
     _BASE_TR_VOCAB = frozenset(['ad', 'adet', 'adli', 'adres', 'adresi', 'adı', 'aile', 'ait', 'alacak', 'alacaklı', 'alıcı', 'alınması', 'ancak', 'anne', 'apartman', 'ara', 'aralık', 'araç', 'arz', 'asliye', 'aslı', 'asıl', 'avans', 'avukat', 'ayrıca', 'ayı', 'açıklama', 'ağustos', 'baba', 'banka', 'bankası', 'baro', 'barosu', 'başkanlığı', 'başsavcılığı', 'bedel', 'bedeli', 'bekar', 'belediye', 'belge', 'belgesi', 'bildirilmesi', 'bilgi', 'bilgileri', 'bilgilerinize', 'bilirkişi', 'bir', 'borç', 'borçlu', 'bu', 'bulvar', 'cadde', 'caddesi', 'celse', 'cevabı', 'cevap', 'ceza', 'cuma', 'cumartesi', 'cumhuriyet', 'cumhuriyeti', 'daha', 'dair', 'daire', 'dairesi', 'dava', 'davacı', 'davalı', 'dekont', 'dekontu', 'devlet', 'dilekçe', 'dilekçesi', 'diğer', 'doktor', 'dosya', 'doğum', 'durum', 'durumu', 'duruşma', 'ederim', 'edilmesi', 'ehliyet', 'ek', 'ekim', 'ekli', 'ekte', 'erkek', 'esas', 'evli', 'evrak', 'eylül', 'faiz', 'fatura', 'gelen', 'gerekçeli', 'gereği', 'gereğince', 'gereğini', 'gibi', 'gibidir', 'giden', 'gider', 'gönderen', 'gönderilmesi', 'göre', 'günü', 'haciz', 'hakim', 'hakkında', 'hali', 'harç', 'hasar', 'hastane', 'hastanesi', 'haziran', 'her', 'hesabı', 'hesap', 'hukuk', 'hususu', 'hususunda', 'hâkim', 'hükmü', 'hüküm', 'iban', 'icra', 'idare', 'ifade', 'ifadesi', 'ihale', 'ikamet', 'il', 'ilamlı', 'ilamsız', 'ile', 'ilgi', 'ilişkin', 'ilçe', 'imza', 'imzası', 'istenmesi', 'istinaf', 'itiraz', 'için', 'işlem', 'işlemi', 'kadar', 'kadın', 'kanun', 'kanunu', 'kapı', 'karar', 'kararı', 'kasım', 'kat', 'katibi', 'katip', 'kavşak', 'kavşağı', 'kaydı', 'kaymakamlığı', 'kayıt', 'kayıtlı', 'kaza', 'kazası', 'kesinleşme', 'kimlik', 'kira', 'kiracı', 'kiraya', 'kişi', 'kişinin', 'konu', 'kurumu', 'kâtip', 'madde', 'maddesi', 'mahalle', 'mahallesi', 'mahkeme', 'mahkemenizin', 'mahkemesi', 'makbuz', 'makbuzu', 'mart', 'masraf', 'mayıs', 'mazbata', 'mağdur', 'medeni', 'miktar', 'muayene', 'müdürlüğü', 'müdürlüğüne', 'mühür', 'müzekkere', 'müzekkeresi', 'müşteki', 'nisan', 'no', 'noter', 'noterliği', 'numara', 'numarası', 'nüfus', 'ocak', 'olan', 'olarak', 'olay', 'olayı', 'olunması', 'olunur', 'olup', 'onay', 'onaylı', 'oran', 'pazar', 'pazartesi', 'perşembe', 'plaka', 'plakası', 'poliçe', 'rapor', 'raporu', 'reddiyat', 'referans', 'rica', 'saat', 'salı', 'sanık', 'satış', 'savcı', 'savcılığı', 'saygılarımla', 'sayı', 'sayılı', 'sayın', 'sigorta', 'sokak', 'sokağı', 'sonra', 'sonucu', 'sonuç', 'soyad', 'soyadı', 'sulh', 'suret', 'sözleşme', 'sözleşmesi', 'sürücü', 'sınıfı', 'tahsilat', 'takibi', 'takip', 'talebi', 'talep', 'talimat', 'tanık', 'tarafına', 'tarafından', 'tarih', 'tarihinde', 'tarihli', 'tebligat', 'tebliğ', 'tedavi', 'tel', 'telefon', 'temmuz', 'temyiz', 'tensip', 'tespit', 'tespiti', 'teşhis', 'ticaret', 'toplam', 'trafik', 'tutanak', 'tutanağı', 'tutar', 'tutarı', 'tüketici', 'tüm', 'türkiye', 'tıp', 'uyarınca', 'uyruğu', 'valiliği', 've', 'vekalet', 'vekaletname', 'vekil', 'vekili', 'veren', 'verilmesi', 'veya', 'yapılması', 'yaralı', 'yasa', 'yazı', 'yazısı', 'yer', 'yeri', 'yevmiye', 'yolu', 'yolun', 'yönetmelik', 'yılı', 'zabıt', 'zaptı', 'çarşamba', 'çok', 'ödeme', 'ölü', 'önce', 'örnek', 'üzere', 'şahsın', 'şahıs', 'şu', 'şubat', 'şube', 'şüpheli'])
 
@@ -945,11 +956,14 @@ class UyapRedactor:
 
     _LEADING_DESCRIPTOR_BIGRAMS = frozenset({
         ("kiraya", "veren"), ("isveren", "vekili"), ("kayyim", "adayi"), ("kisitli", "adayi"), ("vasi", "adayi"),
+        ("santiye", "sefi"), ("arac", "maliki"), ("arac", "sahibi"), ("arac", "surucusu"),
+        ("genel", "mudur"), ("genel", "muduru"), ("sirket", "yetkilisi"), ("sirket", "muduru"),
     })
     _LEADING_DESCRIPTOR_WORDS = frozenset({
         "muris", "muteveffa", "merhum", "merhume", "kucuk", "muvekkil", "muvekkilim", "muvekkilimiz",
         "muvekkile", "sayin", "bay", "bayan", "esi", "kardesi", "oglu", "kizi", "annesi", "babasi",
-        "hissedar", "malik", "kiraci", "isci", "isveren", "mirasci", "kisitli", "velisi", "vasisi", "kayyimi",
+        "hissedar", "malik", "maliki", "kiraci", "isci", "isveren", "mirasci", "kisitli", "velisi", "vasisi", "kayyimi",
+        "surucu", "yetkili", "yetkilisi", "isleten", "isleteni", "kefil", "kefili", "borclusu",
     })
 
     _PERSON_STOP_WORDS = frozenset({
@@ -1089,6 +1103,16 @@ class UyapRedactor:
         """'path', 'parent' ile aynı veya onun alt dizini mi? (alt-dize değil, yol-öneki karşılaştırması)"""
         parent = parent.rstrip(os.sep)
         return path == parent or path.startswith(parent + os.sep)
+
+    @classmethod
+    def _is_safe_src_path(cls, path: str, real_root: str) -> bool:
+        """Sembolik bağların kaynak klasör dışına taşmasını engeller."""
+        if not os.path.islink(path):
+            return True
+        return cls._is_inside_path(
+            unicodedata.normalize("NFC", os.path.realpath(path)),
+            unicodedata.normalize("NFC", real_root).rstrip(os.sep),
+        )
 
     @staticmethod
     def _is_date_or_esas_number(raw: str) -> bool:
@@ -1613,15 +1637,22 @@ class UyapRedactor:
         for scan_dir in folders_to_scan:
             if not os.path.isdir(scan_dir):
                 continue
+            real_scan = os.path.realpath(scan_dir)
             for root, dirs, files in os.walk(scan_dir):
-                if cls._is_skipped_dir(root, scan_dir, cls.SKIP_DIRS_OCR):
+                if cls._is_skipped_dir(root, scan_dir, cls.SKIP_DIRS_OCR) or not cls._is_safe_src_path(root, real_scan):
                     dirs[:] = []
                     continue
-                dirs[:] = [d for d in dirs if not cls._is_skipped_dir(os.path.join(root, d), scan_dir, cls.SKIP_DIRS_OCR)]
+                dirs[:] = [
+                    d for d in dirs
+                    if not cls._is_skipped_dir(os.path.join(root, d), scan_dir, cls.SKIP_DIRS_OCR)
+                    and cls._is_safe_src_path(os.path.join(root, d), real_scan)
+                ]
                 in_kaynak = cls._is_skipped_dir(root, scan_dir, ("_kaynak",))
                 for f in files:
                     ext = os.path.splitext(f)[1].lower()
                     fp = os.path.join(root, f)
+                    if not cls._is_safe_src_path(fp, real_scan):
+                        continue
                     if not in_kaynak and ((f.endswith((".md", ".txt")) and not f.endswith(".bak")) or f in cls.META_JSON_NAMES):
                         txt = cls._extract_non_ocr_text(fp, ext)
                         if txt:
@@ -2028,9 +2059,9 @@ class UyapRedactor:
 
         text = p2.sub(repl2, text)
 
-        # 1c. Cümle içi "Unvan + 1-4 kelimelik Ad Soyad + 5-6 haneli Sicil" (örn. "Hakim Ayşe Kaya 112233", "Hâkim Ayşe Yılmaz (112233)")
+        # 1c. Cümle içi "Unvan + 1-4 kelimelik Ad Soyad + 5-6 haneli Sicil" (örn. "Hakim Ayşe Kaya 112233", "Hâkim : Murat Sönmez (34567)")
         p_inline_named = re.compile(
-            rf'(?i)(?P<prefix>\b{titles}\s+(?:[A-ZÇĞİÖŞÜa-zçğıöşü\.]+\s+){{1,4}}\(?\s*)(?P<sicil>(?<![\d\./])\d{{5,6}}(?![\d\./])){not_sicil}'
+            rf'(?i)(?P<prefix>\b{titles}(?:\s*:\s*|\s+)(?:[A-ZÇĞİÖŞÜa-zçğıöşü\.]+\s+){{1,4}}\(?\s*)(?P<sicil>(?<![\d\./])\d{{5,6}}(?![\d\./])){not_sicil}'
         )
 
         def repl_inline_named(m: re.Match) -> str:
@@ -2040,9 +2071,9 @@ class UyapRedactor:
 
         text = p_inline_named.sub(repl_inline_named, text)
 
-        # 2. Tutanak/Karar başlık satırları: "**BAŞKAN :** Ayşe ÖRNEK  123456"
+        # 2. Tutanak/Karar başlık satırları: "**BAŞKAN :** Ayşe ÖRNEK  123456" veya "HÂKİM : Murat Sönmez (34567)"
         p3 = re.compile(
-            rf'(?im)^(?P<prefix>[\s\*]*{titles}[\s\*]*[:\t][^\r\n\d]*[a-zA-ZçğıöşüÇĞİÖŞÜ\.\s\*]+?)(?<!\d)(?P<sicil>\d{{5,6}})(?!\d)(?P<suffix>[\s\*]*)$'
+            rf'(?im)^(?P<prefix>[\s\*]*{titles}[\s\*]*[:\t][^\r\n\d]*[a-zA-ZçğıöşüÇĞİÖŞÜ\.\s\*\(\[]+?)(?<!\d)(?P<sicil>\d{{5,6}})(?!\d)(?P<suffix>[\)\]\s\*]*)$'
         )
 
         def repl3(m: re.Match) -> str:
@@ -2637,14 +2668,19 @@ class UyapRedactor:
         p4 = re.compile(
             r'(?i)(?P<masked>' + mask_adres_re + r')(?P<hint>' + opt_hint_re + r')'
             r'(?P<ws>\s*\r?\n(?:\s*\r?\n)?[\s\#\*]*(?:\.\.\.\s*)?)'
-            r'(?P<city>(?:(?:K|Kat|No|Blok|D|Daire)[\s\:\.\-]*[0-9A-Za-z][0-9A-Za-z\s\:\.\-]*\s+)?[A-ZÇĞİÖŞÜa-zçğıöşü\s]{2,30}/\s*[A-ZÇĞİÖŞÜa-zçğıöşü]{2,20})'
+            r'(?P<city>(?:\b(?:K(?:at)?|No|Blok|D(?:aire)?)\b[\s\:\.\-]*\d+[0-9A-Za-z\s\:\.\-/]*\s+)?[A-ZÇĞİÖŞÜa-zçğıöşü\s]{2,30}/\s*[A-ZÇĞİÖŞÜa-zçğıöşü]{2,20})'
             r'(?=\s*\r?\n|$)'
         )
 
         def repl4(m: re.Match) -> str:
             if m.group('hint'):
                 return f"{m.group('masked')}{m.group('hint')}"
-            return cls._format_adres_label(m.group('masked'), m.group('city'), registry)
+            city_txt = m.group('city')
+            if cls._ADDR_OLAY_RE.search(city_txt):
+                return m.group(0)
+            if cls._address_owner(m.string, m.start('city'), m.end('city')) != "kisi":
+                return m.group(0)
+            return cls._format_adres_label(m.group('masked'), city_txt, registry)
 
         text = p4.sub(repl4, text)
 
@@ -3212,7 +3248,8 @@ class UyapRedactor:
     _PROSE_ROLE_RE = re.compile(
         r'(?<![A-Za-zÇĞİÖŞÜçğıöşüâîûÂÎÛ])'
         r'(?i:(?P<role>(?:kar[şs][ıiı][ \t]+)?(?:davac[ıiIİ]|daval[ıiIİ])|m[uü][şs]tek[iıİ]|[şs][iıİ]k[aâ]yet[çc][iıİ]|m[uü]racaat[çc][ıiIİ]|'
-        r'[şs][uü]phel[iıİ]|san[ıiIİ]k|kat[ıiIİ]lan|m[uü]dah[iıİ]l|ma[ğg]dur|tan[ıiIİ]k|alacakl[ıiIİ]|bor[çc]lu)'
+        r'[şs][uü]phel[iıİ]|san[ıiIİ]k|kat[ıiIİ]lan|m[uü]dah[iıİ]l|ma[ğg]dur|tan[ıiIİ]k|alacakl[ıiIİ]|bor[çc]lu|'
+        r's\.?s\.?[cç]\.?|su[çc]a[ \t]+s[uü]r[uü]klenen[ \t]+[çc]ocuk)'
         r'(?:[ \t]+s[ıiIİ]fat[ıiIİ]yla)?)'
         r'(?:[ \t]+(?i:m[uü]vekk[iıİ]l(?:e|im|imiz)?|k[uü][çc][uü]k|muris|merhum[e]?|m[uü]teveffa))?'
         r'[ \t]+(?P<name>' + _CAP_TOK_RE_STR + r'(?:[ \t]+' + _CAP_TOK_RE_STR + r'){1,3})'
@@ -3244,14 +3281,15 @@ class UyapRedactor:
     _JSON_SURNAME_KEYS = frozenset({"soyad", "soyadi"})
 
     @classmethod
-    def _passes_ocr_name_filter(cls, candidate: str, after_ctx: str = "") -> bool:
+    def _passes_ocr_name_filter(cls, candidate: str, after_ctx: str = "", allow_short_last: bool = False) -> bool:
         """OCR gürültüsüne karşı ek kesinlik süzgeci: >=3 harf/belirteç, 3+ harf tekrarı ve rakam karışımı reddi."""
         clean = " ".join(unicodedata.normalize("NFC", candidate).strip().split())
         toks = clean.split()
         if not toks:
             return False
-        for t in toks:
-            if len(t) < 3:
+        for idx, t in enumerate(toks):
+            min_len = 2 if (allow_short_last and idx == len(toks) - 1 and len(toks) >= 2 and any(len(p) >= 3 for p in toks[:-1])) else 3
+            if len(t) < min_len:
                 return False
             if re.search(r'(.)\1\1', _tr_lower(t)):
                 return False
@@ -3553,33 +3591,93 @@ class UyapRedactor:
             acc["_seq"] = doc_seq
             acc.setdefault("entries", {})
 
-        def _valid_person(cand_str: str, before_c: str = "", after_c: str = "") -> bool:
+        def _valid_person(
+            cand_str: str, before_c: str = "", after_c: str = "", allow_short_last: bool = False
+        ) -> bool:
             if not cls._is_person_name(cand_str, before_ctx=before_c, after_ctx=after_c, ocr=False):
                 return False
             if not ocr:
                 return True
             if registry.is_person_registered(cand_str):
                 return True
-            return cls._passes_ocr_name_filter(cand_str, after_ctx=after_c)
+            return cls._passes_ocr_name_filter(cand_str, after_ctx=after_c, allow_short_last=allow_short_last)
+
+        def _parse_header_line(seg_line: str) -> Tuple[Optional[str], str]:
+            """Tek bir başlık segmentinden taraf rolü ve kalan metni çıkarır (ön etiketleri soyar)."""
+            cur = seg_line
+            for _ in range(3):
+                m_h = cls._HEADER_COLON_RE.match(cur)
+                if m_h:
+                    h_raw = m_h.group("hdr")
+                    r_rest = m_h.group("rest")
+                    found_role = cls._extract_header_role(h_raw)
+                    if found_role:
+                        return found_role, r_rest
+                    if ":" not in r_rest:
+                        return None, ""
+                    cur = r_rest
+                    continue
+                m_pre = re.match(r'^[^:|\r\n]{1,40}:[ \t]*(?P<rest>.+)$', cur)
+                if m_pre and ":" in m_pre.group("rest"):
+                    cur = m_pre.group("rest")
+                    continue
+                return None, ""
+            return None, ""
 
         text = cls.normalize_spaces(text)
         lines = text.splitlines()
         active_role: Optional[str] = None
+        table_col_roles: Dict[int, str] = {}
 
         for i, raw_line in enumerate(lines):
             stripped = raw_line.strip()
             if not stripped:
                 active_role = None
+                table_col_roles = {}
                 continue
 
-            # A. Taraf başlık satırı ve çok satırlı numaralı liste
-            m_hdr = cls._HEADER_COLON_RE.match(raw_line)
-            if m_hdr:
-                hdr_raw = m_hdr.group("hdr")
-                rest = m_hdr.group("rest")
-                role = cls._extract_header_role(hdr_raw)
+            if "|" in raw_line:
+                raw_cells = raw_line.strip().split("|")
+                if raw_line.lstrip().startswith("|") and raw_cells:
+                    raw_cells = raw_cells[1:]
+                if raw_line.rstrip().endswith("|") and raw_cells:
+                    raw_cells = raw_cells[:-1]
+                cells = [c.strip() for c in raw_cells]
+
+                # A0. Dikey Markdown / XLSX tablo başlığı ve satırları ("| DAVACI | TCKN |")
+                if cells and all((not c or re.fullmatch(r'[-:\s]+', c)) for c in cells):
+                    # Ayraç satırı (| --- | --- |): sütun rollerini koru
+                    continue
+                if cells and not any(":" in c for c in cells):
+                    hdr_roles = {idx: cls._extract_header_role(c) for idx, c in enumerate(cells)}
+                    hdr_roles = {idx: r for idx, r in hdr_roles.items() if r}
+                    if hdr_roles:
+                        table_col_roles = hdr_roles
+                        active_role = None
+                        continue
+                    if table_col_roles:
+                        for idx, role_col in table_col_roles.items():
+                            if idx < len(cells) and cells[idx]:
+                                for part in [p for p in cls._INLINE_SPLIT_RE.split(cells[idx]) if p.strip()] or [cells[idx]]:
+                                    cand_t, after_t = cls._extract_name_from_segment(part)
+                                    cand_t, _ = cls._strip_leading_descriptors(cand_t)
+                                    after_t = cls._extend_after_ctx(lines, i, after_t)
+                                    if _valid_person(cand_t, after_c=after_t, allow_short_last=True):
+                                        registry.add_person(cand_t, role_col, strong=True)
+                        continue
+                else:
+                    table_col_roles = {}
+            else:
+                table_col_roles = {}
+
+            # A. Taraf başlık satırı, boru (|) ayraçlı satırlar ve çok satırlı numaralı liste
+            hdr_segments = [s.strip() for s in raw_line.split("|") if s.strip()] if "|" in raw_line else [raw_line]
+            matched_hdr_seg = False
+            for seg in hdr_segments:
+                role, rest = _parse_header_line(seg)
                 if role:
-                    active_role = role
+                    matched_hdr_seg = True
+                    active_role = role if len(hdr_segments) == 1 else None
                     parts = [p for p in cls._INLINE_SPLIT_RE.split(rest) if p.strip()]
                     if not parts and rest.strip():
                         parts = [rest]
@@ -3587,7 +3685,8 @@ class UyapRedactor:
                         cand, raw_after_ctx = cls._extract_name_from_segment(part)
                         cand, _ = cls._strip_leading_descriptors(cand)
                         if (
-                            len(parts) == 1
+                            len(hdr_segments) == 1
+                            and len(parts) == 1
                             and cand
                             and len(cand.split()) == 1
                             and not raw_after_ctx.strip()
@@ -3599,14 +3698,16 @@ class UyapRedactor:
                                 if nxt_cand and len(nxt_cand.split()) == 1:
                                     joined = f"{cand} {nxt_cand}"
                                     joined_after = cls._extend_after_ctx(lines, i + 1, nxt_after)
-                                    if _valid_person(joined, after_c=joined_after):
+                                    if _valid_person(joined, after_c=joined_after, allow_short_last=True):
                                         registry.add_person(joined, role, strong=True)
                                         continue
                         after_ctx = cls._extend_after_ctx(lines, i, raw_after_ctx)
-                        if _valid_person(cand, after_c=after_ctx):
+                        if _valid_person(cand, after_c=after_ctx, allow_short_last=True):
                             registry.add_person(cand, role, strong=True)
-                else:
-                    active_role = None
+            if matched_hdr_seg:
+                pass
+            elif cls._HEADER_COLON_RE.match(raw_line):
+                active_role = None
             elif active_role:
                 m_item = cls._LIST_ITEM_START_RE.match(raw_line)
                 if m_item:
@@ -3615,7 +3716,7 @@ class UyapRedactor:
                         cand, after_ctx = cls._extract_name_from_segment(part)
                         cand, _ = cls._strip_leading_descriptors(cand)
                         after_ctx = cls._extend_after_ctx(lines, i, after_ctx)
-                        if _valid_person(cand, after_c=after_ctx):
+                        if _valid_person(cand, after_c=after_ctx, allow_short_last=True):
                             registry.add_person(cand, active_role, strong=True)
                 else:
                     # Liste dışı satır (adres devamı değilse bloğu kapat)
@@ -3694,7 +3795,7 @@ class UyapRedactor:
                 tckn_raw = m_c.group("tckn") or ""
                 tckn_digits = re.sub(r'\D', '', _ocr_digits(tckn_raw))
                 tckn_val = tckn_digits if len(tckn_digits) >= 9 else None
-                if _valid_person(cand_c, before_c=before_c, after_c=raw_line[m_c.start():]):
+                if _valid_person(cand_c, before_c=before_c, after_c=raw_line[m_c.start():], allow_short_last=True):
                     registry.add_person(cand_c, c_role, strong=True, tckn=tckn_val)
 
             # D. Kimlik tablosu: Adı Soyadı / Adı + Soyadı
@@ -4101,7 +4202,8 @@ class UyapRedactor:
                 for pno in range(page_count):
                     page = doc[pno]
                     # PyMuPDF bazı yazı tiplerinde '-' karakterini U+00AD (yumuşak tire) olarak döndürür
-                    text = page.get_text().replace("\u00ad", "-").strip()
+                    text = page.get_text()
+                    text = re.sub(r'(?<=\d)\u00ad(?=\d)', '', text).replace("\u00ad", "-").strip()
 
                     if len(text) > 50:
                         pages_content.append(f"### Sayfa {pno + 1}\n\n{text}")
@@ -5073,14 +5175,21 @@ class UyapRedactor:
             return 0
 
         total_updated = 0
+        real_folder = os.path.realpath(folder)
         for root, dirs, files in os.walk(folder):
-            if cls._is_skipped_dir(root, folder, cls.SKIP_DIRS):
+            if cls._is_skipped_dir(root, folder, cls.SKIP_DIRS) or not cls._is_safe_src_path(root, real_folder):
                 dirs[:] = []
                 continue
-            dirs[:] = [d for d in dirs if not cls._is_skipped_dir(os.path.join(root, d), folder, cls.SKIP_DIRS)]
+            dirs[:] = [
+                d for d in dirs
+                if not cls._is_skipped_dir(os.path.join(root, d), folder, cls.SKIP_DIRS)
+                and cls._is_safe_src_path(os.path.join(root, d), real_folder)
+            ]
             for f in files:
                 if f == "INDEX.md":
                     full_index_path = os.path.join(root, f)
+                    if not cls._is_safe_src_path(full_index_path, real_folder):
+                        continue
                     total_updated += cls.sync_index_file(full_index_path, path_map=path_map, dest_root=folder)
 
         return total_updated
@@ -5249,18 +5358,21 @@ class UyapRedactor:
             # 0a. Arşivleri (.eyp / .zip) güvenli şekilde geçici dizine aç
             archive_sources: List[Tuple[str, str, str]] = []
             for root, dirs, files in os.walk(src_folder):
-                if cls._is_skipped_dir(root, src_folder, cls.SKIP_DIRS_OCR) or _is_dest_subtree(root):
+                if cls._is_skipped_dir(root, src_folder, cls.SKIP_DIRS_OCR) or _is_dest_subtree(root) or not cls._is_safe_src_path(root, real_src):
                     dirs[:] = []
                     continue
                 dirs[:] = sorted(
                     d for d in dirs
                     if not cls._is_skipped_dir(os.path.join(root, d), src_folder, cls.SKIP_DIRS_OCR)
                     and not _is_dest_subtree(os.path.join(root, d))
+                    and cls._is_safe_src_path(os.path.join(root, d), real_src)
                 )
                 for f in sorted(files):
                     ext = os.path.splitext(f)[1].lower()
                     if ext in cls.ARCHIVE_EXTS:
                         full_p = os.path.join(root, f)
+                        if not cls._is_safe_src_path(full_p, real_src):
+                            continue
                         rel_p = os.path.relpath(full_p, src_folder)
                         archive_sources.append((full_p, rel_p, ext))
             archive_sources.sort(key=lambda x: unicodedata.normalize("NFC", x[1]))
@@ -5392,17 +5504,20 @@ class UyapRedactor:
             # 1. Mevcut Markdown ve Metin Belgelerini Topla (determinizm için sıralı)
             md_files = []
             for root, dirs, files in os.walk(src_folder):
-                if cls._is_skipped_dir(root, src_folder, cls.SKIP_DIRS) or _is_dest_subtree(root):
+                if cls._is_skipped_dir(root, src_folder, cls.SKIP_DIRS) or _is_dest_subtree(root) or not cls._is_safe_src_path(root, real_src):
                     dirs[:] = []
                     continue
                 dirs[:] = sorted(
                     d for d in dirs
                     if not cls._is_skipped_dir(os.path.join(root, d), src_folder, cls.SKIP_DIRS)
                     and not _is_dest_subtree(os.path.join(root, d))
+                    and cls._is_safe_src_path(os.path.join(root, d), real_src)
                 )
                 for f in sorted(files):
                     if f.endswith((".md", ".txt")) and not f.endswith(".bak"):
-                        md_files.append(os.path.join(root, f))
+                        full_p = os.path.join(root, f)
+                        if cls._is_safe_src_path(full_p, real_src):
+                            md_files.append(full_p)
             md_files.sort(key=lambda p: unicodedata.normalize("NFC", os.path.relpath(p, src_folder)))
 
             grand_stats["total_files"] = len(md_files)
@@ -5497,19 +5612,22 @@ class UyapRedactor:
                 items: List[Tuple[str, str, str, str]] = []
                 # Not: Bu tarama _kaynak/ dizinini BİLEREK tarar (orijinal belgeler oradadır)
                 for root, dirs, files in os.walk(src_folder):
-                    if cls._is_skipped_dir(root, src_folder, cls.SKIP_DIRS_OCR) or _is_dest_subtree(root):
+                    if cls._is_skipped_dir(root, src_folder, cls.SKIP_DIRS_OCR) or _is_dest_subtree(root) or not cls._is_safe_src_path(root, real_src):
                         dirs[:] = []
                         continue
                     dirs[:] = sorted(
                         d for d in dirs
                         if not cls._is_skipped_dir(os.path.join(root, d), src_folder, cls.SKIP_DIRS_OCR)
                         and not _is_dest_subtree(os.path.join(root, d))
+                        and cls._is_safe_src_path(os.path.join(root, d), real_src)
                     )
                     for f in sorted(files):
                         ext = os.path.splitext(f)[1].lower()
                         if ext not in exts:
                             continue
                         full_p = os.path.join(root, f)
+                        if not cls._is_safe_src_path(full_p, real_src):
+                            continue
                         rel_p = os.path.relpath(full_p, src_folder)
                         clean_rel = rel_p[len("_kaynak/"):] if rel_p.startswith("_kaynak/") else rel_p
                         base_rel = os.path.splitext(clean_rel)[0] + ".md"
@@ -5573,7 +5691,7 @@ class UyapRedactor:
                 import json
                 for meta_name in cls.META_JSON_NAMES:
                     meta_src = os.path.join(src_folder, meta_name)
-                    if os.path.isfile(meta_src):
+                    if os.path.isfile(meta_src) and cls._is_safe_src_path(meta_src, real_src):
                         try:
                             with open(meta_src, "r", encoding="utf-8", errors="replace") as mf:
                                 meta_raw = mf.read()
@@ -5816,7 +5934,7 @@ class UyapRedactor:
                 meta_src = os.path.join(src_folder, meta_name)
                 masked_meta_name = _masked_rel_path(meta_name)
                 meta_dest = os.path.join(dest_folder, masked_meta_name)
-                if os.path.isfile(meta_src):
+                if os.path.isfile(meta_src) and cls._is_safe_src_path(meta_src, real_src):
                     try:
                         j_stats = cls.redact_json_file(meta_src, meta_dest, known_tckns=known_tckns, registry=registry)
                         _add(j_stats)
@@ -5827,13 +5945,14 @@ class UyapRedactor:
             # 3b. Kaynak klasörde hiçbir adımda işlenmeyen desteklenmeyen dosyaları topla
             handled_exts = (".md", ".txt") + cls.TEXT_DOC_EXTS + cls.OCR_DOC_EXTS + cls.ARCHIVE_EXTS
             for root, dirs, files in os.walk(src_folder):
-                if cls._is_skipped_dir(root, src_folder, cls.SKIP_DIRS_OCR) or _is_dest_subtree(root):
+                if cls._is_skipped_dir(root, src_folder, cls.SKIP_DIRS_OCR) or _is_dest_subtree(root) or not cls._is_safe_src_path(root, real_src):
                     dirs[:] = []
                     continue
                 dirs[:] = sorted(
                     d for d in dirs
                     if not cls._is_skipped_dir(os.path.join(root, d), src_folder, cls.SKIP_DIRS_OCR)
                     and not _is_dest_subtree(os.path.join(root, d))
+                    and cls._is_safe_src_path(os.path.join(root, d), real_src)
                 )
                 for f in sorted(files):
                     ext = os.path.splitext(f)[1].lower()
@@ -5847,6 +5966,8 @@ class UyapRedactor:
                     ):
                         continue
                     full_p = os.path.join(root, f)
+                    if not cls._is_safe_src_path(full_p, real_src):
+                        continue
                     rel_p = os.path.relpath(full_p, src_folder)
                     # Yargı PRO bu dosyanın .md türevini üretmişse (ör. HTML makbuz → .md) içerik
                     # zaten aktarılmıştır; "işlenemedi" listesine yazmak yanlış alarm olur.
@@ -6143,15 +6264,22 @@ def main():
         registry = MaskRegistry(known_tckns)
         in_place_stats = UyapRedactor._empty_stats()
         skip_names = UyapRedactor.SKIP_DIRS
+        real_target = os.path.realpath(target_dir)
         in_place_files: List[str] = []
         for root, dirs, files in os.walk(target_dir):
-            if UyapRedactor._is_skipped_dir(root, target_dir, skip_names):
+            if UyapRedactor._is_skipped_dir(root, target_dir, skip_names) or not UyapRedactor._is_safe_src_path(root, real_target):
                 dirs[:] = []
                 continue
-            dirs[:] = sorted(d for d in dirs if not UyapRedactor._is_skipped_dir(os.path.join(root, d), target_dir, skip_names))
+            dirs[:] = sorted(
+                d for d in dirs
+                if not UyapRedactor._is_skipped_dir(os.path.join(root, d), target_dir, skip_names)
+                and UyapRedactor._is_safe_src_path(os.path.join(root, d), real_target)
+            )
             for file in sorted(files):
                 if file.endswith((".md", ".txt")) and not file.endswith(".bak"):
-                    in_place_files.append(os.path.join(root, file))
+                    fp_in = os.path.join(root, file)
+                    if UyapRedactor._is_safe_src_path(fp_in, real_target):
+                        in_place_files.append(fp_in)
         if not args.isimleri_koru:
             prescan_texts: List[str] = []
             for fp in in_place_files:

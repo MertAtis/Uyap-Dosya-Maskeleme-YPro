@@ -1223,8 +1223,12 @@ class TestBatchAuditFixes(unittest.TestCase):
                 'Vo:f9 AC Silivri /ISTANBUL" olarak değiştirdiğini belirterek')
         out = red(text, MaskRegistry())
         self.assertNotIn("Testtepe", out)
-        self.assertNotIn("Silivri", out)
+        self.assertNotIn("Vo:f9", out)
+        self.assertIn("(Silivri/İstanbul)", out)
         self.assertIn("olarak değiştirdiğini belirterek", out)
+        out_legacy = red(text)
+        self.assertNotIn("Testtepe", out_legacy)
+        self.assertNotIn("Silivri", out_legacy)
 
     def test_split_address_keeps_surrounding_sentence(self):
         text = ('sundugu 12/03/2025 tarihli dilekçesi ile "Şehit Kuzey Sok. Testtepe Mah. Gül\n'
@@ -3764,6 +3768,129 @@ class TestFinalPolishAndAIComprehensibility(unittest.TestCase):
             self.assertIn("[BORÇLU_1]", out)
             self.assertNotIn("Hakan", out)
             self.assertNotIn("Yıldırım", out)
+
+    def test_kaza_mahalli_preserved_after_ikametgah(self):
+        reg = MaskRegistry()
+        raw = (
+            "İkametgah Adresi: Bahçelievler Mah. Lale Sok. No:8\n"
+            "Kaza mahalli: İzmir Yolu 12. Km Nilüfer/Bursa\n"
+            "Olay yeri: Atatürk Bulvarı Kavşağı Çankaya/Ankara\n"
+        )
+        out, _ = UyapRedactor.redact_text(raw, registry=reg)
+        self.assertIn("[ADRES_1]", out)
+        self.assertNotIn("Bahçelievler Mah.", out)
+        self.assertIn("Kaza mahalli: İzmir Yolu 12. Km Nilüfer/Bursa", out)
+        self.assertIn("Olay yeri: Atatürk Bulvarı Kavşağı Çankaya/Ankara", out)
+
+    def test_ssc_role_and_parenthesized_colon_official_sicils(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, dest = os.path.join(tmp, "src"), os.path.join(tmp, "dest")
+            os.makedirs(src, exist_ok=True)
+            with open(os.path.join(src, "durusma.md"), "w", encoding="utf-8") as wf:
+                wf.write(
+                    "HÂKİM : Murat Sönmez (34567)\n"
+                    "C. SAVCISI : Fatih Yıldız (98765)\n"
+                    "ZABIT KÂTİBİ : Selin Koç (112233)\n"
+                    "SSÇ : Arda Taş\n"
+                    "Duruşmada SSÇ Arda Taş söz aldı.\n"
+                )
+            out_dir, _ = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+            out = open(os.path.join(out_dir, "durusma.md"), encoding="utf-8").read()
+            self.assertNotIn("Arda Taş", out)
+            self.assertIn("[SSÇ_1]", out)
+            for s in ("34567", "98765", "112233"):
+                self.assertNotIn(s, out)
+            for keep in ("Murat Sönmez", "Fatih Yıldız", "Selin Koç"):
+                self.assertIn(keep, out)
+
+    def test_disjoint_role_two_and_three_token_persons_not_merged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, dest = os.path.join(tmp, "src"), os.path.join(tmp, "dest")
+            os.makedirs(src, exist_ok=True)
+            with open(os.path.join(src, "kisiler.md"), "w", encoding="utf-8") as wf:
+                wf.write(
+                    "DAVACI : Mehmet Yılmaz\n"
+                    "TANIK : Mehmet Ali Yılmaz\n"
+                    "Davacı Mehmet Yılmaz ile tanık Mehmet Ali Yılmaz ayrı kişilerdir.\n"
+                )
+            out_dir, _ = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+            out = open(os.path.join(out_dir, "kisiler.md"), encoding="utf-8").read()
+            self.assertIn("[DAVACI_1]", out)
+            self.assertIn("[TANIK_1]", out)
+            self.assertNotIn("Mehmet Yılmaz", out)
+            self.assertNotIn("Mehmet Ali Yılmaz", out)
+
+    def test_nfd_unicode_text_and_external_symlink_guarded(self):
+        nfd_name = unicodedata.normalize("NFD", "İğneci Şükran Çoşkun")
+        with tempfile.TemporaryDirectory() as tmp:
+            src, dest = os.path.join(tmp, "src"), os.path.join(tmp, "dest")
+            os.makedirs(src, exist_ok=True)
+            secret = os.path.join(tmp, "gizli.md")
+            with open(secret, "w", encoding="utf-8") as sf:
+                sf.write("DAVACI : Dışarıdaki Gizli\nDIS_SIR_123\n")
+            os.symlink(secret, os.path.join(src, "dis_bag.md"))
+            with open(os.path.join(src, "nfd.md"), "w", encoding="utf-8") as wf:
+                wf.write(f"DAVACI : {nfd_name}\nBeyan sahibi {nfd_name} oldu.\n")
+            out_dir, _ = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+            out = open(os.path.join(out_dir, "nfd.md"), encoding="utf-8").read()
+            self.assertIn("[DAVACI_1]", out)
+            self.assertNotIn("Şükran", out)
+            self.assertFalse(os.path.exists(os.path.join(out_dir, "dis_bag.md")))
+
+    def test_vertical_table_inline_pipe_and_leading_descriptors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, dest = os.path.join(tmp, "src"), os.path.join(tmp, "dest")
+            os.makedirs(src, exist_ok=True)
+            with open(os.path.join(src, "karma.md"), "w", encoding="utf-8") as wf:
+                wf.write(
+                    "| DAVACI | TCKN |\n"
+                    "| --- | --- |\n"
+                    "| Nevin Şen | 10000000146 |\n\n"
+                    "Belge 1: ALACAKLI : Ali Yıldız | BORÇLU : Veli Aksu\n"
+                    "DAVALI : Şantiye Şefi Hakan Demir\n"
+                    "DAVALI : Sürücü Kemal Kaya\n"
+                    "Hakan Demir ve Kemal Kaya dinlendi.\n"
+                )
+            out_dir, stats = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+            out = open(os.path.join(out_dir, "karma.md"), encoding="utf-8").read()
+            for pii in ("Nevin Şen", "10000000146", "Ali Yıldız", "Veli Aksu", "Hakan Demir", "Kemal Kaya"):
+                self.assertNotIn(pii, out)
+            self.assertEqual(len(stats["kisi_listesi"]), 5)
+
+    def test_pdf_soft_hyphen_ocr_short_surname_and_ascii_province(self):
+        reg = MaskRegistry()
+        raw_ocr = "DAVACI : Neslihan Ak\nTANIK : Oğuzhan Er\n"
+        UyapRedactor.collect_persons_from_text(raw_ocr, reg, ocr=True)
+        reg.freeze_persons()
+        out_p, _ = UyapRedactor.redact_text(raw_ocr, registry=reg)
+        self.assertNotIn("Neslihan Ak", out_p)
+        self.assertIn("[DAVACI_1]", out_p)
+        self.assertNotIn("Oğuzhan Er", out_p)
+
+        addr_out, _ = UyapRedactor.redact_text(
+            "Ev Adresi : İçerenköy Mah. Karslı Ahmet Cad. No:5 Ataşehir/Istanbul",
+            registry=MaskRegistry(),
+        )
+        self.assertIn("(Ataşehir/İstanbul)", addr_out)
+
+        try:
+            import fitz
+        except ImportError:
+            fitz = None
+        if fitz is not None:
+            with tempfile.TemporaryDirectory() as tmp:
+                p = os.path.join(tmp, "soft.pdf")
+                doc = fitz.open()
+                pg = doc.new_page()
+                pg.insert_htmlbox(
+                    fitz.Rect(40, 40, 550, 750),
+                    "<p>Mahkeme evrakı içerik bilgileri aşağıda sunulmuştur.<br>TCKN: 100000\u00ad00146</p>",
+                )
+                doc.save(p)
+                doc.close()
+                ext_txt = UyapRedactor.extract_pdf_raw(p)
+                self.assertIn("10000000146", ext_txt)
+
 
 
 
