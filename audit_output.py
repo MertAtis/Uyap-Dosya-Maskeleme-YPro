@@ -35,12 +35,12 @@ from collections import Counter, defaultdict
 from typing import Dict, List, Optional, Tuple
 
 try:
-    from uyap_redactor import UyapRedactor, MaskRegistry, _tr_lower, _fold_tr
+    from uyap_redactor import UyapRedactor, MaskRegistry, _tr_lower, _fold_tr, _SpanIndex
 except ImportError:
     _script_dir = os.path.dirname(os.path.abspath(__file__))
     if _script_dir not in sys.path:
         sys.path.insert(0, _script_dir)
-    from uyap_redactor import UyapRedactor, MaskRegistry, _tr_lower, _fold_tr
+    from uyap_redactor import UyapRedactor, MaskRegistry, _tr_lower, _fold_tr, _SpanIndex
 
 TEXT_EXTS = (".md", ".txt", ".json")
 REPORT_NAME = "DAVA_DÖNÜŞÜM_VE_GÜVENLİK_RAPORU.md"
@@ -717,6 +717,7 @@ def _scan_person_leaks(
     )
     if not path_mode:
         protected_spans.extend((m.start(), m.end()) for m in re.finditer(r"https?://\S+|\S+@\S+", text))
+    protected_spans = _SpanIndex(protected_spans)
 
     for m in rx.finditer(text):
         s, e = m.start(), m.end()

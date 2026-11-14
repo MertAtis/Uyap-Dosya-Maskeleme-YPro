@@ -5,12 +5,16 @@ Tüm maskeleme, ad keşif ve denetim katmanlarının kötü/uzun girdilerde
 doğrusal zamanda (<2 sn) tamamlandığını signal.alarm(10) ile güvenceye alır.
 """
 
+import inspect
+import os
+import re
 import signal
+import tempfile
 import time
 import unittest
 
 import audit_output
-from uyap_redactor import MaskRegistry, UyapRedactor
+from uyap_redactor import MaskRegistry, UyapRedactor, _SpanIndex
 
 
 class _RedosAlarmError(TimeoutError):
@@ -198,6 +202,89 @@ class TestRedosKoruma(unittest.TestCase):
         self._run_timed("collect/baskan_blocks_3000", UyapRedactor.collect_persons_from_text, txt_blocks, MaskRegistry())
         txt_ctx = "\n".join("Katip 445566 e-imzalıdır" for _ in range(5000))
         self._run_timed("collect/ctx_lines_5000", UyapRedactor.collect_persons_from_text, txt_ctx, MaskRegistry())
+
+    def test_ad_gorunumu_bas_harf_kotu_girdiler_linear(self) -> None:
+        """Ad görünümü (bas_harf) katmanları: normalize, initial_form, redact_names, export, audit doğrusal kalır."""
+        for n in (50, 500, 5000):
+            with self.subTest(n=n):
+                self._run_timed("normalize/spaces", MaskRegistry.normalize_ad_gorunumu, " " * (n * 40) + "bas-harf")
+                self._run_timed("normalize/dashes", MaskRegistry.normalize_ad_gorunumu, "bas" + "-" * (n * 40) + "harf")
+                reg = MaskRegistry()
+                reg.add_person("Ali Veli", "DAVALI")
+                reg.add_person("Ahmet Yılmaz Kaya", "DAVACI")
+                reg.freeze_persons()
+                reg.name_display = "bas_harf"
+                evil_name = "Ali" + (" " * n * 20) + "Veli"
+                self._run_timed("initial_form/spaces", reg.initial_form, evil_name, "[DAVALI_1]")
+                self._run_timed("initial_form/long_tok", reg.initial_form, ("A" * n * 100) + " Veli", "[DAVALI_1]")
+                corpus = self._build_adversarial_corpus(n)
+                corpus += ("Ali Veli " * n) + "\n" + ("Ahmet Yılmaz'ın " * n) + "\n" + ("ALI  VELI\n" * n)
+                self._run_timed("names/bas_harf", UyapRedactor.redact_names, corpus, reg)
+                reg2 = MaskRegistry()
+                self._run_timed("collect/bas_harf", UyapRedactor.collect_persons_from_text, corpus, reg2)
+
+    def test_ad_gorunumu_export_ve_audit_uc_mod_linear(self) -> None:
+        """Uçtan uca: kötü girdili belgede 3 görünümde export + audit sınır içinde biter."""
+        n = 2000
+        body = "ANKARA 3. SULH HUKUK MAHKEMESİ\nDAVALI : Ali Veli\n" + self._build_adversarial_corpus(n)
+        body += "DAVALILAR :\n1- Ahmet YILMAZ\n" + "".join(f"{k}- Veli KARA\n" for k in range(2, 400)) + "Hâkim Zeynep ÖRNEKOĞLU 445566\n"
+        for mode in ("etiket", "bas_harf", "acik"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                src = os.path.join(tmp, "src")
+                out = os.path.join(tmp, "out")
+                os.makedirs(src)
+                with open(os.path.join(src, "k.md"), "w", encoding="utf-8") as f:
+                    f.write(body)
+                self._run_timed(
+                    f"export/{mode}", UyapRedactor.export_isolated_clean_folder, src, out, ad_gorunumu=mode
+                )
+                self._run_timed(f"audit/{mode}", audit_output.audit, src, out, ad_gorunumu=mode)
+
+    def test_hakim_oncesi_liste_ve_son_madde_n5000_linear(self) -> None:
+        """'Hâkim ...' satırından önce biten çok uzun taraf listeleri doğrusal zamanda işlenir."""
+        txt = "ANKARA 3. SULH HUKUK MAHKEMESİ\nDAVALILAR :\n" + "".join(f"{k}- Mustafa Kişi{k}\n" for k in range(1, 5000)) \
+            + "Hâkim Zeynep ÖRNEKOĞLU 445566\n"
+        self._run_timed("collect/list_before_hakim", UyapRedactor.collect_persons_from_text, txt, MaskRegistry())
+        txt2 = "DAVALILAR :\n1- Ali Veli\n" + ("Hâkim Hâkim Hâkim " * 3000) + "\n"
+        self._run_timed("collect/hakim_words", UyapRedactor.collect_persons_from_text, txt2, MaskRegistry())
+
+    def test_yeni_ad_gorunumu_kodunda_yasak_regex_kaliplari_yok(self) -> None:
+        """Yeni ad görünümü kodunda \\s, iç içe nicelik veya örtüşen alternatif kullanılmaz ([ \\t] kullanılır)."""
+        sources = {
+            "normalize_ad_gorunumu": inspect.getsource(MaskRegistry.normalize_ad_gorunumu),
+            "_tr_title_token": inspect.getsource(MaskRegistry._tr_title_token),
+            "initial_form": inspect.getsource(MaskRegistry.initial_form),
+        }
+        pat_lit = re.compile(r"""re\.\w+\(\s*r?(['"])(.*?)\1""", re.DOTALL)
+        nested_quant = re.compile(r"\([^()]*[+*][^()]*\)[+*]")
+        for name, src in sources.items():
+            for m in pat_lit.finditer(src):
+                rx = m.group(2)
+                with self.subTest(func=name, rx=rx):
+                    self.assertNotIn("\\s", rx, "regex içinde \\s yasak; [ \\t] kullanın")
+                    self.assertIsNone(nested_quant.search(rx), "iç içe nicelik yasak")
+
+    def test_span_index_dogrusal_taramayla_ayni_sonucu_verir(self) -> None:
+        """_SpanIndex örtüşme sorgusu, eski doğrusal any(...) taramasıyla birebir aynı sonucu verir."""
+        import random
+
+        rnd = random.Random(12345)
+        for _ in range(300):
+            spans = []
+            for _k in range(rnd.randint(0, 25)):
+                a = rnd.randint(0, 120)
+                spans.append((a, a + rnd.randint(1, 30)))
+            idx = _SpanIndex(spans)
+            for _q in range(60):
+                s = rnd.randint(0, 150)
+                e = s + rnd.randint(1, 20)
+                expected = any(s < pe and e > ps for ps, pe in spans)
+                self.assertEqual(idx.overlaps(s, e), expected, f"spans={spans} q=({s},{e})")
+        self.assertFalse(_SpanIndex([]).overlaps(0, 5))
+        # bitişik (dokunan) aralık örtüşme sayılmaz
+        self.assertFalse(_SpanIndex([(10, 20)]).overlaps(20, 25))
+        self.assertFalse(_SpanIndex([(10, 20)]).overlaps(5, 10))
+        self.assertTrue(_SpanIndex([(10, 20)]).overlaps(19, 25))
 
 
 if __name__ == "__main__":

@@ -70,6 +70,26 @@ _FOLD_TR_TABLE = str.maketrans({
 })
 
 
+class _SpanIndex:
+    """Korunan (başlangıç, bitiş) aralıklarında örtüşme sorgusunu O(log n) yapar (her eşleşmede liste taramayı önler)."""
+
+    __slots__ = ("_starts", "_max_end")
+
+    def __init__(self, spans: List[Tuple[int, int]]) -> None:
+        ordered = sorted(spans)
+        self._starts = [a for a, _b in ordered]
+        run = 0
+        self._max_end: List[int] = []
+        for _a, b in ordered:
+            run = b if b > run else run
+            self._max_end.append(run)
+
+    def overlaps(self, s: int, e: int) -> bool:
+        """[s, e) ile örtüşen bir aralık var mı (ps < e ve pe > s)?"""
+        i = bisect.bisect_left(self._starts, e)
+        return i > 0 and self._max_end[i - 1] > s
+
+
 def _fold_tr(x: str) -> str:
     """Türkçe-küçük harf ve aksan katlamalı normalizasyon (ı->i, ş->s, ğ->g, ü->u, ö->o, ç->c, â->a, î->i, û->u)."""
     return _tr_lower(unicodedata.normalize("NFC", x)).translate(_FOLD_TR_TABLE)
@@ -330,7 +350,7 @@ class MaskRegistry:
         """'bas-harf' / 'Baş Harf' gibi yazımları kanonik 'etiket' | 'bas_harf' | 'acik' değerine çevirir."""
         if value is None:
             return default
-        v = re.sub(r'[\s\-]+', '_', _fold_tr(str(value)).strip())
+        v = re.sub(r'[ \t\r\n\-]+', '_', _fold_tr(str(value)).strip())
         if v in cls.AD_GORUNUMLERI:
             return v
         raise ValueError(f"Geçersiz ad görünümü: {value!r} (etiket | bas_harf | acik)")
@@ -3792,6 +3812,12 @@ class UyapRedactor:
         """Av./Hâkim/Vekil vb. sıfat öbeğini denetler; 'işveren vekili' istisnasını ve yargı izin modunu uygular."""
         if not before_ctx:
             return False
+        if len(before_ctx) > 200:
+            # Unvan öbekleri sonda ve kısadır (en uzunu ~50 karakter); çok uzun satırlarda her eşleşmede tüm öneki
+            # taramak karesel olurdu. Kesim kelime sınırından yapılır ki yarım kalan sözcük unvan sayılmasın.
+            tail = before_ctx[-200:]
+            m_ws = re.search(r'[ \t\r\n]', tail)
+            before_ctx = tail[m_ws.start():] if m_ws else tail
         if re.search(r'(?:^|[\s(\["\'*:,;\-/])isveren[ \t]+vekil(?:i|leri)?[ \t]*$', _fold_tr(before_ctx)):
             return False
         m_jud = cls._JUDICIAL_PRE_TITLE_RE.search(before_ctx)
@@ -3917,6 +3943,11 @@ class UyapRedactor:
             else:
                 break
         return " ".join(toks), role
+
+    # Bir sonraki satırın başında yer alan yargı unvanı, açık taraf başlığı altındaki adı reddetme nedeni olmaz
+    _NEXT_LINE_JUDICIAL_TITLES = frozenset({
+        "hakim", "hakimi", "savci", "savcisi", "katip", "katibi", "baskan", "uye",
+    })
 
     @classmethod
     def _extend_after_ctx(cls, lines: List[str], idx: int, after_ctx: str) -> str:
@@ -4262,7 +4293,16 @@ class UyapRedactor:
                                 added_any = True
                                 continue
                 after_ctx = cls._extend_after_ctx(lines, line_idx, raw_after_ctx)
-                if _valid_person(cand, after_c=after_ctx, allow_short_last=True, allow_judicial=is_jud_r):
+                valid_after = after_ctx
+                if (
+                    not is_jud_r
+                    and not raw_after_ctx.strip()
+                    and _fold_tr((after_ctx.split() or [""])[0].strip(":.,")) in cls._NEXT_LINE_JUDICIAL_TITLES
+                ):
+                    # Açık taraf başlığı altındaki ad: sonraki satırın "Hâkim ..." ile başlaması (imza bloğu düzeni)
+                    # bu adı yargı personeli adayı yapıp reddetmemeli; yalnızca aynı satırdaki unvan sayılır.
+                    valid_after = ""
+                if _valid_person(cand, after_c=valid_after, allow_short_last=True, allow_judicial=is_jud_r):
                     registry.add_person(cand, seg_role, strong=True, tckn=_extract_tckn_hint(after_ctx))
                     added_any = True
             return added_any
@@ -4801,7 +4841,10 @@ class UyapRedactor:
         label: Optional[str] = None,
     ) -> bool:
         """Eşleşen kişi adının korunan aralıkta veya engelleyici ön/art bağlamda olup olmadığını denetler."""
-        if any(s < pe and e > ps for ps, pe in protected_spans):
+        if isinstance(protected_spans, _SpanIndex):
+            if protected_spans.overlaps(s, e):
+                return True
+        elif any(s < pe and e > ps for ps, pe in protected_spans):
             return True
         ls = text.rfind("\n", 0, s) + 1
         le = text.find("\n", e)
@@ -4852,13 +4895,14 @@ class UyapRedactor:
             (m.start(), m.end()) for m in re.finditer(r'\[ADRES_\d+\][ \t]+\([^)\r\n]+\)', text)
         )
         protected_spans.extend((m.start(), m.end()) for m in re.finditer(r'https?://\S+|\S+@\S+', text))
+        protected_spans = _SpanIndex(protected_spans)
 
         count = 0
 
         def repl(m: re.Match) -> str:
             nonlocal count
             s, e = m.start(), m.end()
-            if any(s < pe and e > ps for ps, pe in protected_spans):
+            if protected_spans.overlaps(s, e):
                 return m.group(0)
 
             matched = m.group(0)
@@ -7082,7 +7126,7 @@ class UyapRedactor:
               "değeri görmeden izleyebilir.\n")
             if ad_gorunumu == "bas_harf":
                 w("- **Taraf/tanık ad görünümü: ad + soyad baş harfi.** Taraf ve tanık adları "
-                  "`Ahmet Y. [DAVALI_1]` biçiminde yazıldı: ön ad, soyadın yalnızca baş harfi ve etiket çıktıda "
+                  "`Ad S. [DAVALI_1]` biçiminde yazıldı: ön ad, soyadın yalnızca baş harfi ve etiket çıktıda "
                   "birlikte görünür. Bu, kasıtlı bir **kısmi eşlemedir**; ön ad açıktır ve tam ad değildir. "
                   "Hâkim/savcı/kâtip adları bundan etkilenmez, her zaman yalnızca etiketle gizlenir.\n")
                 w("- TCKN, IBAN, telefon, adres, sicil ve tam ad-soyad eşleme tablosu **hiçbir yere yazılmadı**; "
