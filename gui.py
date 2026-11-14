@@ -990,14 +990,31 @@ class UyapRedactorApp(_AppBase):
                                           command=self._select_output_folder, padx=10, pady=4)
         self.btn_out_browse.grid(row=0, column=1)
 
-        # 3b. Kişi takma adları seçeneği
+        # 3b. Kişi takma adları seçenekleri
+        self.mask_judicial_names_var = tk.BooleanVar(value=True)
         self.mask_names_var = tk.BooleanVar(value=True)
         self.options_row = tk.Frame(self.out_row, bg=Theme.BG_CANVAS)
         self.options_row.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(5, 0))
         self.options_row.columnconfigure(0, weight=1)
+        self.chk_mask_judicial_names = tk.Checkbutton(
+            self.options_row,
+            text="Hâkim/savcı/kâtip adlarını gizle ([HAKİM_1], [SAVCI_1], [KÂTİP_1])",
+            variable=self.mask_judicial_names_var,
+            font=Theme.font_text(10),
+            fg=Theme.TEXT_PRIMARY,
+            bg=Theme.BG_CANVAS,
+            activebackground=Theme.BG_CANVAS,
+            activeforeground=Theme.TEXT_PRIMARY,
+            selectcolor=Theme.BG_SURFACE,
+            highlightthickness=0,
+            bd=0,
+            anchor="w",
+            justify="left",
+        )
+        self.chk_mask_judicial_names.grid(row=0, column=0, sticky="w")
         self.chk_mask_names = tk.Checkbutton(
             self.options_row,
-            text="Ad-soyadları takma adla değiştir ([DAVACI_1], [TANIK_2] …)",
+            text="Taraf/tanık ad-soyadlarını takma adla değiştir ([DAVACI_1], [TANIK_2] …)",
             variable=self.mask_names_var,
             font=Theme.font_text(10),
             fg=Theme.TEXT_PRIMARY,
@@ -1010,7 +1027,7 @@ class UyapRedactorApp(_AppBase):
             anchor="w",
             justify="left",
         )
-        self.chk_mask_names.grid(row=0, column=0, sticky="w")
+        self.chk_mask_names.grid(row=1, column=0, sticky="w", pady=(2, 0))
 
         # 4. İstatistik kartları
         self.stats_frame = tk.Frame(main, bg=Theme.BG_CANVAS)
@@ -1134,6 +1151,7 @@ class UyapRedactorApp(_AppBase):
             self.progress.grid(row=0, column=1, sticky="ew")
 
         # Seçenekler satırı
+        self.chk_mask_judicial_names.config(wraplength=380 if narrow else 0)
         self.chk_mask_names.config(wraplength=380 if narrow else 0)
 
         # İkincil metinler yalnızca geniş düzende
@@ -1317,6 +1335,7 @@ class UyapRedactorApp(_AppBase):
                     self.is_running = False
                     self.btn_run.config(state="normal", text=RUN_BUTTON_TEXT)
                     self.btn_open_folder.config(state="normal")
+                    self.chk_mask_judicial_names.config(state="normal")
                     self.chk_mask_names.config(state="normal")
                     summary_text, dest_f = payload if isinstance(payload, tuple) else (payload, self.last_dest_folder)
                     res = messagebox.askyesno(
@@ -1328,12 +1347,14 @@ class UyapRedactorApp(_AppBase):
                 elif msg_type == "no_documents":
                     self.is_running = False
                     self.btn_run.config(state="normal", text=RUN_BUTTON_TEXT)
+                    self.chk_mask_judicial_names.config(state="normal")
                     self.chk_mask_names.config(state="normal")
                     no_doc_msg, _dest_f = payload if isinstance(payload, tuple) else (payload, self.last_dest_folder)
                     messagebox.showwarning("Belge Bulunamadı", no_doc_msg)
                 elif msg_type == "error":
                     self.is_running = False
                     self.btn_run.config(state="normal", text=RUN_BUTTON_TEXT)
+                    self.chk_mask_judicial_names.config(state="normal")
                     self.chk_mask_names.config(state="normal")
                     messagebox.showerror("Hata Oluştu", payload)
                 elif msg_type == "update_available":
@@ -1390,6 +1411,7 @@ class UyapRedactorApp(_AppBase):
                     self.is_running = False
                     self.btn_run.config(state="normal", text=RUN_BUTTON_TEXT)
                     self.btn_update.config(state="normal")
+                    self.chk_mask_judicial_names.config(state="normal")
                     self.chk_mask_names.config(state="normal")
                     messagebox.showerror(
                         "Güncelleme Hatası",
@@ -1481,6 +1503,7 @@ class UyapRedactorApp(_AppBase):
         self.is_running = True
         self.btn_run.config(state="disabled", text="Güncelleniyor...")
         self.btn_update.config(state="disabled", text="⬇️ İndiriliyor...")
+        self.chk_mask_judicial_names.config(state="disabled")
         self.chk_mask_names.config(state="disabled")
         self.progress["value"] = 0
         self.lbl_status.config(text=f"v{new_ver} güncellemesi indiriliyor...")
@@ -1546,6 +1569,7 @@ class UyapRedactorApp(_AppBase):
         self.is_running = True
         self.btn_run.config(state="disabled", text="İşleniyor...")
         self.btn_open_folder.config(state="disabled")
+        self.chk_mask_judicial_names.config(state="disabled")
         self.chk_mask_names.config(state="disabled")
         self.progress["value"] = 0
 
@@ -1560,16 +1584,24 @@ class UyapRedactorApp(_AppBase):
         self.card_files.update_value("0")
 
         mask_names = bool(self.mask_names_var.get())
+        mask_judicial_names = bool(self.mask_judicial_names_var.get())
         thread = threading.Thread(
             target=self._worker,
-            args=(srcs[0] if len(srcs) == 1 and os.path.isdir(srcs[0]) else srcs, out_parent, mask_names),
+            args=(
+                srcs[0] if len(srcs) == 1 and os.path.isdir(srcs[0]) else srcs,
+                out_parent,
+                mask_names,
+                mask_judicial_names,
+            ),
             daemon=True,
         )
         thread.start()
 
-    def _worker(self, folder, out_parent=None, mask_names=None):
+    def _worker(self, folder, out_parent=None, mask_names=None, mask_judicial_names=None):
         if mask_names is None:
             mask_names = bool(self.mask_names_var.get())
+        if mask_judicial_names is None:
+            mask_judicial_names = bool(self.mask_judicial_names_var.get())
         start_time = time.time()
         stage_root = None
         dest_arg = None
@@ -1624,17 +1656,31 @@ class UyapRedactorApp(_AppBase):
                 dest_arg = os.path.join(out_parent, name)
             if dest_arg:
                 dest_folder, final_stats = UyapRedactor.export_isolated_clean_folder(
-                    folder, dest_arg, progress_cb=progress_cb, mask_names=mask_names)
+                    folder,
+                    dest_arg,
+                    progress_cb=progress_cb,
+                    mask_names=mask_names,
+                    mask_judicial_names=mask_judicial_names,
+                )
             elif stage_root:
                 # Hazırlık klasörü geçici olduğundan varsayılan çıktı ilk kaynağın yanına yazılır
                 first = self.sources[0] if self.sources else folder
                 dest_arg = os.path.join(os.path.dirname(os.path.abspath(first)),
                                         os.path.basename(folder) + " (Maskelenmis AI)")
                 dest_folder, final_stats = UyapRedactor.export_isolated_clean_folder(
-                    folder, dest_arg, progress_cb=progress_cb, mask_names=mask_names)
+                    folder,
+                    dest_arg,
+                    progress_cb=progress_cb,
+                    mask_names=mask_names,
+                    mask_judicial_names=mask_judicial_names,
+                )
             else:
                 dest_folder, final_stats = UyapRedactor.export_isolated_clean_folder(
-                    folder, progress_cb=progress_cb, mask_names=mask_names)
+                    folder,
+                    progress_cb=progress_cb,
+                    mask_names=mask_names,
+                    mask_judicial_names=mask_judicial_names,
+                )
             self.last_dest_folder = dest_folder
             elapsed = time.time() - start_time
 

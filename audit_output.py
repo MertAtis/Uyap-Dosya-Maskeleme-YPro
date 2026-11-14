@@ -317,14 +317,6 @@ ADDR_NUM_TOKENS = {
     ),
 }
 ADDR_TOKENS = {**ADDR_LOC_TOKENS, **ADDR_NUM_TOKENS}
-INSTITUTION_RE = re.compile(
-    r'(?i)Bankas[ıi]|Banka\b|Genel\s+Müdürlü|Müdürlü|Adliye|Mahkeme|Noter|Baro|Başkanlığ|'
-    r'Başsavcılı|Savcılığ|PTT|Belediye|A\.?\s?Ş\.?|Ltd|Şirket|Şube|Valili|Kaymakaml|Bakanlı|'
-    r'Kurumu|Hastane|Üniversite|Odası|Daire\s+Başkan|SGK|Emniyet|Karakol|Jandarma|İcra\s+Dairesi|'
-    r'Vergi\s+Dairesi|Tapu|Nüfus\s+Müdürlü|Hukuk\s+Bürosu|Avukatl[ıi]k\s+Ortakl|'
-    # iş yeri yapıları (redaktör de bunları kurum/iş yeri sayar: _ADDR_INST_RE ile aynı küme)
-    r'\bPlaza\b|\bTowers?\b|\bCenter\b|İş\s+Merkezi|Katılım\s+Bankas|Sigorta|Holding'
-)
 
 LINK_RE = re.compile(r'!?\[([^\]\n]*)\]\((?:<[^>\n]+>|[^)\n]+)\)')
 # "evrak no 4521", "dosya no: 12", "cilt no: 3" gibi belge/kayıt numarası ifadeleri kapı numarası değildir
@@ -332,14 +324,6 @@ DOC_NO_RE = re.compile(
     r'(?i)\b(?:evrak|dosya|esas|karar|say[ıi]|dava|belge|protokol|takip|talimat|soruşturma|hazırlık|'
     r'poliçe|acente|cilt|aile\s*s[ıi]ra|birey\s*s[ıi]ra|s[ıi]ra|hane|sicil|vergi|kimlik|pasaport|'
     r'ruhsat|plaka|fatura|makbuz|yevmiye|tutanak|rapor|sayfa|madde)\s+no(?:\s*[:.]?\s*\d+)?\b'
-)
-
-
-PERSON_CUE_RE = re.compile(
-    r'(?i)MERN[İI]S|\badresini(?:n)?\b|yükümlü|\bikamet|\boturur|\bisimli\b|'
-    r'\bküçü(?:k|ğün)\b|\bdaval[ıi]\b|\bdavac[ıi]\b|\bsan[ıi]k\b|\bşüpheli\b|'
-    r'\bmüşteki\b|\bmağdur\b|\btan[ıi]k\b|\bborçlu\b|\balacakl[ıi]\b|'
-    r'\bk[ıi]s[ıi]tl[ıi]\b|\bvasi(?:si)?\b|\bkayy[ıi]m\b'
 )
 
 TEMPLATE_ADDR_RE = re.compile(r'(?i)\(?\s*caddesi\s*/\s*sokağı\s*\)?')
@@ -351,38 +335,6 @@ COURT_ESAS_RE = re.compile(
     r'\b(?:19|20)\d{2}\s*/\s*\d+\s*(?:E\b|E\.|Esas|K\.|Karar)'
 )
 ADDR_PREFIX_RE = re.compile(r'([A-ZÇĞİÖŞÜ][a-zçğıöşü]+|[A-ZÇĞİÖŞÜ]{3,})([ \t]*\r?\n[ \t]*|[ \t]+)\[ADRES_\d+\]')
-
-OLAY_RE = re.compile(
-    r'(?i)suçun\s+yeri|olay\s+yeri|kaza\s+yeri|keşif\s+yeri|(?:suç|olay|kaza|keşif)\s+mahalli|'
-    r'meydana\s+gel|\bönünde\b|kavşağ|sıralarında|'
-    r'trafik\s+kazas|Yer\s*\(Cadde|'
-    r'\bopr\s*:|\b(?:operat[öo]r|baz(?:\s+istasyon\w*)?|BTS|CGI|hücre\w*|LAC)\b|'
-    r'\b\d{2}\.\d{4,}\s*[-,;]?\s*\d{2}\.\d{4,}\b'
-)
-
-
-_KUNYE_RE = re.compile(
-    r'(?i)vergi|\bVKN\b|V\.\s?D\.|mersis|ticaret\s+sicil|\btel\b|telefon|faks|\bKEP\b|e-?posta|web'
-)
-_PERSON_ID_RE = re.compile(r'(?i)T\.?\s?C\.?\s*(?:Kimlik|No)|TCKN|\[TCKN_')
-
-
-def _company_block_above(lines: List[str], i: int, max_up: int = 6) -> bool:
-    """Adres satırının üstünde yalnız şirket künyesi satırları ve en üstte kurum/şirket adı varsa True
-    (redaktördeki 'şirket taraf bloğu' kuralıyla uyumlu; araya kişi kimliği girerse False)."""
-    seen = 0
-    for j in range(i - 1, -1, -1):
-        s = lines[j].strip()
-        if not s:
-            continue
-        seen += 1
-        if seen > max_up or _PERSON_ID_RE.search(s):
-            return False
-        if INSTITUTION_RE.search(s):
-            return True
-        if not _KUNYE_RE.search(s):
-            return False
-    return False
 
 
 def address_type_count(line: str) -> int:
@@ -405,29 +357,8 @@ def _is_nufus_or_court_line(line: str) -> bool:
 
 
 def _classify_address_line(lines: List[str], i: int, scan_line: str) -> str:
-    """Eşleşen adres satırını redaktörle tutarlı biçimde 'olay', 'kurum' veya 'kisi' sayar."""
-    if len(scan_line) > 200:
-        m_loc = next((m for r in ADDR_LOC_TOKENS.values() for m in [r.search(scan_line)] if m), None)
-        if m_loc:
-            win = scan_line[max(0, m_loc.start() - 80):min(len(scan_line), m_loc.end() + 80)]
-            if OLAY_RE.search(win):
-                return "olay"
-            if PERSON_CUE_RE.search(win):
-                return "kisi"
-            if INSTITUTION_RE.search(win):
-                return "kurum"
-    prev2 = [lines[j] for j in range(i - 1, max(-1, i - 5), -1) if lines[j].strip()][:2]
-    next_line = next((lines[j] for j in range(i + 1, min(len(lines), i + 3)) if lines[j].strip()), "")
-    near = "\n".join(prev2 + [next_line])
-    if OLAY_RE.search(scan_line) or (not PERSON_CUE_RE.search(scan_line) and OLAY_RE.search("\n".join(lines[max(0, i - 1): i]))):
-        return "olay"
-    if PERSON_CUE_RE.search(scan_line):
-        return "kisi"
-    if INSTITUTION_RE.search(scan_line) or INSTITUTION_RE.search(near):
-        return "kurum"
-    if _company_block_above(lines, i):
-        return "kurum"
-    return "kisi"
+    """Eşleşen adres satırını redaktördeki tek kaynaklı kural ile ('olay', 'kurum', 'kisi') sınıflandırır."""
+    return UyapRedactor.classify_address_line(lines, i, scan_line)
 
 
 def scan_leaks(rel: str, text: str, known_tckns, known_ibans, out: Dict, check_addr: bool = True):
@@ -754,28 +685,11 @@ def _is_protected_person_match(
     e: int,
     protected_spans: List[Tuple[int, int]],
     path_mode: bool = False,
+    label: Optional[str] = None,
 ) -> bool:
-    if any(s < pe and e > ps for ps, pe in protected_spans):
-        return True
-    ls = text.rfind("\n", 0, s) + 1
-    le = text.find("\n", e)
-    if le == -1:
-        le = len(text)
-    before_line = text[ls:s]
-    after_line = text[e:le]
-    if UyapRedactor._has_blocking_pre_title(before_line):
-        return True
-    sep_head = r"[ \t_.\-]+" if path_mode else r"[ \t]+"
-    if re.match(
-        rf"^{sep_head}(?:A\.?[ \t]*Ş\.?|Ltd\.?(?:[ \t]*Şti\.?)?|Şti\.?|A\.?[ \t]*O\.?|Koop\.?)",
-        after_line,
-        re.IGNORECASE,
-    ):
-        return True
-    m_aw = re.match(rf"^{sep_head}([A-Za-zÇĞİÖŞÜçğıöşüâîûÂÎÛ]+)", after_line)
-    if m_aw and _fold_tr(m_aw.group(1)) in UyapRedactor._MASK_AFTER_PLACE_CORP_WORDS:
-        return True
-    return False
+    return UyapRedactor._is_person_match_blocked(
+        text, s, e, protected_spans, path_mode=path_mode, label=label
+    )
 
 
 def _scan_person_leaks(
@@ -800,8 +714,6 @@ def _scan_person_leaks(
 
     for m in rx.finditer(text):
         s, e = m.start(), m.end()
-        if _is_protected_person_match(text, s, e, protected_spans, path_mode=path_mode):
-            continue
         matched = m.group(0)
         if path_mode:
             parts = tuple(p for p in re.split(r"[ \t_.\-]+", _fold_tr(matched)) if p)
@@ -812,6 +724,8 @@ def _scan_person_leaks(
         label = person_registry._variant_to_label.get(parts)
         if not label:
             continue
+        if _is_protected_person_match(text, s, e, protected_spans, path_mode=path_mode, label=label):
+            continue
         out_leaks.append((rel_label, lineno, label))
         out_details.append((rel_label, lineno, label, matched))
 
@@ -819,7 +733,7 @@ def _scan_person_leaks(
 # ---------------------------------------------------------------------------
 # Ana denetim
 # ---------------------------------------------------------------------------
-def audit(src: str, out: str, ocr_cache: Optional[str] = None) -> Dict:
+def audit(src: str, out: str, ocr_cache: Optional[str] = None, mask_names: bool = True) -> Dict:
     src = os.path.abspath(src)
     out = os.path.abspath(out)
     leaks_dict: Dict = defaultdict(list)
@@ -936,6 +850,8 @@ def audit(src: str, out: str, ocr_cache: Optional[str] = None) -> Dict:
 
         if prescan_texts:
             UyapRedactor._prune_corp_candidates(prescan_texts, person_registry)
+        if not mask_names:
+            person_registry.keep_only_roles(MaskRegistry.JUDICIAL_ROLES)
         person_registry.freeze_persons()
         person_text_rx, person_path_rx = _build_audit_person_matchers(person_registry)
 
@@ -1183,8 +1099,20 @@ def main(argv=None) -> int:
     ap.add_argument("output")
     ap.add_argument("--ocr-cache", default=None)
     ap.add_argument("--details", default=None, help="Ham değerli ayrıntı dosyası (paylaşmayın)")
+    ap.add_argument(
+        "--taraf-isimleri-acik",
+        action="store_true",
+        default=False,
+        help="Taraf/tanık adları bilerek açık bırakılmış çıktıyı denetle (yalnızca yargı adları sızıntı sayılır)",
+    )
+    ap.add_argument(
+        "--taraf-isimleri",
+        action="store_true",
+        default=False,
+        help="Eski bayrak (geriye dönük uyumluluk): artık varsayılan olduğu için etkisizdir",
+    )
     a = ap.parse_args(argv)
-    res = audit(a.source, a.output, a.ocr_cache)
+    res = audit(a.source, a.output, a.ocr_cache, mask_names=not bool(a.taraf_isimleri_acik))
     lines, det, leak = summarize(res)
     print("\n".join(lines))
     if a.details:

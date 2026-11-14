@@ -609,6 +609,72 @@ class AuditCase(unittest.TestCase):
             # Murat Kılıç (>=2 satır) sızıntı olarak yakalanır; tek satır Hasan Boz yakalanmaz
             self.assertEqual(leaked_labels, ["[TANIK_1]"])
 
+    def test_varsayilan_audit_taraf_ve_yargi_sizintisini_yakalar_ve_acik_mod(self):
+        """Varsayılan modda hem taraf hem yargı adı sızıntısı yakalanır; --taraf-isimleri-acik ile taraf açık kalır."""
+        src, out_partial = self._case(
+            {
+                "tutanak.md": (
+                    "DAVACI : Ahmet Çelik\n"
+                    "VEKİLİ : Av. Kerem Aksoy\n"
+                    "Bilirkişi Hasan Boz rapor sundu.\n"
+                    "HÂKİM : Ayşe Yılmaz (112233)\n"
+                    "CUMHURİYET SAVCISI : Mehmet Demir (223344)\n"
+                )
+            },
+            {
+                "tutanak.md": (
+                    "DAVACI : Ahmet Çelik\n"
+                    "VEKİLİ : Av. Kerem Aksoy\n"
+                    "Bilirkişi Hasan Boz rapor sundu.\n"
+                    "HÂKİM : Ayşe Yılmaz ([SİCİL_1])\n"
+                    "CUMHURİYET SAVCISI : [SAVCI_1] ([SİCİL_2])\n"
+                )
+            },
+        )
+        # Varsayılan audit hem taraf hem yargı ad sızıntısını yakalar
+        res_def = A.audit(src, out_partial)
+        leaked_def = {x[2] for x in res_def["leaks"]["person_name"]}
+        self.assertEqual(leaked_def, {"[HAKİM_1]", "[DAVACI_1]"})
+        self.assertTrue(A.summarize(res_def)[2])
+        self.assertEqual(A.main([src, out_partial]), 1)
+        # Geriye uyumlu etkisiz --taraf-isimleri de aynı varsayılan davranışı korur
+        self.assertEqual(A.main([src, out_partial, "--taraf-isimleri"]), 1)
+
+        # --taraf-isimleri-acik / mask_names=False yalnızca yargı sızıntısını yakalar
+        res_open = A.audit(src, out_partial, mask_names=False)
+        self.assertEqual([x[2] for x in res_open["leaks"]["person_name"]], ["[HAKİM_1]"])
+        self.assertTrue(A.summarize(res_open)[2])
+        self.assertEqual(A.main([src, out_partial, "--taraf-isimleri-acik"]), 1)
+
+        # Yargı adları maskeli + taraf adı açık -> --taraf-isimleri-acik ile 0 sızıntı, varsayılanda 1
+        _, out_party_open = self._case(
+            {"tutanak.md": "DAVACI : Ahmet Çelik\nHÂKİM : Ayşe Yılmaz (112233)\n"},
+            {"tutanak.md": "DAVACI : Ahmet Çelik\nHÂKİM : [HAKİM_1] ([SİCİL_1])\n"},
+        )
+        res_po_open = A.audit(src, out_party_open, mask_names=False)
+        self.assertEqual(res_po_open["leaks"]["person_name"], [])
+        self.assertFalse(A.summarize(res_po_open)[2])
+        self.assertEqual(A.main([src, out_party_open, "--taraf-isimleri-acik"]), 0)
+        self.assertEqual(A.main([src, out_party_open]), 1)
+
+        # Taraf + yargı adları maskeli, avukat/bilirkişi açık -> varsayılan modda 0 sızıntı, CLI çıkışı 0
+        _, out_clean = self._case(
+            {},
+            {
+                "tutanak.md": (
+                    "DAVACI : [DAVACI_1]\n"
+                    "VEKİLİ : Av. Kerem Aksoy\n"
+                    "Bilirkişi Hasan Boz rapor sundu.\n"
+                    "HÂKİM : [HAKİM_1] ([SİCİL_1])\n"
+                    "CUMHURİYET SAVCISI : [SAVCI_1] ([SİCİL_2])\n"
+                )
+            },
+        )
+        res_clean = A.audit(src, out_clean)
+        self.assertEqual(res_clean["leaks"]["person_name"], [])
+        self.assertFalse(A.summarize(res_clean)[2])
+        self.assertEqual(A.main([src, out_clean]), 0)
+
     def test_mahal_and_kesif_yeri_classified_as_olay(self):
         src, out = self._case(
             {"tutanak.md": "Suç mahalli: Barbaros Mah. 10. Sok. No:5\nKeşif yeri: Çamlıca Mah. Lale Cad. No:8\n"},

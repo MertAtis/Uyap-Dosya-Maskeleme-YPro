@@ -84,7 +84,7 @@ def _tr_fold(s: str) -> str:
 
 _TAG_RE = re.compile(
     r"\[(?:TCKN|IBAN|KART|HESAP|TEL|SERİ_NO|MRZ|SİCİL|ADRES|"
-    r"DAVACI|DAVALI|MÜŞTEKİ|ŞÜPHELİ|SANIK|KATILAN|MAĞDUR|TANIK|ALACAKLI|BORÇLU|KİŞİ)_\d+\]"
+    r"DAVACI|DAVALI|MÜŞTEKİ|ŞÜPHELİ|SANIK|KATILAN|MAĞDUR|TANIK|ALACAKLI|BORÇLU|ASÇ|HAKİM|SAVCI|KÂTİP|KİŞİ)_\d+\]"
 )
 
 
@@ -376,11 +376,10 @@ Zabıt Kâtibi Onur Yüksel
             iban_davaci, iban_davaci_grp,
             "Papatya Sokak No: 18/4", "Ihlamur Caddesi No: 42 Daire: 7", "Papatya Sokak No: 20/2",
             "Zeynep Aktaş", "Burak Aktaş", "Elif Demir", "Mert Can Aktaş",
-            "Elif_Demir",
+            "Elif_Demir", "Nermin Güler", "Onur Yüksel",
         ],
         korunan=[
             "Av. Selin Korkmaz", "Av. Tarık Şahin",
-            "Hâkim Nermin Güler", "Zabıt Kâtibi Onur Yüksel",
             "Sosyal Çalışmacı Hülya Arslan",
             "Ankara 4. Aile Mahkemesi", "Çankaya Sosyal Hizmet Merkezi",
             "Baba adı: Hasan", "Anne adı: Fatma", "14.05.1988",
@@ -392,6 +391,8 @@ Zabıt Kâtibi Onur Yüksel
             "Burak Aktaş": "DAVALI",
             "Elif Demir": "TANIK",
             "Mert Can Aktaş": "KİŞİ",
+            "Nermin Güler": "HAKİM",
+            "Onur Yüksel": "KÂTİP",
         },
         ayni_etiket=[
             [tc_davaci],
@@ -1110,12 +1111,9 @@ UYAP Evrak No: 2025-311-K
             "0530 112 33 44", "0531 445 66 77", "0537 889 10 20",
             "Çınarlı Sokak No: 22/6", "Liman Caddesi No: 5/1",
             "Cemre Doğan", "Volkan Tekin", "Yusuf Karahan",
-            "Volkan_Tekin",
+            "Volkan_Tekin", "Ayşe Nur Sönmez", "Mehmet Ali Polat", "Berkay Koç",
         ],
         korunan=[
-            "Cumhuriyet Savcısı Mehmet Ali Polat",
-            "Hâkim Ayşe Nur Sönmez",
-            "Zabıt Kâtibi Berkay Koç",
             "Polis Memuru İbrahim Çelik",
             "Dr. Ece Vural",
             "Av. Caner Akın",
@@ -1128,6 +1126,9 @@ UYAP Evrak No: 2025-311-K
             "Cemre Doğan": "MÜŞTEKİ",
             "Volkan Tekin": "ŞÜPHELİ",
             "Yusuf Karahan": "TANIK",
+            "Ayşe Nur Sönmez": "HAKİM",
+            "Mehmet Ali Polat": "SAVCI",
+            "Berkay Koç": "KÂTİP",
         },
         ayni_etiket=[
             ["Volkan Tekin"],
@@ -1356,6 +1357,7 @@ Cumhuriyet Savcısı Faruk Öztürk
             "Nilüfer Caddesi No: 8/3", "Cumhuriyet Sokak No: 16/4",
             "Lale Sokak No: 3/1", "Fidan Sokak No: 29/7",
             "Kadir Şen", "Oğuzhan Bal", "Derya Yavuz", "Emrah Güneş", "Tuğba Korkut", "İsmail Erdem",
+            "Faruk Öztürk",
         ],
         korunan=[
             "Türkiye Garanti Bankası A.Ş. Etiler Şubesi",
@@ -1363,7 +1365,6 @@ Cumhuriyet Savcısı Faruk Öztürk
             "MASAK",
             "Bursa 3. Ağır Ceza Mahkemesi",
             "TCK m. 158/1-f",
-            "Cumhuriyet Savcısı Faruk Öztürk",
             "Av. Pelin Soylu",
             "42.500,00 TL",
             "18.750,00 TL",
@@ -1376,6 +1377,7 @@ Cumhuriyet Savcısı Faruk Öztürk
             "Emrah Güneş": "MAĞDUR",
             "Tuğba Korkut": "MAĞDUR",
             "İsmail Erdem": "MAĞDUR",
+            "Faruk Öztürk": "SAVCI",
         },
         ayni_etiket=[
             [iban1],
@@ -2021,11 +2023,12 @@ UYAP Belge Kodu: MUZ-2025-904
             "Aydınlıkevler Sokak No: 12/8",
             "İsmet Karabulut", "Ahmet Karabulut", "Mehmet Karabulut",
             "Ayşe Karabulut", "Fatma Karabulut", "Hasan Karabulut",
+            "Seda Kaya",
         ],
         korunan=[
             "Baba adı: İsmet", "Anne adı: Hatice", "03.07.1965", "Sivas / Merkez",
             "Ankara 5. Sulh Hukuk Mahkemesi", "Av. Leyla Doğan", "TMK m. 495",
-            "Hâkim Kemal Güner", "Zabıt Kâtibi Seda Kaya",
+            "Hâkim Kemal Güner",
         ],
         kisiler={
             "Ahmet Karabulut": "DAVACI",
@@ -2034,6 +2037,7 @@ UYAP Belge Kodu: MUZ-2025-904
             "Fatma Karabulut": "DAVALI",
             "Hasan Karabulut": "DAVALI",
             "İsmet Karabulut": "KİŞİ",
+            "Seda Kaya": "KÂTİP",
         },
         ayni_etiket=[
             [tc_ahmet],
@@ -2458,7 +2462,7 @@ UYAP Onay Kodu: KAR-2025-701
             "04_Gerekceli_Karar.md": karar,
             "uyap-project.json": project_json,
         },
-        gizli=[iban_sirket],
+        gizli=[iban_sirket, "Orhan Çetin", "Sibel Kaya", "Tuna Aksoy"],
         korunan=[
             "Atlas Makina Sanayi ve Ticaret A.Ş.",
             "Bosphorus Metal İthalat İhracat Ltd. Şti.",
@@ -2469,11 +2473,15 @@ UYAP Onay Kodu: KAR-2025-701
             "Organize Sanayi Sitesi 3. Blok No: 12 Tuzla/İstanbul",
             "Liman Yolu Caddesi No: 45 Gebze/Kocaeli",
             "Av. Berkay Demirci", "Av. Melis Kılıç",
-            "Başkan Hâkim Orhan Çetin", "Bilirkişi YMM Kerem Savaş",
+            "Bilirkişi YMM Kerem Savaş",
             "İstanbul Anadolu 4. Asliye Ticaret Mahkemesi",
             "1.240.000,00 TL", "TTK m. 21",
         ],
-        kisiler={},
+        kisiler={
+            "Orhan Çetin": "HAKİM",
+            "Sibel Kaya": "HAKİM",
+            "Tuna Aksoy": "KÂTİP",
+        },
         ayni_etiket=[[iban_sirket]],
     )
 
@@ -2684,6 +2692,7 @@ Tebliğ Şerhi: Taraflara elektronik tebligat ile gönderilmiştir.
             "0534 210 98 76",
             "Karanfil Sokak No: 25/8",
             "Turgut Eren", "Turgut_Eren",
+            "Sevilay Aksoy", "Engin Kaya", "Deniz Özkan", "Murat Yılmaz",
         ],
         korunan=[
             "T.C. Sağlık Bakanlığı",
@@ -2692,13 +2701,15 @@ Tebliğ Şerhi: Taraflara elektronik tebligat ile gönderilmiştir.
             "Ankara 9. İdare Mahkemesi",
             "2577 sayılı İYUK",
             "657 sayılı DMK m. 125",
-            "Başkan Hâkim Sevilay Aksoy",
-            "Üye Hâkim Engin Kaya",
             "Av. Furkan Yılmaz",
             "0312 555 20 00",
         ],
         kisiler={
             "Turgut Eren": "DAVACI",
+            "Sevilay Aksoy": "HAKİM",
+            "Engin Kaya": "HAKİM",
+            "Deniz Özkan": "HAKİM",
+            "Murat Yılmaz": "KÂTİP",
         },
         ayni_etiket=[
             [tc_davaci],
@@ -2921,14 +2932,13 @@ UYAP Duruşma Hazırlık Kaydı: 2025/610-TNS
             "Osman Şimşek", "ŞİMŞEK Osman",
             "Zübeyde Aslan", "ASLAN Zübeyde",
             "Hüseyin Yücel",
+            "Gülten Şahin", "Emine Tunç",
         ],
         korunan=[
             "Antalya 3. Asliye Hukuk Mahkemesi",
             "412 Ada 7 Parsel",
             "Av. Zafer Öztürk",
             "Av. Deniz Yılmaz",
-            "Hâkim Gülten Şahin",
-            "Zabıt Kâtibi Emine Tunç",
             "Muratpaşa Tapu Müdürlüğü",
             "Bayındır Mahallesi Gazi Bulvarı No: 64 Muratpaşa/Antalya",
         ],
@@ -2944,6 +2954,8 @@ UYAP Duruşma Hazırlık Kaydı: 2025/610-TNS
             "Osman Şimşek": "DAVALI",
             "Zübeyde Aslan": "DAVALI",
             "Hüseyin Yücel": "TANIK",
+            "Gülten Şahin": "HAKİM",
+            "Emine Tunç": "KÂTİP",
         },
         ayni_etiket=[
             ["Fatma Zehra Korkmaz", "KORKMAZ Fatma Zehra"],
@@ -3104,11 +3116,10 @@ Davalı: Gizem Şahin
             "Sedef Cad. No: 9/4",
             "Hakan Yılmaz", "Hakan Yilmaz", "HAKAN YILMAZ", "HAKAN\u00a0YILMAZ",
             "Gizem Şahin", "GIZEM SAHIN",
+            "Kemalettin Kaya", "Yasemin Çelik",
         ],
         korunan=[
             "Av. Deniz Aksoy",
-            "Hâkim Kemalettin Kaya",
-            "Zabıt Kâtibi Yasemin Çelik",
             "Ankara 2. Asliye Hukuk Mahkemesi",
             "2025/77 E.",
             "55.000,00 TL",
@@ -3116,6 +3127,8 @@ Davalı: Gizem Şahin
         kisiler={
             "Hakan Yılmaz": "DAVACI",
             "Gizem Şahin": "DAVALI",
+            "Kemalettin Kaya": "HAKİM",
+            "Yasemin Çelik": "KÂTİP",
         },
         ayni_etiket=[
             ["0 (532) 111-22-33", "+90 532 111 22 33", "05321112233"],
@@ -3320,6 +3333,7 @@ Tebliğ Tarihi: 20.05.2025
             "0532 999 00 11",
             "Zambak Sokak No: 4/2",
             "Ömer Faruk Akın", "Leyla Çınar",
+            "Nuran Yıldırım", "Ömer Çetin",
         ],
         korunan=[
             "Mehmet Akif Ersoy Caddesi",
@@ -3339,11 +3353,12 @@ Tebliğ Tarihi: 20.05.2025
             "İstiklal Caddesi ile Sakarya Sokak kesişimi",
             "Av. Cemalettin Aydın",
             "Av. Sinan Yıldız",
-            "Hâkim Nuran Yıldırım",
         ],
         kisiler={
             "Ömer Faruk Akın": "DAVACI",
             "Leyla Çınar": "TANIK",
+            "Nuran Yıldırım": "HAKİM",
+            "Ömer Çetin": "KÂTİP",
         },
         ayni_etiket=[
             [tc_davaci],
@@ -3557,6 +3572,7 @@ B. BANKA VE ŞİRKET TESPİTLERİ
             "Berkay Alp Sarı", "Berkay-Alp-Sari", "Berkay-Sari", "SARI Berkay Alp",
             "Kerim Yılmaz",
             "Arda Efe Sarı",
+            "Orhan Demirci",
         ],
         korunan=[
             "Yıldız Marmara İhracat Pazarlama Ltd. Şti.",
@@ -3565,7 +3581,6 @@ B. BANKA VE ŞİRKET TESPİTLERİ
             "2025/8841",
             "Av. Tarık Gürsoy",
             "Av. Beste Karaca",
-            "Orhan Demirci",
             "Atatürk Bulvarı",
         ],
         kisiler={
@@ -3573,6 +3588,7 @@ B. BANKA VE ŞİRKET TESPİTLERİ
             "Berkay Alp Sarı": "ŞÜPHELİ",
             "Kerim Yılmaz": "KİŞİ",
             "Arda Efe Sarı": "MAĞDUR",
+            "Orhan Demirci": "SAVCI",
         },
         ayni_etiket=[
             ["88341209"],
@@ -3871,6 +3887,7 @@ Davacı Vekili Av. Ayşe Kaya söz aldı. Davalı Mehmet Demir Bey duruşmaya ge
             "Yılmaz Ahmet",
             "Demir Mehmet",
             "Ali Veli Kaya",
+            "Murat Öz",
         ],
         korunan=[
             "Demir İnşaat Ltd. Şti.",
@@ -3894,6 +3911,7 @@ Davacı Vekili Av. Ayşe Kaya söz aldı. Davalı Mehmet Demir Bey duruşmaya ge
             "Fatma Şahin": "TANIK",
             "Ali Veli Kaya": "KİŞİ",
             "Kemal Aydın": "KİŞİ",
+            "Murat Öz": "HAKİM",
         },
         ayni_etiket=[
             ["Ahmet Can Yılmaz", "AHMET CAN YILMAZ", "AHMET YILMAZ", "A. Yılmaz", "Yılmaz Ahmet"],
@@ -4062,12 +4080,12 @@ Demir'in imzası alındı."""
             "Ahmet Can Yılmaz",
             "Mehmet Demir",
             "Fatma Şahin",
+            "Murat Öz",
         ],
         korunan=[
             "Demir Yapı İnşaat Ltd. Şti.",
             "Ahmet Can Yılmaz Caddesi",
             "Av. Ayşe Kaya",
-            "Hâkim Murat Öz",
             "2025/712",
             "45.000,00 TL",
         ],
@@ -4075,6 +4093,7 @@ Demir'in imzası alındı."""
             "Ahmet Can Yılmaz": "DAVACI",
             "Mehmet Demir": "DAVALI",
             "Fatma Şahin": "TANIK",
+            "Murat Öz": "HAKİM",
         },
         ayni_etiket=[
             [
@@ -4563,6 +4582,7 @@ def _test_17_tam_beklenti(self: _SenaryoTestTabani) -> None:
         "[DAVALI_1]": "Mehmet Demir",
         "[DAVALI_2]": "Zeynep Demir",
         "[TANIK_1]": "Fatma Şahin",
+        "[HAKİM_1]": "Murat Öz",
         "[KİŞİ_1]": "Ali Veli Kaya",
         "[KİŞİ_2]": "Kemal Aydın",
     }
@@ -4657,9 +4677,9 @@ TestSenaryo_18_aile_yakinlar.test_18_aile_yakinlar_tam_beklenti = _test_18_tam_b
 
 
 class TestTumSenaryolarAuditIsimKontrolu(unittest.TestCase):
-    """Tüm sentetik senaryoların çıktısında audit_output person_name sızıntısı 0 olmalı."""
+    """Tüm sentetik senaryoların her iki moddaki çıktısında audit_output sızıntısı 0 olmalı."""
 
-    def test_tum_senaryolar_audit_person_name_sifir(self):
+    def test_tum_senaryolar_varsayilan_mod_audit_sifir(self):
         import audit_output as A
 
         for sen in SENARYOLAR:
@@ -4676,8 +4696,78 @@ class TestTumSenaryolarAuditIsimKontrolu(unittest.TestCase):
                 self.assertEqual(
                     res["leaks"]["person_name"],
                     [],
-                    f"[{sen.ad}] audit_output kişi adı sızıntısı buldu: {res['leaks']['person_name']}",
+                    f"[{sen.ad}] varsayılan audit kişi adı sızıntısı buldu: {res['leaks']['person_name']}",
                 )
+                self.assertFalse(
+                    A.summarize(res)[2],
+                    f"[{sen.ad}] varsayılan audit genel sızıntı bildirdi: {res['leaks']}",
+                )
+
+    def test_tum_senaryolar_taraf_acik_mod_yargi_sizinti_ve_iki_mod_sicil_kapsami(self):
+        """
+        Tüm senaryolar hem varsayılan (mask_names=True, mask_judicial_names=True) hem de
+        --taraf-isimlerini-koru (mask_names=False, mask_judicial_names=True) modunda dışa
+        aktarılıp uyumlu audit ile denetlendiğinde 0 sızıntı vermeli; yargı unvanı + [SİCİL_]
+        satırlarının aynı/komşu satırında [HAKİM_/[SAVCI_/[KÂTİP_ etiketi bulunmalıdır.
+        """
+        import audit_output as A
+
+        jud_title_rx = re.compile(
+            r"(?i)\b(?:h[aâ]kim\w*|ba[sş]kan\w*|üye\b|(?:cumhuriyet\s+)?(?:ba[sş])?savc[ıi]\w*|zab[ıi]t\s+k[aâ]tib\w*|k[aâ]ti[bp]\w*)"
+        )
+        jud_tag_rx = re.compile(r"\[(?:HAKİM|SAVCI|KÂTİP)_\d+\]")
+        sicil_tag_rx = re.compile(r"\[SİCİL_\d+\]")
+        missed_cases = []
+
+        for sen in SENARYOLAR:
+            for mask_names_flag in (True, False):
+                with tempfile.TemporaryDirectory(prefix=f"uyap_mode_{mask_names_flag}_{sen.ad}_") as tmp:
+                    src = os.path.join(tmp, "src")
+                    dest = os.path.join(tmp, "dest")
+                    for rel_path, content in sen.dosyalar.items():
+                        fp = os.path.join(src, rel_path)
+                        os.makedirs(os.path.dirname(fp), exist_ok=True)
+                        with open(fp, "w", encoding="utf-8") as wf:
+                            wf.write(content)
+                    out_dir, _ = UyapRedactor.export_isolated_clean_folder(
+                        src, dest, mask_names=mask_names_flag
+                    )
+                    res = A.audit(src, out_dir, mask_names=mask_names_flag)
+                    self.assertEqual(
+                        res["leaks"]["person_name"],
+                        [],
+                        f"[{sen.ad}] (mask_names={mask_names_flag}) audit ad sızıntısı buldu: {res['leaks']['person_name']}",
+                    )
+                    self.assertFalse(
+                        A.summarize(res)[2],
+                        f"[{sen.ad}] (mask_names={mask_names_flag}) audit genel sızıntı bildirdi: {res['leaks']}",
+                    )
+                    out_texts = _collect_output_texts(out_dir)
+                    file_map = _map_input_to_output_files(sen.dosyalar, out_texts)
+                    for in_rel, out_rel in sorted(file_map.items()):
+                        if not out_rel.endswith(".md") or out_rel in ("DAVA_DÖNÜŞÜM_VE_GÜVENLİK_RAPORU.md", "INDEX.md"):
+                            continue
+                        o_lines = out_texts[out_rel].splitlines()
+                        s_lines = sen.dosyalar[in_rel].splitlines()
+                        for idx, ln in enumerate(o_lines):
+                            if jud_title_rx.search(ln) and sicil_tag_rx.search(ln):
+                                window = "\n".join(o_lines[max(0, idx - 1):min(len(o_lines), idx + 2)])
+                                if not jud_tag_rx.search(window):
+                                    src_line = s_lines[idx] if idx < len(s_lines) else ""
+                                    stripped_titles = re.sub(
+                                        r"(?i)\b(?:h[aâ]kim\w*|ba[sş]kan\w*|üye|cumhuriyet|ba[sş]?savc[ıi]\w*|zab[ıi]t|duru[sş]ma|k[aâ]ti[bp]\w*|sicil|no)\b|\d+",
+                                        " ",
+                                        src_line,
+                                    )
+                                    if re.search(r"[A-ZÇĞİÖŞÜ][a-zçğıöşüA-ZÇĞİÖŞÜ]+\s+[A-ZÇĞİÖŞÜ][a-zçğıöşüA-ZÇĞİÖŞÜ]+", stripped_titles):
+                                        missed_cases.append(f"{sen.ad} (mask_names={mask_names_flag})/{out_rel}:{idx + 1}: {ln}")
+
+        self.assertEqual(
+            missed_cases,
+            [],
+            "Yargı unvanı + [SİCİL_] olup komşu satırlarda [HAKİM_/SAVCI_/KÂTİP_] bulunmayan satırlar:\n"
+            + "\n".join(missed_cases),
+        )
 
 
 class TestSenaryo_20_yalniz_taramada_gecen_kisiler(unittest.TestCase):
@@ -4730,7 +4820,7 @@ class TestSenaryo_20_yalniz_taramada_gecen_kisiler(unittest.TestCase):
 
             with patch.dict(os.environ, {"UYAP_OCR_CACHE_DIR": cache}, clear=False):
                 with patch.object(UyapRedactor, "extract_scanned_raw", side_effect=_fake_ocr) as m_ocr:
-                    out_dir, stats = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+                    out_dir, stats = UyapRedactor.export_isolated_clean_folder(src, dest)
 
             # Her taranmış belge tam 1 kez okunur
             self.assertEqual(m_ocr.call_count, 2)
