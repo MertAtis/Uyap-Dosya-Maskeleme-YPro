@@ -7195,11 +7195,29 @@ def main():
         "--taraf-isimlerini-maskele",
         action="store_true",
         default=False,
-        help="Eski bayrak (geriye dönük uyumluluk): taraf/tanık adları artık varsayılan olarak maskelendiği için etkisizdir",
+        help="Eski bayrak (geriye dönük uyumluluk): --ad-gorunumu=etiket ile aynı anlama gelir",
+    )
+    parser.add_argument(
+        "--ad-gorunumu",
+        choices=["etiket", "bas-harf", "acik"],
+        default=None,
+        help=(
+            "Taraf/tanık adlarının çıktıdaki görünümü: etiket = [DAVALI_1] (varsayılan); "
+            "bas-harf = 'Ahmet Y. [DAVALI_1]' (ad + soyad baş harfi + etiket; kısmi ad görünür); "
+            "acik = ad-soyad açık. Hâkim/savcı/kâtip adları bundan bağımsızdır (her zaman yalnız etiket)"
+        ),
     )
 
     args = parser.parse_args()
-    mask_names = not (bool(args.taraf_isimlerini_koru) or bool(args.isimleri_koru))
+    # Eski bayraklar: --taraf-isimlerini-koru / --isimleri-koru -> acik; --taraf-isimlerini-maskele -> etiket.
+    # Açık --ad-gorunumu her zaman eski bayrakların önüne geçer.
+    if args.ad_gorunumu is not None:
+        ad_gorunumu = MaskRegistry.normalize_ad_gorunumu(args.ad_gorunumu)
+    elif bool(args.taraf_isimlerini_koru) or bool(args.isimleri_koru):
+        ad_gorunumu = "acik"
+    else:
+        ad_gorunumu = "etiket"
+    mask_names = ad_gorunumu != "acik"
     mask_judicial_names = not bool(args.yargi_isimlerini_koru)
 
     if not os.path.exists(args.path):
@@ -7217,6 +7235,7 @@ def main():
         target_dir = args.path if os.path.isdir(args.path) else os.path.dirname(args.path)
         known_tckns = UyapRedactor.collect_known_tckns_from_folder(target_dir)
         registry = MaskRegistry(known_tckns)
+        registry.name_display = ad_gorunumu
         in_place_stats = UyapRedactor._empty_stats()
         skip_names = UyapRedactor.SKIP_DIRS
         real_target = os.path.realpath(target_dir)
@@ -7292,6 +7311,7 @@ def main():
             out_target,
             mask_names=mask_names,
             mask_judicial_names=mask_judicial_names,
+            ad_gorunumu=ad_gorunumu,
         )
     except ValueError as ve:
         print(f"Hata: {ve}", file=sys.stderr)
