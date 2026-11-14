@@ -519,6 +519,96 @@ class AuditCase(unittest.TestCase):
         self.assertEqual(res["consistency_value_multi_label"], {})
         self.assertEqual(res["consistency_label_multi_value"], {})
 
+    def test_person_name_leak_detection_and_protections(self):
+        """Adım 2: Satır sonlu açık ad-soyad, dosya adı sızıntısı ve tekil ad / şirket koruması."""
+        # (a) Kaynakta DAVACI : Ahmet Can Yılmaz, çıktıda Ahmet Can\nYılmaz açıkta
+        src_a, out_a = self._case(
+            {"dava.md": "DAVACI : Ahmet Can Yılmaz\nTalep metni.\n"},
+            {"dava.md": "DAVACI : Ahmet Can\nYılmaz\nTalep metni.\n"},
+        )
+        res_a = A.audit(src_a, out_a)
+        self.assertGreaterEqual(len(res_a["leaks"]["person_name"]), 1)
+        self.assertEqual(res_a["leaks"]["person_name"][0], ("dava.md", 1, "[DAVACI_1]"))
+        lines_a, det_a, leak_a = A.summarize(res_a)
+        self.assertTrue(leak_a)
+        joined_stdout = "\n".join(lines_a)
+        self.assertIn("Kişi ad-soyadı (çıktıda kalan): 1", joined_stdout)
+        self.assertNotIn("Ahmet", joined_stdout)
+        self.assertNotIn("Yılmaz", joined_stdout)
+        self.assertTrue(any("Ahmet Can" in d for d in det_a))
+
+        # (b) Doğru maskelenmiş çift -> 0
+        src_b, out_b = self._case(
+            {"dava.md": "DAVACI : Ahmet Can Yılmaz\nTalep metni.\n"},
+            {"dava.md": "DAVACI : [DAVACI_1]\nTalep metni.\n"},
+        )
+        res_b = A.audit(src_b, out_b)
+        self.assertIn("person_name", res_b["leaks"])
+        self.assertEqual(res_b["leaks"]["person_name"], [])
+        _lb, _db, leak_b = A.summarize(res_b)
+        self.assertFalse(leak_b)
+
+        # (c) Yalnızca tek başına soyad (Yılmaz) kalan çıktı -> 0
+        src_c, out_c = self._case(
+            {"dava.md": "DAVACI : Ahmet Can Yılmaz\nYılmaz beyanda bulundu.\n"},
+            {"dava.md": "DAVACI : [DAVACI_1]\nYılmaz beyanda bulundu.\n"},
+        )
+        res_c = A.audit(src_c, out_c)
+        self.assertEqual(res_c["leaks"]["person_name"], [])
+        self.assertFalse(A.summarize(res_c)[2])
+
+        # (d) Şirket adı içinde geçen (Ahmet Can Yılmaz İnşaat Ltd. Şti.) -> 0
+        src_d, out_d = self._case(
+            {"dava.md": "DAVACI : Ahmet Can Yılmaz\nAhmet Can Yılmaz İnşaat Ltd. Şti. borçludur.\n"},
+            {"dava.md": "DAVACI : [DAVACI_1]\nAhmet Can Yılmaz İnşaat Ltd. Şti. borçludur.\n"},
+        )
+        res_d = A.audit(src_d, out_d)
+        self.assertEqual(res_d["leaks"]["person_name"], [])
+        self.assertFalse(A.summarize(res_d)[2])
+
+        # (e) Dosya adında Ahmet_Can_Yılmaz kalan çıktı -> >= 1
+        src_e, out_e = self._case(
+            {"Ahmet_Can_Yılmaz_Dilekce.md": "DAVACI : Ahmet Can Yılmaz\nTalep.\n"},
+            {"Ahmet_Can_Yılmaz_Dilekce.md": "DAVACI : [DAVACI_1]\nTalep.\n"},
+        )
+        res_e = A.audit(src_e, out_e)
+        self.assertGreaterEqual(len(res_e["leaks"]["person_name"]), 1)
+        self.assertTrue(any("Ahmet_Can_Yılmaz_Dilekce.md (dosya adı)" == x[0] for x in res_e["leaks"]["person_name"]))
+        self.assertTrue(A.summarize(res_e)[2])
+
+    def test_ocr_cache_kisi_kesif_kurali_hizali(self):
+        """audit_output, ocr_cache kaynaklarında ocr=True kuralını (B>=2 satır, A güçlü) uygular."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "src")
+            out = os.path.join(tmp, "out")
+            ocr_cache = os.path.join(tmp, "ocr_cache")
+            os.makedirs(src, exist_ok=True)
+            os.makedirs(out, exist_ok=True)
+            os.makedirs(ocr_cache, exist_ok=True)
+            # Tek satırda zayıf B adayı (Hasan Boz) + güçlü A adayı (Zeynep Arslan) + 2 satır zayıf B (Murat Kılıç)
+            raw_ocr = (
+                "DAVACI : Zeynep Arslan\n"
+                "Duruşmada tanık Hasan Boz söz aldı.\n"
+                "Duruşmada tanık Murat Kılıç hazır bulundu.\n"
+                "Tanık Murat Kılıç beyanını tekrar etti.\n"
+            )
+            out_md = (
+                "DAVACI : [DAVACI_1]\n"
+                "Duruşmada tanık Hasan Boz söz aldı.\n"
+                "Duruşmada tanık [TANIK_1] hazır bulundu.\n"
+                "Tanık Murat Kılıç beyanını tekrar etti.\n"
+            )
+            with open(os.path.join(src, "tarama.pdf"), "wb") as wf:
+                wf.write(b"%PDF-1.4\n")
+            with open(os.path.join(ocr_cache, "tarama.md"), "w", encoding="utf-8") as wf:
+                wf.write(raw_ocr)
+            with open(os.path.join(out, "tarama.md"), "w", encoding="utf-8") as wf:
+                wf.write(out_md)
+            res = A.audit(src, out, ocr_cache=ocr_cache)
+            leaked_labels = [x[2] for x in res["leaks"]["person_name"]]
+            # Murat Kılıç (>=2 satır) sızıntı olarak yakalanır; tek satır Hasan Boz yakalanmaz
+            self.assertEqual(leaked_labels, ["[TANIK_1]"])
+
 
 if __name__ == "__main__":
     unittest.main()

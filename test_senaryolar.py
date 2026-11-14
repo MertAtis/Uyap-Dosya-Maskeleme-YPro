@@ -3982,6 +3982,127 @@ Hâkim 123456 Kâtip 234567"""
     )
 
 
+def _build_senaryo_19() -> Senaryo:
+    belge1 = """# İSTANBUL 2. ASLİYE HUKUK MAHKEMESİ
+ESAS NO: 2025/712
+DAVACI : Ahmet Can Yılmaz
+TCKN: 10000000146
+VEKİLİ : Av. Ayşe Kaya
+DAVALI : Mehmet Demir
+TCKN: 10000000078
+ŞİRKET : Demir Yapı İnşaat Ltd. Şti.
+
+## AÇIKLAMALAR
+1. İşbu dosyada Ahmet Can
+Yılmaz'ın talebi üzerine ihtarname keşide edilmiştir.
+2. Davalı Mehmet
+Demir'in ödeme yapmadığı sabittir.
+3. Olay yerinde bulunan tanık Fatma
+Şahin huzurunda tutanak tutulmuştur.
+4. Dosya kapsamında AHMET CAN
+YILMAZ tarafından 45.000,00 TL bedel ödenmiştir.
+5. İşbu dava MEHMET
+DEMİR aleyhine açılmıştır.
+6. Görüşme Ahmet Can Yılmaz Caddesi üzerindeki ofiste
+yapılmış olup Ahmet
+Can Yılmaz'a ihtar tebliğ edilmiştir."""
+
+    belge2 = """# CEVAP DİLEKÇESİ
+ESAS NO: 2025/712
+DAVALI : Mehmet Demir
+DAVACI : Ahmet Can Yılmaz
+
+1. Karşı taraf Ahmet Can
+Yılmaz ile müvekkil Demir Yapı İnşaat Ltd. Şti.
+arasında ticari ilişki vardır.
+2. Taraflardan Mehmet
+Demir arasında yapılan sözleşme geçerlidir.
+3. Tanık Fatma
+Şahin'in beyanları gerçeği yansıtmamaktadır.
+4. Dosyadaki YILMAZ
+Ahmet Can'ın iddiası mesnetsizdir.
+5. Ödeme makbuzu DEMİR
+Mehmet tarafından sunulmuştur.
+6. Daha sonra Ahmet
+Yılmaz'a yapılan bildirim Ahmet Can Yılmaz Caddesi
+adresindeki büroda Av. Ayşe Kaya huzurunda okunmuştur."""
+
+    belge3 = """# DURUŞMA TUTANAĞI
+ESAS NO: 2025/712
+Hâkim Murat Öz 112233
+DAVACI : Ahmet Can Yılmaz
+DAVALI : Mehmet Demir
+TANIK : Fatma Şahin
+
+1. Duruşmada Davacı Ahmet
+Can Yılmaz söz aldı ve talebini yineledi.
+2. Davalı Mehmet
+DEMİR cevap verdi, iddiaları reddetti.
+3. Tanık Fatma
+ŞAHİN yeminli dinlendi.
+4. Beyanında ŞAHİN
+Fatma olay gününü ayrıntılarıyla anlattı.
+5. Karşı taraf AHMET
+CAN YILMAZ'ın talebi hakkında Av. Ayşe Kaya dinlendi.
+6. Tutanağın altına Mehmet
+Demir'in imzası alındı."""
+
+    return Senaryo(
+        ad="19_satir_sonu_bolunmus_adlar",
+        baslik="UDF-Benzeri Satır Sonunda Bölünmüş Kişi Adları ve Denetim Doğrulaması",
+        dosyalar={
+            "01_dava_dilekcesi.md": belge1,
+            "02_cevap_dilekcesi.md": belge2,
+            "03_durusma_tutanagi.md": belge3,
+        },
+        gizli=[
+            "10000000146",
+            "10000000078",
+            "112233",
+            "Ahmet Can Yılmaz",
+            "Mehmet Demir",
+            "Fatma Şahin",
+        ],
+        korunan=[
+            "Demir Yapı İnşaat Ltd. Şti.",
+            "Ahmet Can Yılmaz Caddesi",
+            "Av. Ayşe Kaya",
+            "Hâkim Murat Öz",
+            "2025/712",
+            "45.000,00 TL",
+        ],
+        kisiler={
+            "Ahmet Can Yılmaz": "DAVACI",
+            "Mehmet Demir": "DAVALI",
+            "Fatma Şahin": "TANIK",
+        },
+        ayni_etiket=[
+            [
+                "Ahmet Can Yılmaz",
+                "Ahmet Can\nYılmaz",
+                "AHMET CAN\nYILMAZ",
+                "Ahmet\nCan Yılmaz",
+                "YILMAZ\nAhmet Can",
+                "Ahmet\nYılmaz",
+                "AHMET\nCAN YILMAZ",
+            ],
+            [
+                "Mehmet Demir",
+                "Mehmet\nDemir",
+                "MEHMET\nDEMİR",
+                "DEMİR\nMehmet",
+                "Mehmet\nDEMİR",
+            ],
+            [
+                "Fatma Şahin",
+                "Fatma\nŞahin",
+                "Fatma\nŞAHİN",
+                "ŞAHİN\nFatma",
+            ],
+        ],
+    )
+
+
 SENARYOLAR: List[Senaryo] = [
     _build_senaryo_01(),
     _build_senaryo_02(),
@@ -4001,6 +4122,7 @@ SENARYOLAR: List[Senaryo] = [
     _build_senaryo_16(),
     _build_senaryo_17(),
     _build_senaryo_18(),
+    _build_senaryo_19(),
 ]
 
 
@@ -4092,11 +4214,38 @@ def _extract_tags_for_variant(
         out_lines = out_texts[out_rel].splitlines()
 
         if "\n" in norm_var:
-            if norm_var not in norm_in:
-                continue
+            out_full = out_texts[out_rel]
+            start_pos = 0
+            while True:
+                pos = norm_in.find(norm_var, start_pos)
+                if pos == -1:
+                    break
+                start_pos = pos + len(norm_var)
+                line_start = norm_in.rfind("\n", 0, pos) + 1
+                prefix = norm_in[line_start:pos]
+                end_pos = pos + len(norm_var)
+                next_nl = norm_in.find("\n", end_pos)
+                suffix = norm_in[end_pos:(next_nl if next_nl != -1 else len(norm_in))]
+                # Satır birleştiği için çıktıda prefix + [ROL_N] + suffix aynı satırda olmalı
+                pat_m = re.search(
+                    re.escape(prefix) + r"(" + _TAG_RE.pattern + r")" + re.escape(suffix),
+                    out_full,
+                )
+                if not pat_m:
+                    errors.append(
+                        f"{out_rel}: bölünmüş varyant etikete dönüşmedi ({variant!r})"
+                    )
+                    continue
+                found_tags.append(pat_m.group(1))
         else:
             for idx, line in enumerate(in_lines):
                 if norm_var not in line:
+                    continue
+                check_src_line = line
+                for prot in senaryo.korunan:
+                    if norm_var in prot and len(prot) > len(norm_var):
+                        check_src_line = check_src_line.replace(prot, " ")
+                if norm_var not in check_src_line:
                     continue
                 target_out_line: Optional[str] = None
                 if len(in_lines) == len(out_lines):
@@ -4205,7 +4354,12 @@ class _SenaryoTestTabani(unittest.TestCase):
                 if sec_low in _tr_lower(rel_path):
                     leaks.append(f"[DOSYA ADI] {rel_path}: sızan={secret!r}")
                 for lineno, line in enumerate(content.splitlines(), 1):
-                    if sec_low in _tr_lower(line):
+                    check_line = _tr_lower(line)
+                    for prot in self.SENARYO.korunan:
+                        prot_low = _tr_lower(prot)
+                        if sec_low in prot_low and len(prot_low) > len(sec_low):
+                            check_line = check_line.replace(prot_low, " ")
+                    if sec_low in check_line:
                         leaks.append(f"{rel_path}:{lineno} | sızan={secret!r} | satır={line!r}")
         if leaks:
             self.fail(
@@ -4500,6 +4654,130 @@ def _test_18_tam_beklenti(self: _SenaryoTestTabani) -> None:
 
 
 TestSenaryo_18_aile_yakinlar.test_18_aile_yakinlar_tam_beklenti = _test_18_tam_beklenti
+
+
+class TestTumSenaryolarAuditIsimKontrolu(unittest.TestCase):
+    """Tüm sentetik senaryoların çıktısında audit_output person_name sızıntısı 0 olmalı."""
+
+    def test_tum_senaryolar_audit_person_name_sifir(self):
+        import audit_output as A
+
+        for sen in SENARYOLAR:
+            with tempfile.TemporaryDirectory(prefix=f"uyap_audit_sen_{sen.ad}_") as tmp:
+                src = os.path.join(tmp, "src")
+                dest = os.path.join(tmp, "dest")
+                for rel_path, content in sen.dosyalar.items():
+                    fp = os.path.join(src, rel_path)
+                    os.makedirs(os.path.dirname(fp), exist_ok=True)
+                    with open(fp, "w", encoding="utf-8") as wf:
+                        wf.write(content)
+                out_dir, _ = UyapRedactor.export_isolated_clean_folder(src, dest)
+                res = A.audit(src, out_dir)
+                self.assertEqual(
+                    res["leaks"]["person_name"],
+                    [],
+                    f"[{sen.ad}] audit_output kişi adı sızıntısı buldu: {res['leaks']['person_name']}",
+                )
+
+
+class TestSenaryo_20_yalniz_taramada_gecen_kisiler(unittest.TestCase):
+    """Senaryo 20: 2 metinli belge + 2 taranmış belge ile OCR kişi keşfi, çapraz tutarlılık ve gürültü süzme."""
+
+    def test_20_yalniz_taramada_gecen_kisiler(self):
+        from unittest.mock import patch
+        import audit_output as A
+
+        metin_1 = (
+            "DAVACI : Ayşe Kaya\n"
+            "Yukarıda adı geçen davacı vekili tarafından Zeynep Arslan aleyhine dava açılmıştır.\n"
+            "Ekli tutanakta tanık Murat Kılıç beyanlarına atıf yapılmaktadır.\n"
+        )
+        metin_2 = (
+            "Durum özeti: Ayşe Kaya ile Zeynep Arslan arasındaki ihtilafta Murat Kılıç dinlenmiştir.\n"
+            "Hasan Boz tekil referans olarak yalnızca bir kez anılmıştır.\n"
+        )
+        tarama_1_ocr = (
+            "DAVALI : Zeynep Arslan\n"
+            "Dosyada davacı Ayşe Kaya tarafından sunulan belgeler ve Zzzzz Xxx gibi gürültüler incelendi.\n"
+            "DAVACI : Zzzzz Xxx\n"
+        )
+        tarama_2_ocr = (
+            "Mahkeme huzurunda tanık Murat Kılıç yeminli olarak dinlendi.\n"
+            "Ayrıca aynı celsede tanık Murat Kılıç kimlik tespiti yapıldı.\n"
+            "Duruşma sırasında tanık Hasan Boz bir satırda anılmıştır.\n"
+        )
+
+        def _fake_ocr(fp: str) -> str:
+            if fp.endswith("ek1_tarama.pdf"):
+                return tarama_1_ocr
+            if fp.endswith("ek2_tutanak.tif"):
+                return tarama_2_ocr
+            return ""
+
+        with tempfile.TemporaryDirectory(prefix="uyap_sen20_") as tmp:
+            src = os.path.join(tmp, "src")
+            dest = os.path.join(tmp, "dest")
+            cache = os.path.join(tmp, "ocr_cache")
+            os.makedirs(src, exist_ok=True)
+            with open(os.path.join(src, "dilekce.md"), "w", encoding="utf-8") as wf:
+                wf.write(metin_1)
+            with open(os.path.join(src, "ozet.txt"), "w", encoding="utf-8") as wf:
+                wf.write(metin_2)
+            with open(os.path.join(src, "ek1_tarama.pdf"), "wb") as wf:
+                wf.write(b"%PDF-1.4\n%sahte tarama 1")
+            with open(os.path.join(src, "ek2_tutanak.tif"), "wb") as wf:
+                wf.write(b"fake-tiff-2")
+
+            with patch.dict(os.environ, {"UYAP_OCR_CACHE_DIR": cache}, clear=False):
+                with patch.object(UyapRedactor, "extract_scanned_raw", side_effect=_fake_ocr) as m_ocr:
+                    out_dir, stats = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+
+            # Her taranmış belge tam 1 kez okunur
+            self.assertEqual(m_ocr.call_count, 2)
+            self.assertEqual(
+                stats["kisi_listesi"],
+                [
+                    ("[DAVACI_1]", "Ayşe Kaya"),
+                    ("[DAVALI_1]", "Zeynep Arslan"),
+                    ("[TANIK_1]", "Murat Kılıç"),
+                ],
+            )
+
+            out_contents = {}
+            for root, _dirs, files in os.walk(out_dir):
+                for fn in sorted(files):
+                    if not fn.endswith((".md", ".txt")) or fn in (UyapRedactor.REPORT_NAME, "INDEX.md"):
+                        continue
+                    rel = os.path.relpath(os.path.join(root, fn), out_dir).replace("\\", "/")
+                    with open(os.path.join(root, fn), encoding="utf-8") as rf:
+                        out_contents[rel] = rf.read()
+
+            self.assertIn("dilekce.md", out_contents)
+            self.assertIn("ozet.txt", out_contents)
+            self.assertIn("ek1_tarama.md", out_contents)
+            self.assertIn("ek2_tutanak.md", out_contents)
+
+            # Tüm çıktılarda taraf/tanık adları gizli, aynı etiket kullanılıyor
+            for rel, txt in out_contents.items():
+                self.assertNotIn("Ayşe Kaya", txt, rel)
+                self.assertNotIn("Zeynep Arslan", txt, rel)
+                self.assertNotIn("Murat Kılıç", txt, rel)
+            self.assertIn("DAVACI : [DAVACI_1]", out_contents["dilekce.md"])
+            self.assertIn("[DAVALI_1] aleyhine", out_contents["dilekce.md"])
+            self.assertIn("[TANIK_1] beyanlarına", out_contents["dilekce.md"])
+            self.assertIn("[DAVACI_1] ile [DAVALI_1] arasındaki ihtilafta [TANIK_1]", out_contents["ozet.txt"])
+            self.assertIn("DAVALI : [DAVALI_1]", out_contents["ek1_tarama.md"])
+            self.assertIn("davacı [DAVACI_1]", out_contents["ek1_tarama.md"])
+            self.assertEqual(out_contents["ek2_tutanak.md"].count("[TANIK_1]"), 2)
+
+            # Tek satır zayıf aday (Hasan Boz) ve gürültü (Zzzzz Xxx) korunur
+            self.assertIn("Hasan Boz", out_contents["ozet.txt"])
+            self.assertIn("Hasan Boz", out_contents["ek2_tutanak.md"])
+            self.assertIn("Zzzzz Xxx", out_contents["ek1_tarama.md"])
+
+            # Denetim aracı da sıfır kişi sızıntısı raporlar
+            audit_res = A.audit(src, out_dir, ocr_cache=cache)
+            self.assertEqual(audit_res["leaks"]["person_name"], [])
 
 
 if __name__ == "__main__":

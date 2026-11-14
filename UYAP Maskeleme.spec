@@ -59,7 +59,7 @@ app = BUNDLE(
     info_plist={
         'CFBundleDisplayName': 'UYAP Maskeleme',
         'CFBundleName': 'UYAP Maskeleme',
-        'CFBundleShortVersionString': '1.4.5',
+        'CFBundleShortVersionString': '1.4.6',
         'CFBundleVersion': '14',
         'LSMinimumSystemVersion': '12.0',
         'NSHighResolutionCapable': True,

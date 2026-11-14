@@ -29,12 +29,12 @@ from collections import Counter, defaultdict
 from typing import Dict, List, Optional, Tuple
 
 try:
-    from uyap_redactor import UyapRedactor, MaskRegistry, _tr_lower
+    from uyap_redactor import UyapRedactor, MaskRegistry, _tr_lower, _fold_tr
 except ImportError:
     _script_dir = os.path.dirname(os.path.abspath(__file__))
     if _script_dir not in sys.path:
         sys.path.insert(0, _script_dir)
-    from uyap_redactor import UyapRedactor, MaskRegistry, _tr_lower
+    from uyap_redactor import UyapRedactor, MaskRegistry, _tr_lower, _fold_tr
 
 TEXT_EXTS = (".md", ".txt", ".json")
 REPORT_NAME = "DAVA_DÖNÜŞÜM_VE_GÜVENLİK_RAPORU.md"
@@ -726,13 +726,106 @@ def _match_masked_source_rel(masked_rel: str, src_candidates: List[str]) -> Opti
 
 
 # ---------------------------------------------------------------------------
+# Kişi ad-soyad sızıntısı yardımcıları
+# ---------------------------------------------------------------------------
+def _build_audit_person_matchers(
+    registry: MaskRegistry,
+) -> Tuple[Optional[re.Pattern], Optional[re.Pattern]]:
+    """Kayıtlı kişilerin en az 2 belirteçli tam ad dizileri için metin ve yol regexlerini derler."""
+    if not registry.has_persons() or not registry._variant_to_label:
+        return None, None
+    sorted_variants = sorted(
+        registry._variant_to_label.keys(),
+        key=lambda vt: (-len(vt), -sum(len(t) for t in vt), vt),
+    )
+    boundary_chars = "A-Za-zÇĞİÖŞÜçğıöşüâîûÂÎÛ0-9"
+
+    def _compile(sep: str) -> re.Pattern:
+        pats = [sep.join(MaskRegistry._token_rx(t) for t in vt) for vt in sorted_variants]
+        return re.compile(rf"(?<![{boundary_chars}])(?:{'|'.join(pats)})(?![{boundary_chars}])")
+
+    return _compile(r"(?:[ \t]+|[ \t]*\r?\n[ \t]*)"), _compile(r"[ \t_.\-]+")
+
+
+def _is_protected_person_match(
+    text: str,
+    s: int,
+    e: int,
+    protected_spans: List[Tuple[int, int]],
+    path_mode: bool = False,
+) -> bool:
+    if any(s < pe and e > ps for ps, pe in protected_spans):
+        return True
+    ls = text.rfind("\n", 0, s) + 1
+    le = text.find("\n", e)
+    if le == -1:
+        le = len(text)
+    before_line = text[ls:s]
+    after_line = text[e:le]
+    if UyapRedactor._has_blocking_pre_title(before_line):
+        return True
+    sep_head = r"[ \t_.\-]+" if path_mode else r"[ \t]+"
+    if re.match(
+        rf"^{sep_head}(?:A\.?[ \t]*Ş\.?|Ltd\.?(?:[ \t]*Şti\.?)?|Şti\.?|A\.?[ \t]*O\.?|Koop\.?)",
+        after_line,
+        re.IGNORECASE,
+    ):
+        return True
+    m_aw = re.match(rf"^{sep_head}([A-Za-zÇĞİÖŞÜçğıöşüâîûÂÎÛ]+)", after_line)
+    if m_aw and _fold_tr(m_aw.group(1)) in UyapRedactor._MASK_AFTER_PLACE_CORP_WORDS:
+        return True
+    return False
+
+
+def _scan_person_leaks(
+    rel_label: str,
+    text: str,
+    rx: Optional[re.Pattern],
+    person_registry: MaskRegistry,
+    out_leaks: List[Tuple[str, int, str]],
+    out_details: List[Tuple[str, int, str, str]],
+    path_mode: bool = False,
+) -> None:
+    if not text or rx is None or not rx.search(text):
+        return
+    protected_spans: List[Tuple[int, int]] = [
+        (m.start(), m.end()) for m in re.finditer(UyapRedactor.MASK_ANY_RE, text)
+    ]
+    protected_spans.extend(
+        (m.start(), m.end()) for m in re.finditer(r"\[ADRES_\d+\][ \t]+\([^)\r\n]+\)", text)
+    )
+    if not path_mode:
+        protected_spans.extend((m.start(), m.end()) for m in re.finditer(r"https?://\S+|\S+@\S+", text))
+
+    for m in rx.finditer(text):
+        s, e = m.start(), m.end()
+        if _is_protected_person_match(text, s, e, protected_spans, path_mode=path_mode):
+            continue
+        matched = m.group(0)
+        if path_mode:
+            parts = tuple(p for p in re.split(r"[ \t_.\-]+", _fold_tr(matched)) if p)
+            lineno = 0
+        else:
+            parts = tuple(_fold_tr(matched).split())
+            lineno = text.count("\n", 0, s) + 1
+        label = person_registry._variant_to_label.get(parts)
+        if not label:
+            continue
+        out_leaks.append((rel_label, lineno, label))
+        out_details.append((rel_label, lineno, label, matched))
+
+
+# ---------------------------------------------------------------------------
 # Ana denetim
 # ---------------------------------------------------------------------------
 def audit(src: str, out: str, ocr_cache: Optional[str] = None) -> Dict:
     src = os.path.abspath(src)
     out = os.path.abspath(out)
+    leaks_dict: Dict = defaultdict(list)
+    leaks_dict["person_name"] = []
     res: Dict = {
-        "leaks": defaultdict(list),
+        "leaks": leaks_dict,
+        "person_name_details": [],
         "over": [],            # (rel, lineno, label, piece, flags)
         "unaligned": [],       # (rel, out_lineno, src_lines, out_lines)
         "binary_files": [],
@@ -785,13 +878,101 @@ def audit(src: str, out: str, ocr_cache: Optional[str] = None) -> Dict:
         val_to_labels = defaultdict(set)
         label_to_vals = defaultdict(set)
 
+        person_registry = MaskRegistry()
+        prescan_texts: List[str] = []
+        ocr_person_sources: List[Tuple[str, str]] = []
+        seen_src_rels = set()
+
+        def _is_ocr_cached_rel(src_rel: str) -> bool:
+            if not ocr_cache:
+                return False
+            if not _find_nfc_nfd_file(ocr_cache, src_rel):
+                return False
+            if src and _find_nfc_nfd_file(src, src_rel):
+                return False
+            return True
+
+        def _feed_person_source(src_rel: str, src_text: str) -> None:
+            norm_r = unicodedata.normalize("NFC", src_rel.replace("\\", "/"))
+            if norm_r in seen_src_rels:
+                return
+            seen_src_rels.add(norm_r)
+            if src_rel.lower().endswith(".json"):
+                prescan_texts.append(src_text)
+                try:
+                    data = json.loads(src_text)
+                    UyapRedactor.collect_persons_from_json(data, person_registry)
+                except Exception:
+                    pass
+            elif os.path.basename(src_rel) not in (REPORT_NAME, "INDEX.md"):
+                prescan_texts.append(src_text)
+                if _is_ocr_cached_rel(src_rel):
+                    ocr_person_sources.append((src_rel, src_text))
+                else:
+                    UyapRedactor.collect_persons_from_text(src_text, person_registry)
+
+        for _rel, _p, s, _o, orig_rel in pairs:
+            if s:
+                _feed_person_source(orig_rel, s)
+
+        if src_candidates is None:
+            src_candidates = _collect_source_rel_candidates(src, ocr_cache, archive_cache)
+        for cand in src_candidates:
+            norm_cand = unicodedata.normalize("NFC", cand.replace("\\", "/"))
+            if norm_cand in seen_src_rels or os.path.basename(cand) in (REPORT_NAME, "INDEX.md"):
+                continue
+            s_extra = find_source_text(src, ocr_cache, cand, archive_cache=archive_cache)
+            if s_extra:
+                _feed_person_source(cand, s_extra)
+
+        if ocr_person_sources:
+            weak_ocr_acc: Dict = {}
+            for _ocr_rel, ocr_text in ocr_person_sources:
+                UyapRedactor.collect_persons_from_text(
+                    ocr_text, person_registry, ocr=True, weak_ocr_acc=weak_ocr_acc
+                )
+            UyapRedactor._finalize_ocr_weak_persons(weak_ocr_acc, person_registry)
+
+        if prescan_texts:
+            UyapRedactor._prune_corp_candidates(prescan_texts, person_registry)
+        person_registry.freeze_persons()
+        person_text_rx, person_path_rx = _build_audit_person_matchers(person_registry)
+
         for brel in res["binary_files"]:
             scan_leaks(f"{brel} (dosya adı)", brel.replace(os.sep, "\n"), known_tckns, known_ibans, res["leaks"], check_addr=False)
+            _scan_person_leaks(
+                f"{brel} (dosya adı)",
+                brel,
+                person_path_rx,
+                person_registry,
+                res["leaks"]["person_name"],
+                res["person_name_details"],
+                path_mode=True,
+            )
 
         for rel, p, s, o, orig_rel in pairs:
             res["files_scanned"] += 1
             scan_leaks(rel, o, known_tckns, known_ibans, res["leaks"])
             scan_leaks(f"{rel} (dosya adı)", rel.replace(os.sep, "\n"), known_tckns, known_ibans, res["leaks"], check_addr=False)
+            if rel.lower().endswith(".md") and os.path.basename(rel) not in (REPORT_NAME, "INDEX.md"):
+                _scan_person_leaks(
+                    rel,
+                    o,
+                    person_text_rx,
+                    person_registry,
+                    res["leaks"]["person_name"],
+                    res["person_name_details"],
+                    path_mode=False,
+                )
+            _scan_person_leaks(
+                f"{rel} (dosya adı)",
+                rel,
+                person_path_rx,
+                person_registry,
+                res["leaks"]["person_name"],
+                res["person_name_details"],
+                path_mode=True,
+            )
 
             # Eşleme tablosu sızıntısı: etiket ile ham değer yan yana
             if has_mapping_leak(o):
@@ -915,7 +1096,7 @@ def summarize(res: Dict) -> Tuple[List[str], List[str], bool]:
     L = res["leaks"]
     out_lines, det = [], []
     leak = bool(L["tckn"] or L["tckn_known"] or L["iban"] or L["iban_known"] or L["iban_multiline"]
-                or L["phone"] or L["addr_kisi"] or L["addr_prefix"])
+                or L["phone"] or L["addr_kisi"] or L["addr_prefix"] or L["person_name"])
 
     out_lines.append(f"Taranan dosya: {res['files_scanned']} (kaynağı bulunan: {res['files_with_source']})")
     out_lines.append("== A) SIZINTI ==")
@@ -926,12 +1107,17 @@ def summarize(res: Dict) -> Tuple[List[str], List[str], bool]:
                       ("addr_kisi", "Maskesiz adres (kişi)"),
                       ("addr_prefix", "Maskesiz yer adı (etiket önünde)"),
                       ("addr_kurum", "Maskesiz adres (kurum)"),
-                      ("addr_olay", "Maskesiz adres (olay yeri)")]:
+                      ("addr_olay", "Maskesiz adres (olay yeri)"),
+                      ("person_name", "Kişi ad-soyadı (çıktıda kalan)")]:
         items = L[key]
         files = sorted({x[0] for x in items})
         out_lines.append(f"  {name}: {len(items)}" + (f"  dosyalar: {', '.join(files[:8])}" + (" ..." if len(files) > 8 else "") if files else ""))
-        for x in items:
-            det.append(f"A\t{key}\t" + "\t".join(str(v) for v in x))
+        if key == "person_name" and res.get("person_name_details"):
+            for rel_p, ln, lab, raw_val in res["person_name_details"]:
+                det.append(f"A\t{key}\t{rel_p}\t{ln}\t{lab}\t{raw_val!r}")
+        else:
+            for x in items:
+                det.append(f"A\t{key}\t" + "\t".join(str(v) for v in x))
 
     out_lines.append("== B) FAZLA MASKELEME / MASKE DÖKÜMÜ ==")
     by_kind = Counter(mask_kind(x[2]) for x in res["over"])

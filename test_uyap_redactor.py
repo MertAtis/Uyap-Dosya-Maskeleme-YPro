@@ -11,6 +11,7 @@ import tempfile
 import unicodedata
 import unittest
 import zipfile
+from unittest.mock import patch
 
 # Modülü içeri aktar
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -3308,6 +3309,336 @@ class TestSenaryoBulgulari3(unittest.TestCase):
                 "[TANIK_1]", "[KİŞİ_1]",
             ],
         )
+
+
+class TestSatirSonuBolunenAd(unittest.TestCase):
+    """Adım 1: Satır sonunda tek satır sonuyla bölünen kayıtlı kişi adlarının maskelenmesi ve korumalar."""
+
+    def _reg(self):
+        reg = MaskRegistry()
+        reg.add_person("Ahmet Can Yılmaz", "DAVACI")
+        reg.add_person("Mehmet Demir", "DAVALI")
+        reg.freeze_persons()
+        return reg
+
+    def test_satir_sonu_bolunen_ad_ve_ekler(self):
+        cases = [
+            ("Davacı Ahmet Can\nYılmaz'ın talebi kabul edildi.", "Davacı [DAVACI_1]'ın talebi kabul edildi."),
+            ("Ahmet\nCan Yılmaz duruşmada hazır.", "[DAVACI_1] duruşmada hazır."),
+            ("AHMET CAN\nYILMAZ", "[DAVACI_1]"),
+            ("Ahmet  Can \n  Yılmaz'a tebliğ edildi.", "[DAVACI_1]'a tebliğ edildi."),
+            ("Ahmet Can\r\nYılmaz'ın beyanı.", "[DAVACI_1]'ın beyanı."),
+            ("Davalı Mehmet\nDEMİR ifade verdi.", "Davalı [DAVALI_1] ifade verdi."),
+            ("DEMİR\nMehmet duruşmaya katılmadı.", "[DAVALI_1] duruşmaya katılmadı."),
+        ]
+        for raw, expected in cases:
+            reg = self._reg()
+            out, stats = UyapRedactor.redact_text(raw, registry=reg)
+            self.assertEqual(out, expected, raw)
+            self.assertEqual(stats["kisi"], 1, raw)
+            self.assertNotIn("Yılmaz", out)
+            self.assertNotIn("YILMAZ", out)
+            self.assertNotIn("Demir", out)
+            self.assertNotIn("DEMİR", out)
+
+    def test_ayni_metinde_satir_ici_ve_satir_sonlu_ayni_etiket(self):
+        reg = self._reg()
+        text = (
+            "Davacı Ahmet Can Yılmaz dilekçe verdi.\n"
+            "Devamında Ahmet Can\nYılmaz'ın talebi incelendi.\n"
+            "Mehmet Demir ve Mehmet\nDEMİR aynı kişidir.\n"
+        )
+        out, stats = UyapRedactor.redact_text(text, registry=reg)
+        self.assertEqual(out.count("[DAVACI_1]"), 2)
+        self.assertEqual(out.count("[DAVALI_1]"), 2)
+        self.assertEqual(stats["kisi"], 4)
+        self.assertNotIn("Ahmet", out)
+        self.assertNotIn("Mehmet", out)
+
+    def test_yanlis_yakalama_korumalari_aynen_kalir(self):
+        reg = self._reg()
+        protected_cases = [
+            "Ahmet Can\n\nYılmaz",
+            "Ahmet Can\n   \nYılmaz",
+            "Ahmet Can\n- Yılmaz",
+            "Ahmet Can\n## Yılmaz",
+            "| Ahmet Can |\n| Yılmaz |",
+            "Ahmet Can\n3. Yılmaz",
+            "[DAVALI_1] Can\nYılmaz",
+            "AHMET CAN\nDAVACI",
+            "A.\nYılmaz hazır bulundu.",
+            "Ahmet\nBey söz aldı.",
+            "Av. Ahmet Can\nYılmaz vekil sıfatıyla",
+            "Ahmet Can\nYılmaz İnşaat Ltd. Şti. unvanlı şirket",
+            "Ahmet Can\nYılmaz Caddesi üzerinde",
+        ]
+        for case in protected_cases:
+            out, stats = UyapRedactor.redact_text(case, registry=reg)
+            self.assertEqual(out, case, f"Korunmalıydı: {case!r}")
+            self.assertEqual(stats["kisi"], 0, case)
+
+    def test_yol_ve_baglanti_hedefi_degismedi(self):
+        reg = self._reg()
+        self.assertEqual(
+            UyapRedactor.redact_path_segment("Ahmet_Can_Yılmaz_Dilekce.md", registry=reg, is_file=True),
+            "[DAVACI_1]_Dilekce.md",
+        )
+        self.assertEqual(
+            UyapRedactor.redact_path_segment("Ahmet_Can\nYılmaz.md", registry=reg, is_file=True),
+            "Ahmet_Can\nYılmaz.md",
+        )
+        md_in = "Bkz: [Dilekçe](Ekler/Ahmet_Can_Yılmaz_Dilekce.md)\n"
+        md_out, _ = UyapRedactor.redact_text(md_in, registry=reg)
+        self.assertEqual(md_out, "Bkz: [Dilekçe](Ekler/[DAVACI_1]_Dilekce.md)\n")
+
+    def test_adres_esas_karar_numarasini_yutmaz(self):
+        cases = [
+            (
+                "Adres: Caferağa Mah. Moda Cad. No:5 D:3 Kadıköy/İstanbul, E: 2024/ 123, K: 2024/456",
+                "Adres: [ADRES_1] (Kadıköy/İstanbul), E: 2024/ 123, K: 2024/456",
+            ),
+            (
+                "Lale Mah. Gül Sk. No:5 Bornova/İzmir, E: 2024/ 123, K: 2024",
+                "[ADRES_1] (Bornova/İzmir), E: 2024/ 123, K: 2024",
+            ),
+            (
+                "| Adres: Lale Mah. Gül Sk. No:5 Bornova/İzmir, E: 2024/ 123, K: 2024 |",
+                "| Adres: [ADRES_1] (Bornova/İzmir), E: 2024/ 123, K: 2024 |",
+            ),
+            (
+                "Lale Mah. Bornova/İzmir, E: 2024/ 123, K: 2024/456",
+                "Lale Mah. Bornova/İzmir, E: 2024/ 123, K: 2024/456",
+            ),
+        ]
+        for raw, expected in cases:
+            reg = MaskRegistry()
+            out, _ = UyapRedactor.redact_text(raw, registry=reg)
+            self.assertEqual(out, expected, raw)
+
+
+class TestOcrKisiKesfi(unittest.TestCase):
+    """Taranmış (OCR) belgelerden ön taramada kişi keşfi ve tek-okuma/gürültü kuralları."""
+
+    def _make_tree(self, root: str, files: dict) -> None:
+        for rel, data in files.items():
+            fp = os.path.join(root, rel)
+            os.makedirs(os.path.dirname(fp), exist_ok=True)
+            with open(fp, "wb") as wf:
+                wf.write(data)
+
+    def test_yalniz_taramada_gecen_guclu_kanit_a_maskelenir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "src")
+            dest = os.path.join(tmp, "dest")
+            self._make_tree(src, {
+                "notlar.md": "Zeynep Arslan hakkında duruşma günü belirlendi.\n".encode("utf-8"),
+                "tarama.pdf": b"%PDF-1.4\n%sahte tarama",
+            })
+            scan_raw = (
+                "DAVACI : Zeynep Arslan\n"
+                "Mahkemeye sunulan dilekçe ekinde alacak talebi ayrıntılı şekilde açıklanmıştır.\n"
+            )
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("UYAP_OCR_CACHE_DIR", None)
+                with patch.object(UyapRedactor, "extract_scanned_raw", return_value=scan_raw):
+                    out_dir, stats = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+            self.assertEqual(stats["kisi_listesi"], [("[DAVACI_1]", "Zeynep Arslan")])
+            with open(os.path.join(out_dir, "notlar.md"), encoding="utf-8") as f:
+                notlar_out = f.read()
+            with open(os.path.join(out_dir, "tarama.md"), encoding="utf-8") as f:
+                tarama_out = f.read()
+            self.assertIn("[DAVACI_1] hakkında duruşma günü belirlendi.", notlar_out)
+            self.assertIn("DAVACI : [DAVACI_1]", tarama_out)
+            self.assertNotIn("Zeynep", notlar_out)
+            self.assertNotIn("Arslan", tarama_out)
+
+    def test_taramada_zayif_kanit_tek_satir_atilir_iki_satir_kabul_edilir(self):
+        # Tek satırda geçen B kalıbı kişi sayılmaz
+        reg1 = MaskRegistry()
+        UyapRedactor.collect_persons_from_text(
+            "Duruşmada tanık Murat Kılıç dinlendi.\n", reg1, ocr=True
+        )
+        reg1.freeze_persons()
+        self.assertEqual(reg1._person_order, [])
+
+        # Aynı satırda 2 kez geçse bile 1 farklı satır olduğundan kişi sayılmaz
+        reg_same = MaskRegistry()
+        UyapRedactor.collect_persons_from_text(
+            "Duruşmada tanık Murat Kılıç ile tanık Murat Kılıç hazır bulundu.\n",
+            reg_same,
+            ocr=True,
+        )
+        reg_same.freeze_persons()
+        self.assertEqual(reg_same._person_order, [])
+
+        # En az 2 farklı satırda geçerse kabul edilir ve çıkışta maskelenir
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "src")
+            dest = os.path.join(tmp, "dest")
+            self._make_tree(src, {"tutanak.tif": b"fake-tiff"})
+            scan_two = (
+                "Duruşmada tanık Murat Kılıç hazır bulundu ve yeminli ifadesine geçildi.\n"
+                "Sorulduğunda tanık Murat Kılıç olay günü işyerinde olduğunu beyan etti.\n"
+            )
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("UYAP_OCR_CACHE_DIR", None)
+                with patch.object(UyapRedactor, "extract_scanned_raw", return_value=scan_two):
+                    out_dir, stats = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+            self.assertEqual(stats["kisi_listesi"], [("[TANIK_1]", "Murat Kılıç")])
+            with open(os.path.join(out_dir, "tutanak.md"), encoding="utf-8") as f:
+                t_out = f.read()
+            self.assertNotIn("Murat Kılıç", t_out)
+            self.assertEqual(t_out.count("[TANIK_1]"), 2)
+
+        # Tek satır uçtan uca tarama çıktısında da açık kalır
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "src")
+            dest = os.path.join(tmp, "dest")
+            self._make_tree(src, {"tutanak.tif": b"fake-tiff"})
+            scan_one = (
+                "Duruşmada tanık Murat Kılıç hazır bulundu ve yeminli ifadesine başlanıp tutanağa geçirildi.\n"
+            )
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("UYAP_OCR_CACHE_DIR", None)
+                with patch.object(UyapRedactor, "extract_scanned_raw", return_value=scan_one):
+                    out_dir, stats = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+            self.assertEqual(stats["kisi_listesi"], [])
+            with open(os.path.join(out_dir, "tutanak.md"), encoding="utf-8") as f:
+                t_out = f.read()
+            self.assertIn("Murat Kılıç", t_out)
+
+    def test_ocr_gurultusu_reddedilir(self):
+        noise_cases = [
+            "DAVACI : Zzzzz Xxx\n",
+            "DAVACI : A B C\n",
+            "DAVALI : Ahm3t Yılm4z\n",
+            "DAVALI : Ahmet Can Yılm4z\n",
+            "DAVALI : Al Bo\n",
+        ]
+        for txt in noise_cases:
+            reg = MaskRegistry()
+            UyapRedactor.collect_persons_from_text(txt, reg, ocr=True)
+            reg.freeze_persons()
+            self.assertEqual(reg._person_order, [], f"Gürültü kişi oldu: {txt!r}")
+
+    def test_taramada_sirket_unvani_kisi_olmaz(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "src")
+            dest = os.path.join(tmp, "dest")
+            self._make_tree(src, {"fatura.pdf": b"%PDF-1.4\n%sahte"})
+            scan_corp = (
+                "DAVALI : Arslan İnşaat Ltd. Şti.\n"
+                "Tanık Arslan İnşaat temsilcisi beyan verdi.\n"
+                "Tanık Arslan İnşaat tarafından kesilen faturalar incelendi.\n"
+                "Arslan İnşaat Ltd. Şti. unvanlı şirkete ödeme yapılmıştır.\n"
+            )
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("UYAP_OCR_CACHE_DIR", None)
+                with patch.object(UyapRedactor, "extract_scanned_raw", return_value=scan_corp):
+                    out_dir, stats = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+            self.assertEqual(stats["kisi_listesi"], [])
+            with open(os.path.join(out_dir, "fatura.md"), encoding="utf-8") as f:
+                out = f.read()
+            self.assertIn("Arslan İnşaat Ltd. Şti.", out)
+
+    def test_mask_names_false_iken_ocr_on_taramada_cagrilmaz(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "src")
+            dest = os.path.join(tmp, "dest")
+            self._make_tree(src, {
+                "dava.md": "DAVACI : Ayşe Kaya\nTalep metni.\n".encode("utf-8"),
+                "ek1.pdf": b"%PDF-1.4\n",
+                "ek2.tif": b"fake-tiff",
+            })
+            events = []
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("UYAP_OCR_CACHE_DIR", None)
+                with patch.object(
+                    UyapRedactor,
+                    "extract_scanned_raw",
+                    return_value="DAVALI : Zeynep Arslan\nYeterli uzunlukta taranmış belge metni içeriği.\n",
+                ) as m_ocr:
+                    _, stats = UyapRedactor.export_isolated_clean_folder(
+                        src, dest, mask_names=False, progress_cb=lambda ev, msg, st: events.append((ev, msg))
+                    )
+            self.assertEqual(m_ocr.call_count, 2)
+            self.assertFalse(any(ev == "sync" and "Ön tarama (OCR)" in msg for ev, msg in events))
+            self.assertEqual(stats["kisi_sayisi"], 0)
+
+    def test_her_ocr_belgesi_yalnizca_bir_kez_okunur(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "src")
+            dest = os.path.join(tmp, "dest")
+            zip_path = os.path.join(src, "paket.zip")
+            os.makedirs(src, exist_ok=True)
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("ic_ek.pdf", b"%PDF-1.4\n")
+            self._make_tree(src, {
+                "ek1.pdf": b"%PDF-1.4\n",
+                "ek2.tif": b"fake-tiff",
+            })
+
+            def _fake_ocr(fp: str) -> str:
+                base = os.path.basename(fp)
+                if base == "ek1.pdf":
+                    return "DAVACI : Zeynep Arslan\nBirinci taranmış belge içeriği yeterince uzundur.\n"
+                if base == "ek2.tif":
+                    return "DAVALI : Kemal Demir\nİkinci taranmış belge içeriği ve zeynel değil Zeynep Arslan.\n"
+                return "TANIK : Hasan Yıldız\nArşiv içinden gelen taranmış belge metni yeterince uzun.\n"
+
+            progress_log = []
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("UYAP_OCR_CACHE_DIR", None)
+                with patch.object(UyapRedactor, "extract_scanned_raw", side_effect=_fake_ocr) as m_ocr:
+                    out_dir, stats = UyapRedactor.export_isolated_clean_folder(
+                        src,
+                        dest,
+                        mask_names=True,
+                        progress_cb=lambda ev, msg, st: progress_log.append(
+                            (ev, msg, st["processed_items"], st["total_work"])
+                        ),
+                    )
+            self.assertEqual(m_ocr.call_count, 3)
+            prescan_sync = [x for x in progress_log if x[0] == "sync" and "Ön tarama (OCR)" in x[1]]
+            self.assertEqual(len(prescan_sync), 3)
+            self.assertTrue(all(cur == 0 and tot == 0 for _, _, cur, tot in prescan_sync))
+            self.assertEqual(len(stats["kisi_listesi"]), 3)
+            with open(os.path.join(out_dir, "ek2.md"), encoding="utf-8") as f:
+                self.assertIn("[DAVACI_1]", f.read())
+
+    def test_bellek_tavani_asildiginda_sonuc_ayni_okuma_sayisi_artar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "src")
+            dest = os.path.join(tmp, "dest")
+            self._make_tree(src, {
+                "b1.pdf": b"%PDF-1.4\n1",
+                "b2.pdf": b"%PDF-1.4\n2",
+            })
+
+            def _fake_ocr(fp: str) -> str:
+                if fp.endswith("b1.pdf"):
+                    return "DAVACI : Zeynep Arslan\n" + ("Birinci belge açıklama metni. " * 4) + "\n"
+                return "DAVALI : Kemal Demir\n" + ("İkinci belge açıklama metni. " * 4) + "\n"
+
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("UYAP_OCR_CACHE_DIR", None)
+                with patch.object(UyapRedactor, "OCR_PRESCAN_MAX_MEM_BYTES", 150):
+                    with patch.object(UyapRedactor, "extract_scanned_raw", side_effect=_fake_ocr) as m_ocr:
+                        out_dir, stats = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+
+            # b1 (<=150 byte) 1 kez, b2 (>150 byte) 2 kez => toplam 3 okuma (>2)
+            self.assertGreater(m_ocr.call_count, 2)
+            self.assertEqual(m_ocr.call_count, 3)
+            self.assertEqual(
+                stats["kisi_listesi"],
+                [("[DAVACI_1]", "Zeynep Arslan"), ("[DAVALI_1]", "Kemal Demir")],
+            )
+            with open(os.path.join(out_dir, "b2.md"), encoding="utf-8") as f:
+                b2_out = f.read()
+            self.assertIn("DAVALI : [DAVALI_1]", b2_out)
+            self.assertNotIn("Kemal Demir", b2_out)
+
+
 
 
 

@@ -280,6 +280,25 @@ class MaskRegistry:
             return upper
         return None
 
+    def is_person_registered(self, full_name: str) -> bool:
+        """Aday ad-soyadın zaten kayıtlı bir kişiyle (aksan/büyük-küçük/SOYAD-Ad duyarsız) eşleşip eşleşmediğini döner."""
+        clean = " ".join(unicodedata.normalize("NFC", full_name).strip().split())
+        if not clean:
+            return False
+        ftoks = tuple(_fold_tr(t) for t in clean.split())
+        if not (2 <= len(ftoks) <= 4):
+            return False
+        if len(ftoks) == 2:
+            return " ".join(sorted(ftoks)) in self._person_roles
+        direct_k = " ".join(ftoks)
+        if direct_k in self._person_roles:
+            return True
+        fwd_k = " ".join(ftoks[1:] + (ftoks[0],))
+        if fwd_k in self._person_roles:
+            return True
+        rot_k = " ".join((ftoks[-1],) + ftoks[:-1])
+        return rot_k in self._person_all_caps
+
     def add_person(
         self,
         full_name: str,
@@ -496,18 +515,28 @@ class MaskRegistry:
         )
         boundary_chars = "A-Za-zÇĞİÖŞÜçğıöşüâîûÂÎÛ0-9"
 
-        def _compile_for_sep(tok_sep: str, abbr_sep: str, include_honorifics: bool = False) -> Optional[re.Pattern]:
+        def _compile_for_sep(
+            tok_sep: str,
+            abbr_sep: str,
+            include_honorifics: bool = False,
+            hon_sep: str = r"[ \t]+",
+        ) -> Optional[re.Pattern]:
             pats: List[str] = [tok_sep.join(self._token_rx(t) for t in vt) for vt in sorted_variants]
             for first_ch, last_ftok in sorted_abbrs:
                 pats.append(rf"{self._upper_char_cls(first_ch)}\.{abbr_sep}{self._token_rx(last_ftok)}")
             if include_honorifics:
                 for first_ftok in sorted_honorifics:
-                    pats.append(rf"{self._token_rx(first_ftok)}{tok_sep}(?:[Bb][Ee][Yy]|[Hh][Aa][Nn][Iİıi][Mm])")
+                    pats.append(rf"{self._token_rx(first_ftok)}{hon_sep}(?:[Bb][Ee][Yy]|[Hh][Aa][Nn][Iİıi][Mm])")
             if not pats:
                 return None
             return re.compile(rf"(?<![{boundary_chars}])(?:{'|'.join(pats)})(?![{boundary_chars}])")
 
-        self._compiled_name_re = _compile_for_sep(r"[ \t]+", r"[ \t]*", include_honorifics=True)
+        self._compiled_name_re = _compile_for_sep(
+            r"(?:[ \t]+|[ \t]*\r?\n[ \t]*)",
+            r"[ \t]*",
+            include_honorifics=True,
+            hon_sep=r"[ \t]+",
+        )
         self._compiled_path_name_re = _compile_for_sep(r"[ \t_.\-]+", r"[ \t_.\-]*", include_honorifics=False)
 
     def _merge_two_token_persons(self) -> None:
@@ -892,6 +921,7 @@ class UyapRedactor:
     TEXT_DOC_EXTS = (".udf", ".docx", ".doc", ".xlsx")
     OFFICE_DOC_EXTS = (".docx", ".doc", ".xlsx")
     OCR_DOC_EXTS = (".pdf", ".tif", ".tiff", ".png", ".jpg", ".jpeg", ".heic")
+    OCR_PRESCAN_MAX_MEM_BYTES = 200 * 1024 * 1024  # Ön tarama ham OCR bellek tavanı (200 MB)
     ARCHIVE_EXTS = (".eyp", ".zip")
     EYP_META_EXTS = (".rels", ".xml", ".psmdcp")
     IGNORED_SIG_EXTS = (".imz", ".p7s", ".sig", ".cer")
@@ -2348,7 +2378,9 @@ class UyapRedactor:
             r'GSM\b|Cep\b|Tel(?:efon)?\b|Faks\b|'
             r'E-?\s*posta|Email\b|KEP\b|'
             r'Vekil(?:i)?\b|Müdafi(?:i)?\b|Baro|Meslek|'
-            r'Tel\b|ARANMIYOR|TC\s*Kimlik|T\.C\.|SUÇUN\s+TARİHİ|$|\r?\n)))'
+            r'Tel\b|ARANMIYOR|TC\s*Kimlik|T\.C\.|SUÇUN\s+TARİHİ|'
+            r'[,;]?\s*(?:[EK][ \t]*[:.][ \t]*(?:19|20)\d{2}[ \t]*/|(?:Esas|Karar)(?:[ \t]*No)?[ \t]*[:.]?[ \t]*(?:19|20)\d{2}[ \t]*/|(?:19|20)\d{2}[ \t]*/[ \t]*\d+[ \t]*(?:E|K)\b)|'
+            r'\|(?!¢)|$|\r?\n)))'
         )
 
         def repl1(m: re.Match) -> str:
@@ -2408,7 +2440,9 @@ class UyapRedactor:
         p2 = re.compile(
             r'(?P<prefix>(?:doğumlu\s+ve\s+halen|ve\s+halen|(?<![A-Za-zÇĞİÖŞÜçğıöşü])halen|doğumlu[\.,]|nüfus(?:a|unda)\s+kayıtlı(?:dır)?[\.,]?|kayıtlı\s+olup\s+halen|belirtilen|E-Tebligat\s+Adresidir\.)\s+)'
             r'(?P<addr>(?:[A-ZÇĞİÖŞÜa-zçğıöşü0-9\.\-\/]+\s+){0,5}?(?:Mah\.|Mh\.|Mahallesi\b)[^\r\n\|]+?)'
-            r'(?P<suffix>\s+(?:adresinde\s+oturur|ikamet\s+eder|adresinde\s+ikamet\s+eder|adresinde\s+bulunur|adresine\b|adresinde\b)|\s*(?=$|\r?\n))'
+            r'(?P<suffix>\s+(?:adresinde\s+oturur|ikamet\s+eder|adresinde\s+ikamet\s+eder|adresinde\s+bulunur|adresine\b|adresinde\b)|'
+            r'(?=[,;]?[ \t]*(?:[EK][ \t]*[:.][ \t]*(?:19|20)\d{2}[ \t]*/|(?:Esas|Karar)(?:[ \t]*No)?[ \t]*[:.]?[ \t]*(?:19|20)\d{2}[ \t]*/|(?:19|20)\d{2}[ \t]*/[ \t]*\d+[ \t]*(?:E|K)\b))|'
+            r'\s*(?=$|\r?\n))'
         )
 
         def repl2(m: re.Match) -> str:
@@ -2464,7 +2498,7 @@ class UyapRedactor:
             r'|\bN(?=[ \t]*[:.][ \t]*\d)'
             r'|(?:[İiIıl]ç[ \t]*Kap[ıi](?:[ \t]*No)?|\|¢[ \t]*Kap[ıi](?:[ \t]*No)?)(?:[ \t]*[:.\-\^\/]*[ \t]*[0-9A-Za-z]|[ \t]+\d|\b[ \t]*No\b)'
             r'|\b(?:Kat|Daire)(?:[ \t]*[:.\-\^\/]+[ \t]*[0-9A-Za-z]|[ \t]+\d)'
-            r'|\b[KD](?:[ \t]*[:.][ \t]*[0-9A-Za-z]|[ \t]+\d)'
+            r'|\b(?:D|K(?![ \t]*[:.][ \t]*(?:19|20)\d{2}[ \t]*/))(?:[ \t]*[:.][ \t]*[0-9A-Za-z]|[ \t]+\d)'
             r'|\b(?:Blok|Blk|Apt\.?|Apartman[ıi]|Sitesi|Evleri)(?:[ \t]*[:.\-\^\/]*[ \t]*\d|[ \t]+\d|[ \t]+(?:No\b|(?-i:[A-ZÇĞİÖŞÜ0-9]{1,3})[ \t]*(?:Blok|Daire|K|D)\b|[A-ZÇĞİÖŞÜa-zçğıöşü]*\b[ \t]*No\b))'
             r')'
             r'(?:\|¢|[^\r\n\|]){0,100}?'
@@ -2515,8 +2549,8 @@ class UyapRedactor:
             rest = ""
             core = re.search(
                 r'(?i)(?:\b(?:No|Nu|Ne|[İiIıl]ç[ \t]*Kap[ıi](?:[ \t]*No)?)\s*[:.]?\s*\d+[A-Za-z]?(?:\s*/\s*\d+)?'
-                r'|\b(?:Kat|Daire|[DK])\s*[:.]?\s*\d+[A-Za-z]?\b)'
-                r'(?:\s*(?:[İiIıl]ç\s*Kap[ıi](?:\s*No)?|Daire|Kat|D|K|Blok)\s*[:.]?\s*[0-9A-Za-z]{1,4}\b)*'
+                r'|\b(?:Kat|Daire|D|K(?![ \t]*[:.]?[ \t]*(?:19|20)\d{2}[ \t]*/))\s*[:.]?\s*\d+[A-Za-z]?\b)'
+                r'(?:\s*(?:[İiIıl]ç\s*Kap[ıi](?:\s*No)?|Daire|Kat|D|K(?![ \t]*[:.]?[ \t]*(?:19|20)\d{2}[ \t]*/)|Blok)\s*[:.]?\s*[0-9A-Za-z]{1,4}\b)*'
                 r'(?:\s*,?\s*(?:(?-i:[A-ZÇĞİÖŞÜ][A-Za-zÇĞİÖŞÜçğıöşü]+)[ \t]+)?(?-i:[A-ZÇĞİÖŞÜ][A-Za-zÇĞİÖŞÜçğıöşü]+)\s*/\s*(?-i:[A-ZÇĞİÖŞÜ][A-Za-zÇĞİÖŞÜçğıöşü]+)'
                 r'|\s+(?-i:[A-ZÇĞİÖŞÜ][a-zçğıöşü]+)\s+(?-i:[A-ZÇĞİÖŞÜ]{3,})\b)?',
                 addr,
@@ -2714,7 +2748,8 @@ class UyapRedactor:
         r'(?i)(?:'
         r'(?<![A-Za-zÇĞİÖŞÜçğıöşü])(?:'
         r'(?:No|Nu|Numara|(?:[İiIıl]ç[ \t]*)?Kap[ıiIİ](?:[ \t]*No)?|Daire|Kat)[ \t]*[:.]?[ \t]*\d+[A-Za-z]?(?:[ \t]*/[ \t]*[0-9A-Za-z]+)?'
-        r'|[NDK][ \t]*[:.][ \t]*\d+[A-Za-z]?(?:[ \t]*/[ \t]*[0-9A-Za-z]+)?'
+        r'|[ND][ \t]*[:.][ \t]*\d+[A-Za-z]?(?:[ \t]*/[ \t]*[0-9A-Za-z]+)?'
+        r'|K(?![ \t]*[:.][ \t]*(?:19|20)\d{2}[ \t]*/)[ \t]*[:.][ \t]*\d+[A-Za-z]?(?:[ \t]*/[ \t]*[0-9A-Za-z]+)?'
         r')(?![A-Za-zÇĞİÖŞÜçğıöşü])'
         r'|'
         r'(?<![\d/])\d{1,4}[ \t]*/[ \t]*\d{1,3}(?![\d/])'
@@ -2725,7 +2760,7 @@ class UyapRedactor:
         r'(?i)(?:evrak|dosya|esas|karar|say[ıiIİ]|dava|belge|protokol|takip|talimat|soruşturma|'
         r'hazırlık|poliçe|acente|cilt|aile[ \t]*s[ıiIİ]ra|birey[ \t]*s[ıiIİ]ra|s[ıiIİ]ra|hane|'
         r'sicil|vergi|kimlik|pasaport|ruhsat|plaka|fatura|makbuz|yevmiye|tutanak|rapor|'
-        r'sayfa|madde|f[ıiIİ]kra|bent)[ \t]*$'
+        r'sayfa|madde|f[ıiIİ]kra|bent|(?:^|[\s,;(\|])[EK][ \t]*[:.]?)[ \t]*$'
     )
     _SN_NUFUS_SPAN_RE = re.compile(
         r'(?i)\bcilt\b|aile[ \t]*s[ıiIİ]ra|\bnk\.?[ \t]*lu\b|\bBSN\b|mah\.?[ \t]*/[ \t]*köy|köy[ \t]*/[ \t]*mahalles[iİıI]'
@@ -2920,6 +2955,8 @@ class UyapRedactor:
             if ch == ",":
                 rest_after = text[cur + 1:le].lstrip(" \t")
                 if not rest_after:
+                    break
+                if re.match(r'(?i)^(?:[EK][ \t]*[:.]|Esas|Karar|(?:19|20)\d{2}[ \t]*/[ \t]*\d+[ \t]*(?:E|K)\b)', rest_after):
                     break
                 first_w_m = re.match(r'[A-Za-zÇĞİÖŞÜçğıöşü]+', rest_after)
                 if first_w_m:
@@ -3204,7 +3241,29 @@ class UyapRedactor:
     _JSON_SURNAME_KEYS = frozenset({"soyad", "soyadi"})
 
     @classmethod
-    def _is_person_name(cls, candidate: str, before_ctx: str = "", after_ctx: str = "") -> bool:
+    def _passes_ocr_name_filter(cls, candidate: str, after_ctx: str = "") -> bool:
+        """OCR gürültüsüne karşı ek kesinlik süzgeci: >=3 harf/belirteç, 3+ harf tekrarı ve rakam karışımı reddi."""
+        clean = " ".join(unicodedata.normalize("NFC", candidate).strip().split())
+        toks = clean.split()
+        if not toks:
+            return False
+        for t in toks:
+            if len(t) < 3:
+                return False
+            if re.search(r'(.)\1\1', _tr_lower(t)):
+                return False
+        if after_ctx and re.match(r'^\d+[A-Za-zÇĞİÖŞÜçğıöşüâîûÂÎÛ]', after_ctx):
+            return False
+        return True
+
+    @classmethod
+    def _is_person_name(
+        cls,
+        candidate: str,
+        before_ctx: str = "",
+        after_ctx: str = "",
+        ocr: bool = False,
+    ) -> bool:
         """Aday ad-soyad dizisinin tüm kesinlik kurallarına uyup uymadığını denetler."""
         if not candidate:
             return False
@@ -3235,6 +3294,8 @@ class UyapRedactor:
                     aw in cls._PERSON_CORP_TITLE_WORDS and aw not in ("vekil", "vekili", "vekilleri")
                 ):
                     return False
+        if ocr and not cls._passes_ocr_name_filter(clean, after_ctx=after_ctx):
+            return False
         return True
 
     @classmethod
@@ -3366,6 +3427,24 @@ class UyapRedactor:
             registry.remove_person(k)
 
     @classmethod
+    def _extract_corp_probe_lines(cls, text: str) -> str:
+        """Bellek tavanı aşıldığında yalnızca şirket unvanı güvenlik ağının ihtiyaç duyduğu satırları çıkarır."""
+        lines = text.splitlines()
+        keep: Set[int] = set()
+        corp_abbr_hint = re.compile(r'(?:a\.?\s*ş|ltd|şti|koop|a\.?\s*o|inc|corp|llc)\b', re.IGNORECASE)
+        for idx, ln in enumerate(lines):
+            fl = _fold_tr(ln)
+            if (
+                corp_abbr_hint.search(fl)
+                or cls._AFTER_CORP_TITLE_RE.search(ln)
+                or any(w in fl for w in cls._LEGAL_ENTITY_WORDS)
+            ):
+                if idx > 0:
+                    keep.add(idx - 1)
+                keep.add(idx)
+        return "\n".join(lines[idx] for idx in sorted(keep))
+
+    @classmethod
     def _extract_name_from_segment(cls, seg: str) -> Tuple[str, str]:
         """Taraf/kimlik satırı parçasından durdurma işaretine kadar aday adı ve kalan bağlamı ayırır."""
         s = seg.lstrip(" \t*_")
@@ -3429,13 +3508,57 @@ class UyapRedactor:
         return None
 
     @classmethod
-    def collect_persons_from_text(cls, text: str, registry: MaskRegistry) -> None:
+    def _finalize_ocr_weak_persons(
+        cls, weak_ocr_acc: Optional[Dict], registry: MaskRegistry
+    ) -> None:
+        """OCR zayıf (B) adaylarını en az 2 farklı satırda geçme (veya zaten kayıtlı olma) şartıyla registry'ye ekler."""
+        if not weak_ocr_acc or registry._persons_frozen:
+            return
+        for entry in weak_ocr_acc.get("entries", {}).values():
+            hits = entry.get("hits") or []
+            if not hits:
+                continue
+            if len(entry.get("lines", ())) >= 2 or registry.is_person_registered(hits[0][0]):
+                for cand_name, b_role in hits:
+                    registry.add_person(cand_name, b_role)
+
+    @classmethod
+    def collect_persons_from_text(
+        cls,
+        text: str,
+        registry: MaskRegistry,
+        ocr: bool = False,
+        weak_ocr_acc: Optional[Dict] = None,
+    ) -> None:
         """
         Yalnızca yüksek kesinlikli (A-D) kalıplardan gerçek kişi ad-soyadlarını çıkarır ve
         registry'ye kaydeder. Avukat, görevli, tüzel kişi ve kurum adlarını dışlar.
+        ocr=True iken zayıf (B) kalıp en az 2 farklı satır (veya zaten kayıtlı kişi) şartına bağlıdır.
         """
         if not text or registry._persons_frozen:
             return
+        local_acc: Optional[Dict] = None
+        acc: Optional[Dict] = None
+        doc_seq = 0
+        if ocr:
+            if weak_ocr_acc is None:
+                local_acc = {"_seq": 0, "entries": {}}
+                acc = local_acc
+            else:
+                acc = weak_ocr_acc
+            doc_seq = acc.get("_seq", 0) + 1
+            acc["_seq"] = doc_seq
+            acc.setdefault("entries", {})
+
+        def _valid_person(cand_str: str, before_c: str = "", after_c: str = "") -> bool:
+            if not cls._is_person_name(cand_str, before_ctx=before_c, after_ctx=after_c, ocr=False):
+                return False
+            if not ocr:
+                return True
+            if registry.is_person_registered(cand_str):
+                return True
+            return cls._passes_ocr_name_filter(cand_str, after_ctx=after_c)
+
         text = cls.normalize_spaces(text)
         lines = text.splitlines()
         active_role: Optional[str] = None
@@ -3461,7 +3584,7 @@ class UyapRedactor:
                         cand, after_ctx = cls._extract_name_from_segment(part)
                         cand, _ = cls._strip_leading_descriptors(cand)
                         after_ctx = cls._extend_after_ctx(lines, i, after_ctx)
-                        if cls._is_person_name(cand, after_ctx=after_ctx):
+                        if _valid_person(cand, after_c=after_ctx):
                             registry.add_person(cand, role, strong=True)
                 else:
                     active_role = None
@@ -3473,7 +3596,7 @@ class UyapRedactor:
                         cand, after_ctx = cls._extract_name_from_segment(part)
                         cand, _ = cls._strip_leading_descriptors(cand)
                         after_ctx = cls._extend_after_ctx(lines, i, after_ctx)
-                        if cls._is_person_name(cand, after_ctx=after_ctx):
+                        if _valid_person(cand, after_c=after_ctx):
                             registry.add_person(cand, active_role, strong=True)
                 else:
                     # Liste dışı satır (adres devamı değilse bloğu kapat)
@@ -3495,8 +3618,25 @@ class UyapRedactor:
                         after_b = " " + b_toks[-1] + after_b
                     cand_name, _ = cls._strip_leading_descriptors(cand_name, b_role)
                     after_b = cls._extend_after_ctx(lines, i, after_b)
-                    if cls._is_person_name(cand_name, before_ctx=before_b, after_ctx=after_b):
-                        registry.add_person(cand_name, b_role)
+                    if _valid_person(cand_name, before_c=before_b, after_c=after_b):
+                        if not ocr or registry.is_person_registered(cand_name):
+                            registry.add_person(cand_name, b_role)
+                        else:
+                            raw_t = cand_name.split()
+                            ftoks = tuple(_fold_tr(t) for t in raw_t)
+                            if len(ftoks) == 2:
+                                ck = " ".join(sorted(ftoks))
+                            elif (
+                                len(raw_t[0]) >= 2
+                                and raw_t[0].isupper()
+                                and any(not t.isupper() for t in raw_t[1:])
+                            ):
+                                ck = " ".join(ftoks[1:] + (ftoks[0],))
+                            else:
+                                ck = " ".join(ftoks)
+                            entry = acc["entries"].setdefault(ck, {"lines": set(), "hits": []})
+                            entry["lines"].add((doc_seq, i))
+                            entry["hits"].append((cand_name, b_role))
 
                 for m_b in cls._PROSE_ROLE_RE.finditer(raw_line):
                     _register_prose_match(
@@ -3535,7 +3675,7 @@ class UyapRedactor:
                 tckn_raw = m_c.group("tckn") or ""
                 tckn_digits = re.sub(r'\D', '', _ocr_digits(tckn_raw))
                 tckn_val = tckn_digits if len(tckn_digits) >= 9 else None
-                if cls._is_person_name(cand_c, before_ctx=before_c, after_ctx=raw_line[m_c.start():]):
+                if _valid_person(cand_c, before_c=before_c, after_c=raw_line[m_c.start():]):
                     registry.add_person(cand_c, c_role, strong=True, tckn=tckn_val)
 
             # D. Kimlik tablosu: Adı Soyadı / Adı + Soyadı
@@ -3546,7 +3686,7 @@ class UyapRedactor:
                 cand_d, _ = cls._strip_leading_descriptors(cand_d)
                 after_d = cls._extend_after_ctx(lines, i, after_d)
                 role_d = cls._find_role_above(lines, i)
-                if role_d != "__OFFICIAL__" and cls._is_person_name(cand_d, after_ctx=after_d):
+                if role_d != "__OFFICIAL__" and _valid_person(cand_d, after_c=after_d):
                     registry.add_person(cand_d, role_d, strong=True)
 
             m_dsame = cls._ID_SAME_LINE_SPLIT_RE.search(raw_line)
@@ -3554,7 +3694,7 @@ class UyapRedactor:
                 cand_d = f"{m_dsame.group('fn')} {m_dsame.group('ln')}"
                 cand_d, _ = cls._strip_leading_descriptors(cand_d)
                 role_d = cls._find_role_above(lines, i)
-                if role_d != "__OFFICIAL__" and cls._is_person_name(cand_d):
+                if role_d != "__OFFICIAL__" and _valid_person(cand_d):
                     registry.add_person(cand_d, role_d, strong=True)
 
             m_dfirst = cls._ID_FIRST_RE.match(raw_line)
@@ -3573,7 +3713,7 @@ class UyapRedactor:
                             after_ln = cls._extend_after_ctx(lines, j, after_ln)
                             near_off = bool(cls._OFFICIAL_LINE_RE.search("\n".join(lines[max(0, i - 2):j + 1])))
                             role_d = cls._find_role_above(lines, i)
-                            if not near_off and role_d != "__OFFICIAL__" and cls._is_person_name(combined, after_ctx=after_ln):
+                            if not near_off and role_d != "__OFFICIAL__" and _valid_person(combined, after_c=after_ln):
                                 registry.add_person(combined, role_d, strong=True)
                             break
 
@@ -3588,8 +3728,11 @@ class UyapRedactor:
                 and _fold_tr(cls._find_role_above(lines, i + 1) or "") == _fold_tr(sig_role)
             ):
                 nxt = lines[i + 1].strip()
-                if nxt and cls._is_person_name(nxt):
+                if nxt and _valid_person(nxt):
                     registry.add_person(nxt, sig_role, strong=True)
+
+        if local_acc is not None:
+            cls._finalize_ocr_weak_persons(local_acc, registry)
 
     @classmethod
     def collect_persons_from_json(cls, data, registry: MaskRegistry) -> None:
@@ -4482,28 +4625,41 @@ class UyapRedactor:
         return ""
 
     @classmethod
+    def _read_scanned_raw_cached(
+        cls,
+        file_path: str,
+        raw_cache_path: Optional[str] = None,
+    ) -> str:
+        """raw_cache_path varsa oradan okur; yoksa extract_scanned_raw çağırıp önbelleğe yazar."""
+        if raw_cache_path and os.path.isfile(raw_cache_path):
+            with open(raw_cache_path, "r", encoding="utf-8", errors="replace") as cf:
+                return cf.read()
+        raw = cls.extract_scanned_raw(file_path)
+        if raw_cache_path and raw:
+            os.makedirs(os.path.dirname(raw_cache_path), exist_ok=True)
+            with open(raw_cache_path, "w", encoding="utf-8") as cf:
+                cf.write(raw)
+        return raw
+
+    @classmethod
     def extract_and_redact_scanned_file(
         cls,
         file_path: str,
         known_tckns: Optional[Set[str]] = None,
         registry: Optional["MaskRegistry"] = None,
         raw_cache_path: Optional[str] = None,
+        raw_override: Optional[str] = None,
     ) -> Tuple[str, Dict[str, int]]:
         """
         PDF veya TIFF/Görsel dosyalarını uzantısına göre en uygun OCR motoruyla işler ve maskeler.
         raw_cache_path yalnızca geliştirme/denetim içindir (UYAP_OCR_CACHE_DIR): ham OCR metni
         oradan okunur / oraya yazılır. Normal kullanımda None'dır ve ham metin diske yazılmaz.
+        raw_override verildiğinde dosya/önbellek okunmadan doğrudan o ham metin maskelenir.
         """
-        raw = ""
-        if raw_cache_path and os.path.isfile(raw_cache_path):
-            with open(raw_cache_path, "r", encoding="utf-8", errors="replace") as cf:
-                raw = cf.read()
+        if raw_override is not None:
+            raw = raw_override
         else:
-            raw = cls.extract_scanned_raw(file_path)
-            if raw_cache_path and raw:
-                os.makedirs(os.path.dirname(raw_cache_path), exist_ok=True)
-                with open(raw_cache_path, "w", encoding="utf-8") as cf:
-                    cf.write(raw)
+            raw = cls._read_scanned_raw_cached(file_path, raw_cache_path=raw_cache_path)
         if not raw:
             return "", cls._empty_stats()
         return cls.redact_text(raw, known_tckns=known_tckns, registry=registry)
@@ -5358,9 +5514,11 @@ class UyapRedactor:
             pre_text_files = _collect_step2_files(cls.TEXT_DOC_EXTS, check_clean_src=True)
 
             # 1a. Ön tarama (yalnızca bellekte): bağlamıyla tespit edilen hesap/sicil numaralarını öğren
-            # ve mask_names açıksa metinli belgelerle manifest JSON'lardan kişileri keşfet.
+            # ve mask_names açıksa metinli belgelerle manifest JSON'lardan ve taranmış (OCR) belgelerden kişileri keşfet.
             learn = MaskRegistry(known_tckns)
             prescan_texts: List[str] = []
+            ocr_raw_cache: Dict[str, str] = {}
+            ocr_raw_bytes = 0
             for file_path in md_files:
                 try:
                     with open(file_path, "r", encoding="utf-8", errors="replace") as f:
@@ -5405,7 +5563,56 @@ class UyapRedactor:
                             cls.collect_persons_from_json(meta_data, registry)
                         except Exception:
                             pass
+
+                pre_ocr_files = _collect_step2_files(cls.OCR_DOC_EXTS)
+                ocr_prescan_targets: List[Tuple[str, str]] = []
+                for ocr_p, base_rel, _, ocr_ext in pre_ocr_files:
+                    if ocr_ext in cls.SMALL_IMAGE_EXTS and cls._is_small_image(ocr_p):
+                        continue
+                    ocr_prescan_targets.append((ocr_p, base_rel))
+                for ef_path, disp_rel, _, inner_ext, _ in archive_doc_items:
+                    if inner_ext not in cls.OCR_DOC_EXTS:
+                        continue
+                    if inner_ext in cls.SMALL_IMAGE_EXTS and cls._is_small_image(ef_path):
+                        continue
+                    ocr_prescan_targets.append((ef_path, disp_rel))
+
+                weak_ocr_acc: Dict = {}
+                ocr_prescan_total = len(ocr_prescan_targets)
+                for ocr_idx, (ocr_p, cache_rel) in enumerate(ocr_prescan_targets, 1):
+                    if progress_cb:
+                        progress_cb(
+                            "sync",
+                            f"Ön tarama (OCR): {ocr_idx}/{ocr_prescan_total} belge taranıyor",
+                            grand_stats,
+                        )
+                    raw_cache_path = os.path.join(ocr_cache_dir, cache_rel) if ocr_cache_dir else None
+                    try:
+                        raw_ocr = cls._read_scanned_raw_cached(ocr_p, raw_cache_path=raw_cache_path)
+                    except Exception:
+                        continue
+                    raw_bytes = len(raw_ocr.encode("utf-8")) if raw_ocr else 0
+                    if ocr_raw_bytes + raw_bytes <= cls.OCR_PRESCAN_MAX_MEM_BYTES:
+                        ocr_raw_cache[ocr_p] = raw_ocr
+                        ocr_raw_bytes += raw_bytes
+                        if raw_ocr:
+                            prescan_texts.append(raw_ocr)
+                    elif raw_ocr:
+                        corp_snippet = cls._extract_corp_probe_lines(raw_ocr)
+                        if corp_snippet:
+                            prescan_texts.append(corp_snippet)
+                    if raw_ocr:
+                        try:
+                            cls.redact_text(raw_ocr, known_tckns=known_tckns, registry=learn)
+                            cls.collect_persons_from_text(
+                                raw_ocr, registry, ocr=True, weak_ocr_acc=weak_ocr_acc
+                            )
+                        except Exception:
+                            pass
+
+                cls._finalize_ocr_weak_persons(weak_ocr_acc, registry)
                 cls._prune_corp_candidates(prescan_texts, registry)
+                prescan_texts.clear()
                 registry.freeze_persons()
             registry.seed("hesap", learn.known_values("hesap", min_len=7))
             registry.seed("sicil", learn.known_values("sicil", min_len=5))
@@ -5455,8 +5662,13 @@ class UyapRedactor:
                             red_text, p_stats = "", cls._empty_stats()
                     else:
                         raw_cache_path = os.path.join(ocr_cache_dir, base_rel) if ocr_cache_dir else None
+                        cached_raw = ocr_raw_cache.pop(full_p, None)
                         red_text, p_stats = cls.extract_and_redact_scanned_file(
-                            full_p, known_tckns=known_tckns, registry=registry, raw_cache_path=raw_cache_path
+                            full_p,
+                            known_tckns=known_tckns,
+                            registry=registry,
+                            raw_cache_path=raw_cache_path,
+                            raw_override=cached_raw,
                         )
                     grand_stats["processed_items"] += 1
                     grand_stats["last_file_stats"] = p_stats
@@ -5538,8 +5750,13 @@ class UyapRedactor:
                             red_text, p_stats = "", cls._empty_stats()
                     else:
                         raw_cache_path = os.path.join(ocr_cache_dir, disp_rel) if ocr_cache_dir else None
+                        cached_raw = ocr_raw_cache.pop(ef_path, None)
                         red_text, p_stats = cls.extract_and_redact_scanned_file(
-                            ef_path, known_tckns=known_tckns, registry=registry, raw_cache_path=raw_cache_path
+                            ef_path,
+                            known_tckns=known_tckns,
+                            registry=registry,
+                            raw_cache_path=raw_cache_path,
+                            raw_override=cached_raw,
                         )
 
                     grand_stats["processed_items"] += 1
