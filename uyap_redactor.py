@@ -973,6 +973,7 @@ class UyapRedactor:
         "geregi", "geregince", "iliskin", "hakkinda", "nedeniyle", "olarak", "tarafindan",
         "karsilik", "uzerine", "belgesi", "belge", "evrak", "tutanak", "tutanagi",
         "dilekce", "dilekcesi", "rapor", "raporu", "ilam", "ilami", "muzekkere", "muzekkeresi",
+        "ptt", "teslimat", "gonderi", "barkod", "kargo", "mazbata", "mazbatasi",
         "cevap", "cevabi", "itiraz", "istinaf", "temyiz", "durusma", "celse", "tensip",
         "tedbir", "haciz", "icra", "ifade", "ifadesi", "sahsin", "sahis", "kisi", "kisinin",
         "kisiler", "taraflar", "taraf", "muvekkil", "muvekkilim", "muvekkilimiz",
@@ -1023,9 +1024,11 @@ class UyapRedactor:
     _MASK_AFTER_PLACE_CORP_WORDS = frozenset({
         "cadde", "caddesi", "cad", "cd", "sokak", "sokagi", "sok", "sk",
         "bulvar", "bulvari", "blv", "bulv", "mahalle", "mahallesi", "mah", "mh",
+        "koy", "koyu", "kopru", "koprusu", "kavsak", "kavsagi", "stadi", "stadyumu",
         "okul", "okulu", "ilkokul", "ilkokulu", "ortaokul", "ortaokulu", "lise", "lisesi",
         "universite", "universitesi", "fakulte", "fakultesi", "hastane", "hastanesi",
         "cami", "camii", "camisi", "park", "parki", "meydan", "meydani",
+        "merkez", "merkezi", "tesisi", "tesisleri",
         "vakif", "vakfi", "dernek", "dernegi", "insaat", "ticaret", "sanayi", "turizm",
         "nakliyat", "lojistik", "otomotiv", "gida", "tekstil", "holding", "site", "sitesi",
         "apartman", "apartmani", "apt", "ishani", "plaza", "konutlari", "evleri",
@@ -1260,7 +1263,7 @@ class UyapRedactor:
 
         # 2B-1. Etiketli 16 haneli Kredi / ATM Kartı Numarası
         p_card_labeled = re.compile(
-            r'(?i)(?P<label>\b(?:KART\s*NO|KRED[İI]\s*KART[Iİ]\s*NO)[\s\*:]+)(?P<card>(?:\d{4}[\s\-]?){3}\d{4}|\d{16})\b'
+            r'(?i)(?P<label>\b(?:KART\s*NO|(?:KRED[İI]|BANKA)\s*KART[Iİ](?:\s*NO)?)[\s\*:]+)(?P<card>(?:\d{4}[\s\-]?){3}\d{4}|\d{16})\b'
         )
 
         def repl_card_labeled(m: re.Match) -> str:
@@ -1300,9 +1303,9 @@ class UyapRedactor:
 
         redacted = p_card_spaced.sub(repl_card_spaced, redacted)
 
-        # 2B-4. Banka tarafından kısmen maskelenmiş kart no ("5406 67** **** 1234", "540667******1234")
+        # 2B-4. Banka tarafından kısmen maskelenmiş kart no ("5406 67** **** 1234", "4532 **** **** 3337", "540667******1234")
         p_card_partial = re.compile(
-            r'(?<![\d\w])(?P<card>\d{4}[ \-]?\d{2}[\*xX]{2}[ \-]?[\*xX]{4}[ \-]?\d{4}|\d{6}[\*xX]{6}\d{4})(?![\d\w])'
+            r'(?<![\d\w])(?P<card>\d{4}[ \-]?\d{2}[\*xX]{2}[ \-]?[\*xX]{4}[ \-]?\d{4}|\d{4}[ \-]?[\*xX]{4}[ \-]?[\*xX]{4}[ \-]\d{4}|\d{6}[\*xX]{6}\d{4})(?![\d\w])'
         )
 
         def repl_card_partial(m: re.Match) -> str:
@@ -2192,8 +2195,8 @@ class UyapRedactor:
         r'menkul\s+k[ıi]ymet|katılım\s+bankas|iş\s+merkezi|towers|plaza|\bcenter\b'
     )
     _ADDR_OLAY_RE = re.compile(
-        r'(?i)suçun\s+yeri|olay\s+yeri|kaza\s+yeri|olay(?:ın)?\s+meydana|meydana\s+gel|'
-        r'\bönünde\b|kavşağ|sıralarında|trafik\s+kazas'
+        r'(?i)suçun\s+yeri|olay\s+yeri|kaza\s+yeri|keşif\s+yeri|(?:suç|olay|kaza|keşif)\s+mahalli|'
+        r'olay(?:ın)?\s+meydana|meydana\s+gel|\bönünde\b|kavşağ|sıralarında|trafik\s+kazas'
     )
     # Tüzel kişi biçimi: taraf satırında geçerse alttaki adres kurum adresidir
     _ADDR_STRONG_INST_RE = re.compile(
@@ -2326,7 +2329,7 @@ class UyapRedactor:
             return "kisi"
         if prev and cls._ADDR_OLAY_RE.search(prev[0]):
             return "olay"
-        if prev and cls._ADDR_INST_RE.search(prev[0]):
+        if prev and cls._ADDR_INST_RE.search(prev[0]) and not re.search(_no_person_id, prev[0]):
             return "kurum"
         return "kisi"
 
@@ -3581,9 +3584,25 @@ class UyapRedactor:
                     if not parts and rest.strip():
                         parts = [rest]
                     for part in parts:
-                        cand, after_ctx = cls._extract_name_from_segment(part)
+                        cand, raw_after_ctx = cls._extract_name_from_segment(part)
                         cand, _ = cls._strip_leading_descriptors(cand)
-                        after_ctx = cls._extend_after_ctx(lines, i, after_ctx)
+                        if (
+                            len(parts) == 1
+                            and cand
+                            and len(cand.split()) == 1
+                            and not raw_after_ctx.strip()
+                            and i + 1 < len(lines)
+                        ):
+                            nxt_line = lines[i + 1].strip()
+                            if nxt_line and ":" not in nxt_line and not re.search(r'\d', nxt_line):
+                                nxt_cand, nxt_after = cls._extract_name_from_segment(nxt_line)
+                                if nxt_cand and len(nxt_cand.split()) == 1:
+                                    joined = f"{cand} {nxt_cand}"
+                                    joined_after = cls._extend_after_ctx(lines, i + 1, nxt_after)
+                                    if _valid_person(joined, after_c=joined_after):
+                                        registry.add_person(joined, role, strong=True)
+                                        continue
+                        after_ctx = cls._extend_after_ctx(lines, i, raw_after_ctx)
                         if _valid_person(cand, after_c=after_ctx):
                             registry.add_person(cand, role, strong=True)
                 else:
@@ -5988,6 +6007,20 @@ class UyapRedactor:
                     w(f"Takma ad verilen kişi sayıları (role göre): {role_summary}\n")
             w("\n")
 
+            if mask_names and registry is not None and registry.has_persons():
+                labels_by_role: Dict[str, List[str]] = {}
+                for lab in registry.person_map().keys():
+                    role_part = lab.strip("[]").rsplit("_", 1)[0]
+                    labels_by_role.setdefault(role_part, []).append(lab)
+                if labels_by_role:
+                    w("## Dosyadaki anonim taraf ve kişi etiketleri (gerçek ad içermez)\n\n")
+                    w("Yapay zekâ incelemesi için dosyada geçen tutarlı kişi takma adları (gerçek ad-soyad içermez):\n\n")
+                    for role_name in MaskRegistry.PERSON_ROLES:
+                        labs = labels_by_role.get(role_name)
+                        if labs:
+                            w(f"- **{role_name}:** " + ", ".join(f"`{lb}`" for lb in labs) + "\n")
+                    w("\n")
+
             w("## Etiketlerin anlamı\n\n")
             w("- Maskeler numaralıdır: `[TCKN_1]`, `[IBAN_2]`, `[ADRES_3]`, `[TEL_1]`, `[SİCİL_4]`, `[HESAP_1]`, "
               "`[KART_1]`, `[SERİ_NO_1]`, `[MRZ_1]`.\n")
@@ -6043,9 +6076,9 @@ class UyapRedactor:
               "bölünmüş veya alışılmadık biçimdeki numaralar ve adresler gözden kaçabilir. Paylaşmadan önce "
               "göz atın.\n")
             if mask_names:
-                w("- Kişi ad-soyadlarında yalnızca metinli belgelerde açıkça taraf/tanık olarak geçen kişiler "
-                  "tanınır; başka üçüncü kişiler ve OCR'ın bozduğu yazımlar açık kalabilir; tek başına ön ad/soyad "
-                  "maskelenmez.\n")
+                w("- Kişi ad-soyadlarında metinli belgeler ile taranmış (OCR) belgelerde taraf/tanık/imza olarak geçen "
+                  "kişiler tanınır; bağlamsız üçüncü kişiler, OCR'ın bozduğu yazımlar ve tek başına geçen ön ad/soyad "
+                  "açık kalabilir.\n")
                 w("- Doğum tarihi, anne/baba adı ve nüfus kayıt yeri maskelenmez (dava analizi için gereklidir).\n")
             else:
                 w("- Ad-soyad (kullanıcı tercihiyle kapatıldı), doğum tarihi, anne/baba adı ve nüfus kayıt yeri "
@@ -6110,6 +6143,7 @@ def main():
         registry = MaskRegistry(known_tckns)
         in_place_stats = UyapRedactor._empty_stats()
         skip_names = UyapRedactor.SKIP_DIRS
+        in_place_files: List[str] = []
         for root, dirs, files in os.walk(target_dir):
             if UyapRedactor._is_skipped_dir(root, target_dir, skip_names):
                 dirs[:] = []
@@ -6117,13 +6151,26 @@ def main():
             dirs[:] = sorted(d for d in dirs if not UyapRedactor._is_skipped_dir(os.path.join(root, d), target_dir, skip_names))
             for file in sorted(files):
                 if file.endswith((".md", ".txt")) and not file.endswith(".bak"):
-                    fp = os.path.join(root, file)
-                    red, stats = UyapRedactor.redact_file_to_memory(fp, known_tckns=known_tckns, registry=registry)
-                    for k in in_place_stats:
-                        in_place_stats[k] += stats[k]
-                    if stats["total"] > 0:
-                        with open(fp, "w", encoding="utf-8") as wf:
-                            wf.write(red)
+                    in_place_files.append(os.path.join(root, file))
+        if not args.isimleri_koru:
+            prescan_texts: List[str] = []
+            for fp in in_place_files:
+                try:
+                    with open(fp, "r", encoding="utf-8", errors="replace") as rf:
+                        raw_t = rf.read()
+                    prescan_texts.append(raw_t)
+                    UyapRedactor.collect_persons_from_text(raw_t, registry)
+                except Exception:
+                    pass
+            UyapRedactor._prune_corp_candidates(prescan_texts, registry)
+            registry.freeze_persons()
+        for fp in in_place_files:
+            red, stats = UyapRedactor.redact_file_to_memory(fp, known_tckns=known_tckns, registry=registry)
+            for k in in_place_stats:
+                in_place_stats[k] += stats[k]
+            if stats["total"] > 0:
+                with open(fp, "w", encoding="utf-8") as wf:
+                    wf.write(red)
         synced = UyapRedactor.sync_index_md(target_dir)
         print(
             f"Maskelenen TCKN: {in_place_stats['tckn']}, Telefon: {in_place_stats['telefon']}, "
@@ -6139,13 +6186,29 @@ def main():
     print("=" * 60)
     print("🛡️ UYAP İZOLE TEMİZ DAVA KLASÖRÜ ÜRETİMİ (AI EXPORT)")
     print("=" * 60)
+    stage_root = None
     try:
+        src_target = args.path
+        out_target = args.out
+        if os.path.isfile(args.path):
+            abs_file = os.path.abspath(args.path)
+            stem = os.path.splitext(os.path.basename(abs_file))[0] or "Belge"
+            stage_root = tempfile.mkdtemp(prefix="uyap_cli_stage_")
+            staged_dir = os.path.join(stage_root, stem)
+            os.makedirs(staged_dir, exist_ok=True)
+            shutil.copy2(abs_file, os.path.join(staged_dir, os.path.basename(abs_file)))
+            src_target = staged_dir
+            if not out_target:
+                out_target = os.path.join(os.path.dirname(abs_file), f"{stem} (Maskelenmis AI)")
         dest, stats = UyapRedactor.export_isolated_clean_folder(
-            args.path, args.out, mask_names=not args.isimleri_koru
+            src_target, out_target, mask_names=not args.isimleri_koru
         )
     except ValueError as ve:
         print(f"Hata: {ve}", file=sys.stderr)
         sys.exit(1)
+    finally:
+        if stage_root:
+            shutil.rmtree(stage_root, ignore_errors=True)
 
     print("\n✅ Maskeli klasör oluşturuldu. Otomatik maskeleme hatasız değildir; paylaşmadan önce raporu ve OCR'lı belgeleri gözden geçirin.")
     if stats.get("warning_no_documents"):

@@ -609,6 +609,16 @@ class AuditCase(unittest.TestCase):
             # Murat Kılıç (>=2 satır) sızıntı olarak yakalanır; tek satır Hasan Boz yakalanmaz
             self.assertEqual(leaked_labels, ["[TANIK_1]"])
 
+    def test_mahal_and_kesif_yeri_classified_as_olay(self):
+        src, out = self._case(
+            {"tutanak.md": "Suç mahalli: Barbaros Mah. 10. Sok. No:5\nKeşif yeri: Çamlıca Mah. Lale Cad. No:8\n"},
+            {"tutanak.md": "Suç mahalli: Barbaros Mah. 10. Sok. No:5\nKeşif yeri: Çamlıca Mah. Lale Cad. No:8\n"},
+        )
+        res = A.audit(src, out)
+        self.assertEqual(res["leaks"]["addr_kisi"], [])
+        self.assertEqual(len(res["leaks"]["addr_olay"]), 2)
+        self.assertFalse(A.summarize(res)[2])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -353,7 +353,8 @@ COURT_ESAS_RE = re.compile(
 ADDR_PREFIX_RE = re.compile(r'([A-ZÇĞİÖŞÜ][a-zçğıöşü]+|[A-ZÇĞİÖŞÜ]{3,})([ \t]*\r?\n[ \t]*|[ \t]+)\[ADRES_\d+\]')
 
 OLAY_RE = re.compile(
-    r'(?i)suçun\s+yeri|olay\s+yeri|kaza\s+yeri|meydana\s+gel|\bönünde\b|kavşağ|sıralarında|'
+    r'(?i)suçun\s+yeri|olay\s+yeri|kaza\s+yeri|keşif\s+yeri|(?:suç|olay|kaza|keşif)\s+mahalli|'
+    r'meydana\s+gel|\bönünde\b|kavşağ|sıralarında|'
     r'trafik\s+kazas|Yer\s*\(Cadde|'
     r'\bopr\s*:|\b(?:operat[öo]r|baz(?:\s+istasyon\w*)?|BTS|CGI|hücre\w*|LAC)\b|'
     r'\b\d{2}\.\d{4,}\s*[-,;]?\s*\d{2}\.\d{4,}\b'

@@ -3639,6 +3639,134 @@ class TestOcrKisiKesfi(unittest.TestCase):
             self.assertNotIn("Kemal Demir", b2_out)
 
 
+class TestFinalPolishAndAIComprehensibility(unittest.TestCase):
+
+    def test_report_lists_anonymous_party_labels_without_real_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "dava")
+            dest = os.path.join(tmp, "dava_out")
+            os.makedirs(src, exist_ok=True)
+            with open(os.path.join(src, "dilekce.md"), "w", encoding="utf-8") as wf:
+                wf.write(
+                    "DAVACI : Ali Kaya\n"
+                    "DAVALI : Mehmet Demir\n"
+                    "TANIK : Hasan Arslan\n"
+                    "Talep.\n"
+                )
+            out_dir, _ = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+            report = open(os.path.join(out_dir, UyapRedactor.REPORT_NAME), encoding="utf-8").read()
+            self.assertIn("## Dosyadaki anonim taraf ve kişi etiketleri (gerçek ad içermez)", report)
+            self.assertIn("- **DAVACI:** `[DAVACI_1]`", report)
+            self.assertIn("- **DAVALI:** `[DAVALI_1]`", report)
+            self.assertIn("- **TANIK:** `[TANIK_1]`", report)
+            self.assertNotIn("yalnızca metinli belgelerde", report)
+            for real_name in ("Ali Kaya", "Mehmet Demir", "Hasan Arslan"):
+                self.assertNotIn(real_name, report)
+
+    def test_mahal_event_and_named_facilities_preserved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "olay_dava")
+            dest = os.path.join(tmp, "olay_dava_out")
+            os.makedirs(src, exist_ok=True)
+            with open(os.path.join(src, "tutanak.md"), "w", encoding="utf-8") as wf:
+                wf.write(
+                    "DAVACI : Ali Kaya\n"
+                    "Suç mahalli: Barbaros Mah. 10. Sok. No:5 Beşiktaş/İstanbul\n"
+                    "Keşif yeri: Çamlıca Mah. Lale Cad. No:8 Üsküdar/İstanbul\n"
+                    "Davacı Ali Kaya olay sonrası Ali Kaya Merkezi ve Ali Kaya Köyü civarındaydı.\n"
+                )
+            out_dir, _ = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+            out = open(os.path.join(out_dir, "tutanak.md"), encoding="utf-8").read()
+            self.assertIn("DAVACI : [DAVACI_1]", out)
+            self.assertIn("Davacı [DAVACI_1] olay sonrası", out)
+            self.assertIn("Suç mahalli: Barbaros Mah. 10. Sok. No:5 Beşiktaş/İstanbul", out)
+            self.assertIn("Keşif yeri: Çamlıca Mah. Lale Cad. No:8 Üsküdar/İstanbul", out)
+            self.assertIn("Ali Kaya Merkezi", out)
+            self.assertIn("Ali Kaya Köyü", out)
+
+    def test_cli_single_file_and_in_place_person_discovery(self):
+        import uyap_redactor
+        with tempfile.TemporaryDirectory() as tmp:
+            single_md = os.path.join(tmp, "tek_belge.md")
+            with open(single_md, "w", encoding="utf-8") as wf:
+                wf.write("DAVACI : Zeynep Arslan\nT.C. Kimlik No: 10000000146\n")
+
+            with patch.object(sys, "argv", ["uyap_redactor.py", single_md]):
+                uyap_redactor.main()
+
+            out_dir = os.path.join(tmp, "tek_belge (Maskelenmis AI)")
+            self.assertTrue(os.path.isdir(out_dir))
+            out_txt = open(os.path.join(out_dir, "tek_belge.md"), encoding="utf-8").read()
+            self.assertIn("[DAVACI_1]", out_txt)
+            self.assertIn("[TCKN_1]", out_txt)
+            self.assertNotIn("Zeynep Arslan", out_txt)
+
+            inplace_dir = os.path.join(tmp, "inplace_case")
+            os.makedirs(inplace_dir, exist_ok=True)
+            inplace_md = os.path.join(inplace_dir, "dilekce.md")
+            with open(inplace_md, "w", encoding="utf-8") as wf:
+                wf.write("DAVACI : Zeynep Arslan\nDavacı Zeynep Arslan beyan eder.\n")
+            with patch.object(sys, "argv", ["uyap_redactor.py", inplace_dir, "--in-place"]):
+                uyap_redactor.main()
+            inplace_out = open(inplace_md, encoding="utf-8").read()
+            self.assertIn("[DAVACI_1]", inplace_out)
+            self.assertNotIn("Zeynep Arslan", inplace_out)
+
+    def test_ptt_teslimat_not_person_and_subsequent_address_masked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "src")
+            dest = os.path.join(tmp, "dest")
+            os.makedirs(src, exist_ok=True)
+            with open(os.path.join(src, "tebligat.md"), "w", encoding="utf-8") as wf:
+                wf.write(
+                    "BORÇLU : Hakan Yıldırım\n"
+                    "PTT Teslimat TCKN : 100*****146\n"
+                    "Adres : Feneryolu Mah. Bağdat Cad. No:110 D:9 Kadıköy/İstanbul\n"
+                )
+            out_dir, stats = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+            out = open(os.path.join(out_dir, "tebligat.md"), encoding="utf-8").read()
+            self.assertIn("[BORÇLU_1]", out)
+            self.assertNotIn("PTT Teslimat", {name for _, name in stats["kisi_listesi"]})
+            self.assertNotIn("[KİŞİ_", out)
+            self.assertNotIn("Feneryolu Mah.", out)
+            self.assertNotIn("Bağdat Cad.", out)
+            self.assertIn("Kadıköy/İstanbul", out)
+
+    def test_kredi_karti_without_no_and_4_8_4_partial_masked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "src")
+            dest = os.path.join(tmp, "dest")
+            os.makedirs(src, exist_ok=True)
+            with open(os.path.join(src, "kart.md"), "w", encoding="utf-8") as wf:
+                wf.write(
+                    "Kredi Kartı : 4532 1111 2222 3337\n"
+                    "Kısmi Kart : 4532 **** **** 3337\n"
+                )
+            out_dir, _ = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+            out = open(os.path.join(out_dir, "kart.md"), encoding="utf-8").read()
+            self.assertNotIn("4532 1111 2222 3337", out)
+            self.assertNotIn("3337", out)
+            self.assertIn("[KART_1]", out)
+
+    def test_header_split_name_across_newline_registered(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "src")
+            dest = os.path.join(tmp, "dest")
+            os.makedirs(src, exist_ok=True)
+            with open(os.path.join(src, "icra.md"), "w", encoding="utf-8") as wf:
+                wf.write(
+                    "BORÇLU : Hakan\n"
+                    "Yıldırım\n"
+                    "Borçlu Hakan Yıldırım ödeme yapmadı.\n"
+                )
+            out_dir, _ = UyapRedactor.export_isolated_clean_folder(src, dest, mask_names=True)
+            out = open(os.path.join(out_dir, "icra.md"), encoding="utf-8").read()
+            self.assertIn("[BORÇLU_1]", out)
+            self.assertNotIn("Hakan", out)
+            self.assertNotIn("Yıldırım", out)
+
+
+
 
 
 

@@ -37,7 +37,7 @@ from tkinter import ttk, filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
 
 # Uygulama Sürümü ve Otomatik Güncelleme Kaynağı
-APP_VERSION = "1.4.6"
+APP_VERSION = "1.4.7"
 RUN_BUTTON_TEXT = "▶  Başlat"
 GITHUB_REPO = "MertAtis/Uyap-Dosya-Maskeleme-YPro"
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -1597,8 +1597,8 @@ class UyapRedactorApp(_AppBase):
                         f"🔒 [MASKE] {msg_or_path} -> TCKN:{last_st.get('tckn', 0)}, "
                         f"Tel:{last_st.get('telefon', 0)}, Seri:{last_st.get('seri_no', 0)}, "
                         f"MRZ:{last_st.get('mrz', 0)}, IBAN:{last_st.get('iban', 0)}, "
-                        f"Sicil:{last_st.get('sicil', 0)}, Adres:{last_st.get('adres', 0)}, "
-                        f"Kişi:{last_st.get('kisi', 0)}\n"
+                        f"Hesap:{last_st.get('hesap', 0)}, Sicil:{last_st.get('sicil', 0)}, "
+                        f"Adres:{last_st.get('adres', 0)}, Kişi:{last_st.get('kisi', 0)}\n"
                     ))
                 self.msg_queue.put(("stats", stats))
             elif evt == "ocr":
