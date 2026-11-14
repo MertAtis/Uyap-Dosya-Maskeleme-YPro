@@ -5,6 +5,12 @@ Maskeli çıktı denetim aracı (audit_output.py) — yalnızca geliştirme/dene
 
 Kullanım:
     python3 audit_output.py KAYNAK ÇIKTI [--ocr-cache DİZİN] [--details DOSYA]
+                            [--ad-gorunumu {etiket,bas-harf,acik}]
+
+--ad-gorunumu, çıktının üretildiği taraf/tanık ad görünümüdür (varsayılan etiket). etiket ve
+bas-harf modunda TAM ad çıktıda kalırsa sızıntıdır; 'Ahmet Y.' gibi baş harfli biçim sızıntı
+sayılmaz. acik modda taraf/tanık adı sızıntı değildir (yargı adları yine sayılır).
+Eski --taraf-isimleri-acik bayrağı --ad-gorunumu=acik ile aynıdır.
 
 - stdout'a yalnızca SAYILAR ve dosya adları yazılır; ham değerler (TCKN, IBAN, adres vb.)
   YALNIZCA --details dosyasına yazılır. Bu dosyayı paylaşmayın.
@@ -733,12 +739,31 @@ def _scan_person_leaks(
 # ---------------------------------------------------------------------------
 # Ana denetim
 # ---------------------------------------------------------------------------
-def audit(src: str, out: str, ocr_cache: Optional[str] = None, mask_names: bool = True) -> Dict:
+def audit(
+    src: str,
+    out: str,
+    ocr_cache: Optional[str] = None,
+    mask_names: bool = True,
+    ad_gorunumu: Optional[str] = None,
+) -> Dict:
+    """Maskeli çıktıyı kaynakla karşılaştırıp sızıntıları arar.
+
+    `ad_gorunumu` taraf/tanık adlarının çıktıdaki görünümünü belirtir:
+      - 'etiket'   : yalnız [DAVALI_1]; TAM ad sızıntı sayılır.
+      - 'bas_harf' : 'Ahmet Y. [DAVALI_1]'; TAM ad sızıntı sayılır, 'Ahmet Y.' sayılmaz.
+      - 'acik'     : taraf/tanık adı bilerek açık; yalnız yargı (hâkim/savcı/kâtip) adları sızıntı sayılır.
+    None ise eski `mask_names` bayrağından türetilir (True -> etiket, False -> acik).
+    """
+    if ad_gorunumu is None:
+        ad_gorunumu = "etiket" if mask_names else "acik"
+    ad_gorunumu = MaskRegistry.normalize_ad_gorunumu(ad_gorunumu)
+    mask_names = ad_gorunumu != "acik"
     src = os.path.abspath(src)
     out = os.path.abspath(out)
     leaks_dict: Dict = defaultdict(list)
     leaks_dict["person_name"] = []
     res: Dict = {
+        "ad_gorunumu": ad_gorunumu,
         "leaks": leaks_dict,
         "person_name_details": [],
         "over": [],            # (rel, lineno, label, piece, flags)
@@ -1100,10 +1125,19 @@ def main(argv=None) -> int:
     ap.add_argument("--ocr-cache", default=None)
     ap.add_argument("--details", default=None, help="Ham değerli ayrıntı dosyası (paylaşmayın)")
     ap.add_argument(
+        "--ad-gorunumu",
+        choices=["etiket", "bas-harf", "acik"],
+        default=None,
+        help=(
+            "Çıktının üretildiği ad görünümü: etiket (varsayılan) | bas-harf ('Ahmet Y. [DAVALI_1]'; "
+            "tam ad sızıntı sayılır, baş harfli biçim sayılmaz) | acik (yalnız yargı adları sızıntı sayılır)"
+        ),
+    )
+    ap.add_argument(
         "--taraf-isimleri-acik",
         action="store_true",
         default=False,
-        help="Taraf/tanık adları bilerek açık bırakılmış çıktıyı denetle (yalnızca yargı adları sızıntı sayılır)",
+        help="Eski bayrak (uyumluluk): --ad-gorunumu=acik ile aynı; yalnızca yargı adları sızıntı sayılır",
     )
     ap.add_argument(
         "--taraf-isimleri",
@@ -1112,7 +1146,13 @@ def main(argv=None) -> int:
         help="Eski bayrak (geriye dönük uyumluluk): artık varsayılan olduğu için etkisizdir",
     )
     a = ap.parse_args(argv)
-    res = audit(a.source, a.output, a.ocr_cache, mask_names=not bool(a.taraf_isimleri_acik))
+    if a.ad_gorunumu is not None:
+        ad = a.ad_gorunumu
+    elif a.taraf_isimleri_acik:
+        ad = "acik"
+    else:
+        ad = "etiket"
+    res = audit(a.source, a.output, a.ocr_cache, ad_gorunumu=ad)
     lines, det, leak = summarize(res)
     print("\n".join(lines))
     if a.details:

@@ -10,8 +10,11 @@ anne/baba adları, kurum/şirket adları, Ticaret Sicil numaraları, kurum adres
 avukat/vekil/bilirkişi adları korunur. Varsayılan olarak hem taraf/tanık ad-soyadları
 ([DAVACI_n], [TANIK_n], [KİŞİ_n] …) hem de yargı görevlilerinin (hâkim/savcı/kâtip)
 ad-soyadları ([HAKİM_n], [SAVCI_n], [KÂTİP_n]) tutarlı takma adlarla maskelenir. İsteğe bağlı
-olarak --taraf-isimlerini-koru (veya eski --isimleri-koru) ile taraf/tanık adları,
---yargi-isimlerini-koru ile yargı görevlisi adları açık bırakılabilir.
+olarak taraf/tanık adlarının görünümü --ad-gorunumu ile seçilir: etiket (varsayılan,
+[DAVALI_1]) | bas-harf ('Ahmet Y. [DAVALI_1]'; ön ad açık kalır, kasıtlı kısmi eşleme) | acik
+(ad-soyad açık). Eski --taraf-isimlerini-koru / --isimleri-koru = acik, --taraf-isimlerini-maskele
+= etiket anlamına gelir. --yargi-isimlerini-koru ile yargı görevlisi adları açık bırakılabilir
+(yargı adları hiçbir görünümde baş harfli yazılmaz; ya etiketli ya açıktır).
 
 Hedef kişisel veri kategorileri (export'ta tutarlı numaralı etiket; registry'siz çağrıda eski etiket):
 1. T.C. Kimlik No / YKN (10 hane yazım hatalı TCKN dahil) -> [TCKN_n]     / [TCKN_GİZLENDİ]
@@ -7006,6 +7009,9 @@ class UyapRedactor:
         dist = gs.get("mask_distinct", {})
         mask_names = gs.get("mask_names", True)
         mask_judicial_names = gs.get("mask_judicial_names", True)
+        ad_gorunumu = MaskRegistry.normalize_ad_gorunumu(
+            gs.get("ad_gorunumu"), default=("etiket" if mask_names else "acik")
+        )
         show_person_labels = bool(mask_names or mask_judicial_names)
         role_counts = gs.get("person_role_counts") or {}
         names = [
@@ -7074,8 +7080,17 @@ class UyapRedactor:
             w("- **Aynı numara = aynı değer.** Aynı kişinin TCKN'si ve adı tüm belgelerde aynı etiketi taşır; farklı "
               "numaralar farklı değerlerdir. Böylece yapay zekâ kimin hangi hesaba/adrese sahip olduğunu "
               "değeri görmeden izleyebilir.\n")
-            w("- TCKN, IBAN, telefon, adres, sicil ve kişi ad-soyad eşleme tablosu **bilerek hiçbir yere yazılmadı**; "
-              "yalnızca işlem sırasında bellekte tutuldu.\n")
+            if ad_gorunumu == "bas_harf":
+                w("- **Taraf/tanık ad görünümü: ad + soyad baş harfi.** Taraf ve tanık adları "
+                  "`Ahmet Y. [DAVALI_1]` biçiminde yazıldı: ön ad, soyadın yalnızca baş harfi ve etiket çıktıda "
+                  "birlikte görünür. Bu, kasıtlı bir **kısmi eşlemedir**; ön ad açıktır ve tam ad değildir. "
+                  "Hâkim/savcı/kâtip adları bundan etkilenmez, her zaman yalnızca etiketle gizlenir.\n")
+                w("- TCKN, IBAN, telefon, adres, sicil ve tam ad-soyad eşleme tablosu **hiçbir yere yazılmadı**; "
+                  "yalnızca işlem sırasında bellekte tutuldu. Tek istisna yukarıdaki ad + soyad baş harfi + etiket "
+                  "görünümüdür (tam soyad ve tam ad-soyad yazılmaz).\n")
+            else:
+                w("- TCKN, IBAN, telefon, adres, sicil ve kişi ad-soyad eşleme tablosu **bilerek hiçbir yere yazılmadı**; "
+                  "yalnızca işlem sırasında bellekte tutuldu.\n")
             w("- Adreslerde eşleştirme yaklaşıktır: kısaltmalar (Mah./Mahallesi, Sk./Sokak, No:) ve il/ilçe "
               "kuyruğu yok sayılır; yine de aynı adresin farklı yazımları (ör. '28/3' ile '28 İç Kapı No:3') "
               "farklı numara alabilir.\n")
@@ -7127,13 +7142,17 @@ class UyapRedactor:
             w("- Maskeleme kural tabanlıdır ve hatasız değildir. Özellikle OCR'lı belgelerde bozulmuş, satırlara "
               "bölünmüş veya alışılmadık biçimdeki numaralar ve adresler gözden kaçabilir. Paylaşmadan önce "
               "göz atın.\n")
+            if ad_gorunumu == "bas_harf":
+                w("- Ad + soyad baş harfi görünümü seçildiği için taraf/tanık ön adları çıktıda açıktır; ön ad ve "
+                  "soyad baş harfi birlikte kişiyi tanıtabilir. Paylaşım riskini buna göre değerlendirin; en güvenli "
+                  "görünüm yalnızca etiket olandır.\n")
             if mask_names:
                 w("- Kişi ad-soyadlarında metinli belgeler ile taranmış (OCR) belgelerde yargı/taraf/tanık/imza olarak "
                   "geçen kişiler tanınır; bağlamsız üçüncü kişiler, OCR'ın bozduğu yazımlar ve tek başına geçen ön ad/soyad "
                   "açık kalabilir.\n")
                 w("- Doğum tarihi, anne/baba adı ve nüfus kayıt yeri maskelenmez (dava analizi için gereklidir).\n")
             elif mask_judicial_names:
-                w("- Taraf/tanık ad-soyadları kullanıcı tercihiyle (--taraf-isimlerini-koru) açık bırakıldı; "
+                w("- Taraf/tanık ad-soyadları kullanıcı tercihiyle (--ad-gorunumu=acik) açık bırakıldı; "
                   "hâkim/savcı/kâtip ad-soyadları gizlenmeye devam eder.\n")
                 w("- Doğum tarihi, anne/baba adı ve nüfus kayıt yeri maskelenmez (dava analizi için gereklidir).\n")
             else:

@@ -49,7 +49,7 @@ Maskeler **tutarlı ve numaralıdır**: aynı değer tüm belgelerde aynı etike
 | **Sicil No** | `[SİCİL_1]` | Hâkim, savcı, kâtip, kolluk, bilirkişi, baro ve SGK sicil numaraları (Ticaret Sicil numaraları bilerek korunur) |
 | **Açık Kişi Adresi** | `[ADRES_1] (İlçe/İl)` | Kişilere ait ikamet/iş/tebligat adreslerinde açık adres gizlenir, ilçe/il korunur. Kurum adresleri (banka, adliye, noter, baro, PTT, ticaret/sanayi odaları, şirket antedi), olay yeri ve nüfus kayıt yerleri korunur |
 | **Yargı Görevlisi Ad-Soyadı** | `[HAKİM_1]`, `[SAVCI_1]`, `[KÂTİP_1]` | Varsayılan olarak aktiftir. Karar başlıkları, tutanaklar ve elektronik imza bloklarındaki hâkim, savcı, başsavcı/başsavcı vekili, başkan, üye ve kâtip ad-soyadları tüm belgelerde tutarlı etiketle gizlenir (`--yargi-isimlerini-koru` veya GUI kutusu ile kapatılabilir) |
-| **Taraf/Tanık Ad-Soyadı** | `[DAVACI_1]`, `[DAVALI_1]`, `[TANIK_1]`, `[KİŞİ_1]` … | Varsayılan olarak aktiftir. Gerçek kişi taraflar, tanıklar, müştekiler, sanıklar ve imzalar tüm belgelerde tutarlı rol takma adıyla gizlenir (`--taraf-isimlerini-koru` veya GUI kutusu ile açık bırakılabilir; avukat/vekil, bilirkişi ve şirket/kurum adları her zaman açık kalır) |
+| **Taraf/Tanık Ad-Soyadı** | `[DAVACI_1]`, `[DAVALI_1]`, `[TANIK_1]`, `[KİŞİ_1]` … | Varsayılan olarak aktiftir. Gerçek kişi taraflar, tanıklar, müştekiler, sanıklar ve imzalar tüm belgelerde tutarlı rol takma adıyla gizlenir (`--ad-gorunumu` / GUI seçenekleriyle takma ad, ad + soyad baş harfi veya açık görünümü seçilebilir; avukat/vekil, bilirkişi ve şirket/kurum adları her zaman açık kalır) |
 
 Registry kullanılmadan doğrudan `redact_text()` çağrıldığında eski sabit etiketler (`[TCKN_GİZLENDİ]` vb.) üretilir.
 
@@ -57,7 +57,15 @@ Registry kullanılmadan doğrudan `redact_text()` çağrıldığında eski sabit
 
 ## 🪪 Kişi Takma Adlandırma
 
-- **Varsayılan Davranış:** Varsayılan olarak hem taraf/tanık ad-soyadları (`[DAVACI_1]`, `[TANIK_2]`, `[KİŞİ_1]`) hem de yargı görevlilerinin (hâkim, savcı, zabıt kâtibi) ad-soyadları (`[HAKİM_1]`, `[SAVCI_1]`, `[KÂTİP_1]`) gizlenir. Avukat/vekil ve bilirkişi adları ise analiz bütünlüğü için her zaman açık kalır. İsterseniz GUI'deki ilgili onay kutularının işaretini kaldırarak veya terminalde `--taraf-isimlerini-koru` (eski `--isimleri-koru`) / `--yargi-isimlerini-koru` parametreleriyle adları ayrı ayrı açık bırakabilirsiniz.
+- **Varsayılan Davranış:** Varsayılan olarak hem taraf/tanık ad-soyadları (`[DAVACI_1]`, `[TANIK_2]`, `[KİŞİ_1]`) hem de yargı görevlilerinin (hâkim, savcı, zabıt kâtibi) ad-soyadları (`[HAKİM_1]`, `[SAVCI_1]`, `[KÂTİP_1]`) gizlenir. Avukat/vekil ve bilirkişi adları ise analiz bütünlüğü için her zaman açık kalır. Taraf/tanık adlarının çıktıdaki görünümünü GUI'deki üçlü seçenekle veya terminalde `--ad-gorunumu` ile seçebilirsiniz:
+
+  | Görünüm | CLI | Örnek çıktı | Not |
+  |---|---|---|---|
+  | **Takma ad** (varsayılan) | `--ad-gorunumu etiket` | `[DAVALI_2]` | En güvenli; ad hiç görünmez |
+  | **Ad + soyad baş harfi** | `--ad-gorunumu bas-harf` | `Ahmet Y. [DAVALI_2]` | Ön ad açık kalır; **kasıtlı kısmi eşleme**, kişi tanınabilir. Aynı baş harfli iki kişi etiketle ayrılır |
+  | **Açık** | `--ad-gorunumu acik` | `Ahmet YILMAZ` | Taraf/tanık maskelemesi yok |
+
+  Hâkim/savcı/kâtip adları bu seçimden bağımsızdır; her zaman yalnızca etiketle (`[HAKİM_1]`) gizlenir, `--yargi-isimlerini-koru` ile açık bırakılabilir. Eski bayraklar çalışmaya devam eder: `--taraf-isimlerini-koru` / `--isimleri-koru` = `acik`, `--taraf-isimlerini-maskele` = `etiket`. Açıkça verilen `--ad-gorunumu` eski bayrakların önüne geçer. Ad görünümü dosya adlarında ve bağlantı hedeflerinde uygulanmaz; orada yalnızca etiket kullanılır. Ad eşleme tablosu hiçbir yere yazılmaz (baş harfli görünüm bu ilkenin tek, belgelenmiş istisnasıdır).
 - **Nasıl Çalışır:** Klasördeki metinler ve `uyap-project.json` ön-taranarak yargı ve taraf/tanık rolleri çıkarılır; baskın role göre tutarlı etiketler atanır ve Türkçe eklerle (`[HAKİM_1]'in`, `[DAVACI_1]'ın`) uyumlu biçimde tüm belgeler ile dosya adlarında/linklerde uygulanır.
 - **Sıfır Diske Yazma İlkesi:** Kişi eşlemeleri dahil hiçbir değer-etiket eşlemesi diske, rapora veya `INDEX.md` dosyasına yazılmaz; yalnızca işlem tamamlandığında GUI günlük alanında ve terminal çıktısında geçici olarak listelenir.
 - **Bilinen Sınırlar:** Kurum/şirket adları, Ticaret Sicil numaraları, ticaret/sanayi odası ve şirket antet adresleri, avukat/vekil, bilirkişi ve anne/baba tekil adları bilerek korunur; yalnızca "Ahmet" veya yalnızca "Yılmaz" şeklinde tek başına geçen sözcükler yanlış eşleşmeyi önlemek için değiştirilmez. Satır sonunda tek satır sonuyla bölünen kayıtlı tam adlar (`Ahmet Can\nYılmaz`) maskelenir; ancak arada boş satır bulunanlar, madde işareti/tablo sınırıyla ayrılanlar, baş harf kısaltmaları (`A.\nYılmaz`) ve hitaplar (`Ahmet\nBey`) yanlış yakalamayı önlemek için satır sonu üzerinden eşleştirilmez. Taranmış (OCR) belgelerden de kişi keşfi yapılmaktadır (güçlü kanıt veya cümle içi kalıpta en az 2 farklı satırda tekrar şartıyla); ancak OCR motorunun bozduğu adlar yine kaçabilir.
@@ -109,7 +117,10 @@ python3 gui.py
 python3 uyap_redactor.py "/dosya/yolu/Dava Klasoru"
 
 # Taraf ve tanık ad-soyadlarını açık bırakmak için (yargı görevlileri yine maskelenir):
-python3 uyap_redactor.py "/dosya/yolu/Dava Klasoru" --taraf-isimlerini-koru
+python3 uyap_redactor.py "/dosya/yolu/Dava Klasoru" --ad-gorunumu acik
+
+# Taraf/tanık adını 'Ahmet Y. [DAVALI_1]' (ad + soyad baş harfi + etiket) yazmak için:
+python3 uyap_redactor.py "/dosya/yolu/Dava Klasoru" --ad-gorunumu bas-harf
 
 # Hâkim/savcı/kâtip ad-soyadlarını maskelemeden korumak için:
 python3 uyap_redactor.py "/dosya/yolu/Dava Klasoru" --yargi-isimlerini-koru
@@ -161,8 +172,9 @@ Bu yazılım avukatlar ve hukuk profesyonelleri için KVKK ve veri koruma uyumlu
 # Ham OCR metni yalnızca açıkça istenirse ve hedef/kaynak klasör DIŞINDA bir dizinde önbelleğe alınır
 UYAP_OCR_CACHE_DIR=/tmp/ocrcache python3 uyap_redactor.py "<Dava Klasörü>" --out /tmp/out
 python3 audit_output.py "<Dava Klasörü>" /tmp/out --ocr-cache /tmp/ocrcache --details /tmp/audit.txt
-# Taraf/tanık adları --taraf-isimlerini-koru ile bilerek açık bırakılan çıktıyı denetlemek için:
-# python3 audit_output.py "<Dava Klasörü>" /tmp/out --taraf-isimleri-acik --ocr-cache /tmp/ocrcache --details /tmp/audit.txt
+# Çıktı --ad-gorunumu bas-harf veya acik ile üretildiyse aynı değeri denetime de verin
+# (bas-harf'te tam ad sızıntı sayılır, 'Ahmet Y.' sayılmaz; acik'ta yalnız yargı adları sayılır):
+# python3 audit_output.py "<Dava Klasörü>" /tmp/out --ad-gorunumu bas-harf --ocr-cache /tmp/ocrcache --details /tmp/audit.txt
 ```
 
 `audit_output.py` ekrana yalnızca sayılar ve dosya adları yazar; ham değerli ayrıntılar `--details` dosyasına gider (paylaşmayın). Sızıntı bulunursa çıkış kodu 1'dir.
