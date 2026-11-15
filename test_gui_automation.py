@@ -477,7 +477,7 @@ class TestUyapRedactorApp(unittest.TestCase):
         win_right = self.app.winfo_rootx() + self.app.winfo_width()
         for w in (self.app.btn_browse, self.app.btn_open_folder, self.app.card_mrz,
                   self.app.card_files, self.app.btn_clear, self.app.btn_update):
-            self.assertLessEqual(w.winfo_rootx() + w.winfo_width(), win_right + 1)
+            self.assertLessEqual(w.winfo_rootx() + w.winfo_width(), win_right + 1, str(w))
 
         resize(760, 560)
         self.assertEqual(self.app._layout_mode, "wide")
@@ -1085,8 +1085,8 @@ class TestPersonPseudonymGUI(unittest.TestCase):
         self.assertFalse(hasattr(self.app, "btn_restore_names"))
         self.assertFalse(hasattr(self.app, "_restore_names_action"))
 
-    def test_mask_names_and_judicial_checkboxes_default_true_and_independent(self):
-        self.assertTrue(self.app.mask_names_var.get())
+    def test_ad_gorunumu_radio_and_judicial_checkbox_default_and_independent(self):
+        self.assertEqual(self.app.ad_gorunumu_var.get(), "etiket")
         self.assertTrue(self.app.mask_judicial_names_var.get())
 
         with tempfile.TemporaryDirectory() as d:
@@ -1096,6 +1096,7 @@ class TestPersonPseudonymGUI(unittest.TestCase):
             def fake_export(src, *args, **kwargs):
                 captured["src"] = src
                 captured["mask_names"] = kwargs.get("mask_names")
+                captured["ad_gorunumu"] = kwargs.get("ad_gorunumu")
                 captured["mask_judicial_names"] = kwargs.get("mask_judicial_names")
                 return os.path.join(d, "out"), {
                     "tckn": 0, "telefon": 0, "seri_no": 0, "mrz": 0, "iban": 0,
@@ -1114,17 +1115,21 @@ class TestPersonPseudonymGUI(unittest.TestCase):
                     return m
                 mock_thread.side_effect = run_sync
 
-                for mn, mj in ((True, True), (False, True), (True, False), (False, False)):
+                for ad, mj in (("etiket", True), ("bas_harf", True), ("acik", True),
+                               ("etiket", False), ("bas_harf", False), ("acik", False)):
+                    mn = ad != "acik"
                     captured.clear()
-                    self.app.mask_names_var.set(mn)
+                    self.app.ad_gorunumu_var.set(ad)
                     self.app.mask_judicial_names_var.set(mj)
                     self.app._start_process()
                     self.assertIs(captured.get("mask_names"), mn)
+                    self.assertEqual(captured.get("ad_gorunumu"), ad)
                     self.assertIs(captured.get("mask_judicial_names"), mj)
                     # Her iki kutu state'i işlem sırasında disabled iken _check_queue sonra yeniden normalleşmeli
                     with patch.object(messagebox, "askyesno", return_value=False):
                         self.app._check_queue()
-                    self.assertEqual(str(self.app.chk_mask_names.cget("state")), "normal")
+                    for rb in self.app.radio_ad_gorunumu.values():
+                        self.assertEqual(str(rb.cget("state")), "normal")
                     self.assertEqual(str(self.app.chk_mask_judicial_names.cget("state")), "normal")
 
             log_content = self.app.log_text.get("1.0", tk.END)

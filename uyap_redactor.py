@@ -10,8 +10,11 @@ anne/baba adları, kurum/şirket adları, Ticaret Sicil numaraları, kurum adres
 avukat/vekil/bilirkişi adları korunur. Varsayılan olarak hem taraf/tanık ad-soyadları
 ([DAVACI_n], [TANIK_n], [KİŞİ_n] …) hem de yargı görevlilerinin (hâkim/savcı/kâtip)
 ad-soyadları ([HAKİM_n], [SAVCI_n], [KÂTİP_n]) tutarlı takma adlarla maskelenir. İsteğe bağlı
-olarak --taraf-isimlerini-koru (veya eski --isimleri-koru) ile taraf/tanık adları,
---yargi-isimlerini-koru ile yargı görevlisi adları açık bırakılabilir.
+olarak taraf/tanık adlarının görünümü --ad-gorunumu ile seçilir: etiket (varsayılan,
+[DAVALI_1]) | bas-harf ('Ahmet Y. [DAVALI_1]'; ön ad açık kalır, kasıtlı kısmi eşleme) | acik
+(ad-soyad açık). Eski --taraf-isimlerini-koru / --isimleri-koru = acik, --taraf-isimlerini-maskele
+= etiket anlamına gelir. --yargi-isimlerini-koru ile yargı görevlisi adları açık bırakılabilir
+(yargı adları hiçbir görünümde baş harfli yazılmaz; ya etiketli ya açıktır).
 
 Hedef kişisel veri kategorileri (export'ta tutarlı numaralı etiket; registry'siz çağrıda eski etiket):
 1. T.C. Kimlik No / YKN (10 hane yazım hatalı TCKN dahil) -> [TCKN_n]     / [TCKN_GİZLENDİ]
@@ -33,6 +36,7 @@ bir klasör üretir. Orijinal dosyalara dokunmaz. Kural tabanlı maskeleme hatas
 
 import os
 import posixpath
+import bisect
 import re
 import shutil
 import stat
@@ -66,6 +70,26 @@ _FOLD_TR_TABLE = str.maketrans({
 })
 
 
+class _SpanIndex:
+    """Korunan (başlangıç, bitiş) aralıklarında örtüşme sorgusunu O(log n) yapar (her eşleşmede liste taramayı önler)."""
+
+    __slots__ = ("_starts", "_max_end")
+
+    def __init__(self, spans: List[Tuple[int, int]]) -> None:
+        ordered = sorted(spans)
+        self._starts = [a for a, _b in ordered]
+        run = 0
+        self._max_end: List[int] = []
+        for _a, b in ordered:
+            run = b if b > run else run
+            self._max_end.append(run)
+
+    def overlaps(self, s: int, e: int) -> bool:
+        """[s, e) ile örtüşen bir aralık var mı (ps < e ve pe > s)?"""
+        i = bisect.bisect_left(self._starts, e)
+        return i > 0 and self._max_end[i - 1] > s
+
+
 def _fold_tr(x: str) -> str:
     """Türkçe-küçük harf ve aksan katlamalı normalizasyon (ı->i, ş->s, ğ->g, ü->u, ö->o, ç->c, â->a, î->i, û->u)."""
     return _tr_lower(unicodedata.normalize("NFC", x)).translate(_FOLD_TR_TABLE)
@@ -93,9 +117,9 @@ class MaskRegistry:
 
     _ROLE_ALIAS_MAP = {
         "davaci": "DAVACI", "davacilar": "DAVACI", "karsi davaci": "DAVACI", "karsi davacilar": "DAVACI",
-        "asil davaci": "DAVACI",
+        "asil davaci": "DAVACI", "asil davacilar": "DAVACI",
         "davali": "DAVALI", "davalilar": "DAVALI", "karsi davali": "DAVALI", "karsi davalilar": "DAVALI",
-        "asil davali": "DAVALI",
+        "asil davali": "DAVALI", "asil davalilar": "DAVALI",
         "musteki": "MÜŞTEKİ", "mustekiler": "MÜŞTEKİ",
         "sikayetci": "MÜŞTEKİ", "sikayetciler": "MÜŞTEKİ",
         "muracaatci": "MÜŞTEKİ", "muracaatcilar": "MÜŞTEKİ",
@@ -170,6 +194,8 @@ class MaskRegistry:
         self._person_display: Dict[str, str] = {}
         self._person_tokens: Dict[str, Tuple[str, ...]] = {}
         self._person_given_last: Dict[str, Tuple[str, str]] = {}
+        # Kişi adı görünümü: 'etiket' ([DAVALI_2]) | 'bas_harf' (Ahmet Y. [DAVALI_2]) | 'acik' (kayıt yok)
+        self.name_display: str = "etiket"
         self._person_order: List[str] = []
         self._person_labels: Dict[str, str] = {}
         self._person_final_role: Dict[str, str] = {}
@@ -316,6 +342,54 @@ class MaskRegistry:
         if upper in cls.PERSON_ROLES:
             return upper
         return None
+
+    AD_GORUNUMLERI = ("etiket", "bas_harf", "acik")
+
+    @classmethod
+    def normalize_ad_gorunumu(cls, value: Optional[str], default: str = "etiket") -> str:
+        """'bas-harf' / 'Baş Harf' gibi yazımları kanonik 'etiket' | 'bas_harf' | 'acik' değerine çevirir."""
+        if value is None:
+            return default
+        v = re.sub(r'[ \t\r\n\-]+', '_', _fold_tr(str(value)).strip())
+        if v in cls.AD_GORUNUMLERI:
+            return v
+        raise ValueError(f"Geçersiz ad görünümü: {value!r} (etiket | bas_harf | acik)")
+
+    @staticmethod
+    def _tr_upper_initial(ch: str) -> str:
+        return {"i": "İ", "ı": "I"}.get(ch, ch.upper())
+
+    @staticmethod
+    def _tr_title_token(tok: str) -> str:
+        """TÜMÜ BÜYÜK yazılmış ön adı Türkçe kurallarıyla 'Ali' biçimine çevirir (karışık yazımlara dokunmaz)."""
+        if len(tok) > 1 and tok.isupper():
+            return MaskRegistry._tr_upper_initial(tok[0]) + _tr_lower(tok[1:])
+        return tok
+
+    def initial_form(self, matched: str, label: str) -> Optional[str]:
+        """
+        'bas_harf' görünümü için eşleşen tam adı 'Ad(lar) S.' biçimine çevirir: tüm ön adlar aynen (BÜYÜK HARF
+        yazılmışsa Başlık Harfli), soyad yalnızca baş harf + nokta. Soyad kayıtlı kişiden ('SOYAD Ad' sırası
+        dahil) bulunur; bulunamazsa None döner (çağıran yalnızca etiketi kullanır).
+        """
+        if not hasattr(self, "_label_to_key"):
+            self._label_to_key = {lab: k for k, lab in self._person_labels.items()}
+        key = self._label_to_key.get(label)
+        if key is None or key not in self._person_given_last:
+            return None
+        surname_fold = self._person_given_last[key][1]
+        toks = matched.split()
+        if len(toks) < 2:
+            return None
+        sur_idx = [i for i, t in enumerate(toks) if _fold_tr(t.strip(".,")) == surname_fold]
+        if not sur_idx:
+            return None
+        si = sur_idx[-1]
+        given = [self._tr_title_token(t) for j, t in enumerate(toks) if j != si]
+        if not given:
+            return None
+        sur_tok = toks[si].strip(".,")
+        return f"{' '.join(given)} {self._tr_upper_initial(sur_tok[0])}."
 
     @classmethod
     def is_judicial_label(cls, label: Optional[str]) -> bool:
@@ -1088,6 +1162,7 @@ class UyapRedactor:
         "baba", "anne", "ana", "dogum", "yeri", "nufus", "medeni", "hali", "uyrugu",
         "ve", "veya", "ile", "icin", "uzere", "gibi", "gore", "not", "notu", "layiha", "layihasi",
         "savunma", "savunmasi", "beyan", "beyani", "beyanlari", "ifadesi", "ifadeleri", "listesi", "metni",
+        "arasinda", "karsin", "aleyhine", "lehine", "kain", "parsel", "pafta",
     })
 
     _LEGAL_ENTITY_WORDS = frozenset({
@@ -1129,7 +1204,8 @@ class UyapRedactor:
     _PLACE_STRUCTURE_WORDS = frozenset({
         "mahalle", "mahallesi", "mah", "mh", "cadde", "caddesi", "cad", "cd",
         "sokak", "sokagi", "sok", "sk", "bulvar", "bulvari", "blv", "bulv",
-        "koyu", "koprusu", "kavsagi", "stadi", "stadyumu",
+        "ili", "ilcesi", "koy", "koyu", "belde", "beldesi", "kasaba", "kasabasi", "mevki", "mevkii",
+        "koprusu", "kavsagi", "stadi", "stadyumu",
         "ilkokul", "ilkokulu", "ortaokul", "ortaokulu", "lise", "lisesi",
         "universite", "universitesi", "fakulte", "fakultesi", "hastane", "hastanesi",
         "cami", "camii", "camisi", "meydani", "merkezi", "kultur", "kulturu",
@@ -2236,6 +2312,81 @@ class UyapRedactor:
             return f"{m.group('prefix')}{cls._mask('sicil', m.group('sicil'), registry)}{m.group('suffix')}"
 
         text = p3.sub(repl3, text)
+
+        # 2b. Çok satırlı PDF tablo düzeni: başlık tek başına üst satırda ("HAKİM" / "HAKİM :"),
+        # alt satırda ": Ayşe ÖRNEKOĞLU KAYA  445566" (veya ": [HAKİM_1]  445566") ya da sicil bir sonraki satırda.
+        if "\n" in text:
+            _tbl_title_rx = re.compile(rf'(?i){titles}')
+            _tbl_trail_sicil_rx = re.compile(r'(?P<open>\(?)(?<!\d)(?P<sicil>\d{5,6})(?!\d)(?P<close>\)?[ \t\*]*)$')
+            _tbl_bare_sicil_rx = re.compile(r'^(?P<pre>[ \t\*]*\(?)(?<!\d)(?P<sicil>\d{5,6})(?!\d)(?P<post>\)?[ \t\*]*)$')
+            _tbl_tag_rx = re.compile(r'\[(?:HAKİM|SAVCI|KÂTİP)_\d+\]')
+            _tbl_word_rx = re.compile(r'[A-Za-zÇĞİÖŞÜçğıöşüâîûÂÎÛ.\-]+')
+            _tbl_hdr_colon_rx = re.compile(r'^[ \t\*]*[A-Za-zÇĞİÖŞÜçğıöşüâîûÂÎÛ][A-Za-zÇĞİÖŞÜçğıöşüâîûÂÎÛ \t/().\-]{0,40}[ \t\*]*:')
+            sicil_lines = text.splitlines(keepends=True)
+            changed_2b = False
+            n_sl = len(sicil_lines)
+
+            def _is_name_or_jud_tag(segment: str) -> bool:
+                s_tag = segment.lstrip(": \t*").rstrip(" \t*(").strip()
+                if not s_tag:
+                    return False
+                if _tbl_tag_rx.fullmatch(s_tag):
+                    return True
+                s_clean = s_tag.replace("*", "").replace("_", "").strip()
+                if not s_clean:
+                    return False
+                words = s_clean.split()
+                return 1 <= len(words) <= 5 and all(_tbl_word_rx.fullmatch(w) for w in words)
+
+            for si in range(n_sl):
+                raw_sln = sicil_lines[si].rstrip("\r\n")
+                had_colon = ":" in raw_sln
+                cleaned_t = raw_sln.strip(" \t*#>-•_")
+                if cleaned_t.endswith(":"):
+                    cleaned_t = cleaned_t[:-1].strip(" \t*_")
+                if not cleaned_t or not _tbl_title_rx.fullmatch(cleaned_t):
+                    continue
+                sj = None
+                for cand_j in range(si + 1, min(n_sl, si + 3)):
+                    if sicil_lines[cand_j].strip():
+                        sj = cand_j
+                        break
+                if sj is None:
+                    continue
+                val_raw = sicil_lines[sj]
+                val_nl = val_raw[len(val_raw.rstrip("\r\n")):]
+                val_body = val_raw.rstrip("\r\n")
+                starts_colon = bool(re.match(r'^[ \t]*:', val_body))
+                if not had_colon and not starts_colon:
+                    continue
+                if not starts_colon and _tbl_hdr_colon_rx.match(val_body):
+                    continue
+                m_ts = _tbl_trail_sicil_rx.search(val_body)
+                if m_ts and _is_name_or_jud_tag(val_body[:m_ts.start()]):
+                    count += 1
+                    sicil_lines[sj] = (
+                        f"{val_body[:m_ts.start()]}{m_ts.group('open')}"
+                        f"{cls._mask('sicil', m_ts.group('sicil'), registry)}{m_ts.group('close')}{val_nl}"
+                    )
+                    changed_2b = True
+                elif not re.search(r'\d', val_body) and _is_name_or_jud_tag(val_body):
+                    for cand_k in range(sj + 1, min(n_sl, sj + 3)):
+                        k_raw = sicil_lines[cand_k]
+                        if not k_raw.strip():
+                            continue
+                        k_nl = k_raw[len(k_raw.rstrip("\r\n")):]
+                        k_body = k_raw.rstrip("\r\n")
+                        m_bs = _tbl_bare_sicil_rx.match(k_body)
+                        if m_bs:
+                            count += 1
+                            sicil_lines[cand_k] = (
+                                f"{m_bs.group('pre')}{cls._mask('sicil', m_bs.group('sicil'), registry)}"
+                                f"{m_bs.group('post')}{k_nl}"
+                            )
+                            changed_2b = True
+                        break
+            if changed_2b:
+                text = "".join(sicil_lines)
 
         # 3. İddianame sonu savcı imza bloğu (üst satırda sicil, alt satırda Cumhuriyet Savcısı)
         p4 = re.compile(
@@ -3502,9 +3653,15 @@ class UyapRedactor:
         re.IGNORECASE,
     )
     _HEADER_COLON_RE = re.compile(
-        r'^(?:[#>*\-\s]|\d{1,2}[.\)])*(?:\*\*|__)?(?P<hdr>[A-Za-zÇĞİÖŞÜçğıöşüâîûÂÎÛ/\-\s().]{2,50}?)(?:\*\*|__)?[ \t]*:[ \t]*(?:\*\*|__)?(?P<rest>.*)$'
+        r'^(?:[#>*\- \t]|\d{1,2}[.\)])*(?:\*\*|__)?(?P<hdr>[A-Za-zÇĞİÖŞÜçğıöşüâîûÂÎÛ][A-Za-zÇĞİÖŞÜçğıöşüâîûÂÎÛ/\- \t().]{1,49}?)(?:\*\*|__)?[ \t]*:[ \t]*(?:\*\*|__)?(?P<rest>.*)$'
     )
-    _LIST_ITEM_START_RE = re.compile(r'^[ \t]*(?:\*\*)?\d{1,2}[ \t]*[.\-\)]+[ \t]*(?:\*\*)?(?P<rest>.+)$')
+    _SUBITEM_ATTR_HDR_WORDS = frozenset({
+        "vekil", "vekili", "vekilleri", "mudafi", "mudafii", "mudafileri",
+        "adres", "adresi", "tebligat", "mernis", "tckn", "tc", "kimlik",
+        "telefon", "tel", "cep", "gsm", "eposta", "posta", "kep", "uets",
+        "sicil", "baba", "anne", "dogum", "uyruk", "uyrugu",
+    })
+    _LIST_ITEM_START_RE = re.compile(r'^[ \t]*(?:\*\*)?(?:\d{1,2}[ \t]*[.\-\)]+|[-•*–—][ \t]+)[ \t]*(?:\*\*)?(?P<rest>.+)$')
     _INLINE_SPLIT_RE = re.compile(r'(?:^|[ \t]+)(?:\*\*)?\d{1,2}[ \t]*[.\-\)]+[ \t]*(?:\*\*)?')
     _PROSE_ROLE_RE = re.compile(
         r'(?<![A-Za-zÇĞİÖŞÜçğıöşüâîûÂÎÛ])'
@@ -3521,6 +3678,21 @@ class UyapRedactor:
         r'[çc]ocu[ğg]u|k[uü][çc][uü]k|o[ğg]lu|k[ıiIİ]z[ıiIİ]|e[şs]i|annesi|babas[ıiIİ]|karde[şs]i|'
         r'a[ğg]abeyi|ablas[ıiIİ]|torunu|kay[ıiIİ]nvalidesi|kay[ıiIİ]npederi|kom[şs]usu|(?:i[şs][ \t]+)?arkada[şs][ıiIİ])'
         r'[ \t]+(?P<name>' + _CAP_TOK_RE_STR + r'(?:[ \t]+' + _CAP_TOK_RE_STR + r'){1,3})'
+    )
+    _PROSE_PLURAL_ROLE_RE = re.compile(
+        r'(?<![A-Za-zÇĞİÖŞÜçğıöşüâîûÂÎÛ])'
+        r'(?i:(?P<role>(?:kar[şs][ıiIİ][ \t]+)?(?:davac[ıiIİ]lar|daval[ıiIİ]lar)|'
+        r'm[uü][şs]tek[iıIİ]ler|[şs][iıIİ]k[aâ]yet[çc][iıIİ]ler|m[uü]racaat[çc][ıiIİ]lar|'
+        r'[şs][uü]phel[iıIİ]ler|san[ıiIİ]klar|kat[ıiIİ]lanlar|m[uü]dah[iıIİ]ller|ma[ğg]durlar|'
+        r'tan[ıiIİ]klar|alacakl[ıiIİ]lar|bor[çc]lular))'
+        r'(?![A-Za-zÇĞİÖŞÜçğıöşüâîûÂÎÛ])'
+        r'(?:[ \t]+(?i:m[uü]vekk[iıIİ]l(?:e|im|imiz|ler(?:imiz)?)?|k[uü][çc][uü]k(?:ler)?|murisler|merhum(?:lar)?))?'
+        r'[ \t]+(?P<name>' + _CAP_TOK_RE_STR + r'(?:[ \t]+' + _CAP_TOK_RE_STR + r'){1,3})'
+    )
+    _PLURAL_SUF_RE = re.compile(r"(?:'[A-Za-zÇĞİÖŞÜçğıöşü]+)?(?:[ \t]*\([^)\r\n]{1,40}\))?")
+    _PLURAL_SEP_RE = re.compile(r'[ \t]*(?:,[ \t]*(?:(?:ve|ile)[ \t]+)?|[ \t]+(?:ve|ile)[ \t]+)', re.IGNORECASE)
+    _PLURAL_NEXT_RE = re.compile(
+        r'(?P<name>' + _CAP_TOK_RE_STR + r'(?:[ \t]+' + _CAP_TOK_RE_STR + r'){1,3})'
     )
     _PROSE_ISIMLI_RE = re.compile(
         r'(?<![A-Za-zÇĞİÖŞÜçğıöşüâîûÂÎÛ])'
@@ -3640,6 +3812,12 @@ class UyapRedactor:
         """Av./Hâkim/Vekil vb. sıfat öbeğini denetler; 'işveren vekili' istisnasını ve yargı izin modunu uygular."""
         if not before_ctx:
             return False
+        if len(before_ctx) > 200:
+            # Unvan öbekleri sonda ve kısadır (en uzunu ~50 karakter); çok uzun satırlarda her eşleşmede tüm öneki
+            # taramak karesel olurdu. Kesim kelime sınırından yapılır ki yarım kalan sözcük unvan sayılmasın.
+            tail = before_ctx[-200:]
+            m_ws = re.search(r'[ \t\r\n]', tail)
+            before_ctx = tail[m_ws.start():] if m_ws else tail
         if re.search(r'(?:^|[\s(\["\'*:,;\-/])isveren[ \t]+vekil(?:i|leri)?[ \t]*$', _fold_tr(before_ctx)):
             return False
         m_jud = cls._JUDICIAL_PRE_TITLE_RE.search(before_ctx)
@@ -3660,6 +3838,12 @@ class UyapRedactor:
         "okul", "fakulte", "belediye", "encumen", "meclis", "sirket", "kooperatif",
         "apartman", "site",
     })
+    _JUDICIAL_CTX_WINDOW = 12
+    # Yargı unvanı + sicil/e-imza aynı satırda ("Katip 445566", "Hakim 112233 e-imzalıdır"): yakın BAŞKAN/ÜYE başlıkları yargı sayılır.
+    _JUDICIAL_TITLE_SICIL_LINE_RE = re.compile(
+        r'(?i)\b(?:h[aâ]kim|k[aâ]tip|k[aâ]tib[iı]|savc[ıi]|zab[ıi]t[ \t]+k[aâ]tib[iı]?)\b[ \t\-:]*\(?(?:\d{4,7}\)?|\[S[İI]C[İI]L_)|'
+        r'(?i:\be[ \t\-]?imzal[ıi]d[ıi]r\b)'
+    )
     _DOC_JUDICIAL_CTX_RE = re.compile(
         r'(?i)(?:'
         r'\bmahkeme(?:si|miz|mize|sine|ye|de|den|ce)?\b|'
@@ -3760,6 +3944,11 @@ class UyapRedactor:
                 break
         return " ".join(toks), role
 
+    # Bir sonraki satırın başında yer alan yargı unvanı, açık taraf başlığı altındaki adı reddetme nedeni olmaz
+    _NEXT_LINE_JUDICIAL_TITLES = frozenset({
+        "hakim", "hakimi", "savci", "savcisi", "katip", "katibi", "baskan", "uye",
+    })
+
     @classmethod
     def _extend_after_ctx(cls, lines: List[str], idx: int, after_ctx: str) -> str:
         """Aday satır sonunda bittiyse sonraki ilk boş olmayan satırın başını after_ctx'e ekler."""
@@ -3768,7 +3957,7 @@ class UyapRedactor:
         for j in range(idx + 1, min(len(lines), idx + 3)):
             nxt = lines[j].strip()
             if nxt:
-                if cls._HEADER_COLON_RE.match(nxt):
+                if ":" in nxt and cls._HEADER_COLON_RE.match(nxt):
                     return after_ctx
                 return (after_ctx or "") + " " + nxt[:120]
         return after_ctx
@@ -3838,6 +4027,8 @@ class UyapRedactor:
     def _extract_name_from_segment(cls, seg: str) -> Tuple[str, str]:
         """Taraf/kimlik satırı parçasından durdurma işaretine kadar aday adı ve kalan bağlamı ayırır."""
         s = seg.lstrip(" \t*_")
+        # Madde işareti ("- Ad", "• Ad", "– Ad"): adın parçası değil
+        s = re.sub(r'^(?:[•·▪◦‣–—\-][ \t]+(?:\*+[ \t]*)?)+', '', s)
         stop_rx = re.compile(
             r'(?:'
             r'[(\[,;|:\.\r\n]|'
@@ -4036,22 +4227,98 @@ class UyapRedactor:
             return cand_s
 
         text = cls.normalize_spaces(text)
-        doc_has_judicial_ctx = bool(cls._DOC_JUDICIAL_CTX_RE.search(text))
         lines = text.splitlines()
+        # BAŞKAN/ÜYE başlıkları yalnızca ±12 satır çevresinde yargı ipucu varsa yargı sayılır
+        # (belge-geneli ipucu şirket/dernek tutanaklarındaki "Başkan/Üye" başlıklarını yargı yapıyordu).
+        ctx_line_idx: List[int] = []
+        for m_ctx in cls._DOC_JUDICIAL_CTX_RE.finditer(text):
+            l_a = text.count("\n", 0, m_ctx.start())
+            l_b = text.count("\n", 0, m_ctx.end())
+            ctx_line_idx.extend(range(l_a, l_b + 1))
+        for j_ln, ln_c in enumerate(lines):
+            if cls._JUDICIAL_TITLE_SICIL_LINE_RE.search(ln_c):
+                ctx_line_idx.append(j_ln)
+        ctx_line_idx = sorted(set(ctx_line_idx))
+        cur_i = [0]
+
+        def jctx(_unused: int = 0) -> bool:
+            if not ctx_line_idx:
+                return False
+            pos_c = bisect.bisect_left(ctx_line_idx, cur_i[0] - cls._JUDICIAL_CTX_WINDOW)
+            return pos_c < len(ctx_line_idx) and ctx_line_idx[pos_c] <= cur_i[0] + cls._JUDICIAL_CTX_WINDOW
+
         active_role: Optional[str] = None
+        active_role_just_opened: bool = False
         table_col_roles: Dict[int, str] = {}
         claimed_sig_lines: Set[int] = set()
+
+        def _extract_tckn_hint(after_txt: str) -> Optional[str]:
+            m_tk = re.search(r'(?<!\d)(\d{11})(?!\d)', after_txt[:40])
+            if m_tk and cls.is_valid_tckn(m_tk.group(1)):
+                return m_tk.group(1)
+            return None
+
+        def _is_subitem_attr(hdr_raw: str) -> bool:
+            toks = re.findall(r'[a-z]+', _fold_tr(hdr_raw))
+            return bool(toks and any(t in cls._SUBITEM_ATTR_HDR_WORDS for t in toks))
+
+        def _register_segment_parts(
+            seg_text: str, seg_role: str, line_idx: int, allow_wrap_join: bool = False
+        ) -> bool:
+            is_jud_r = seg_role in MaskRegistry.JUDICIAL_ROLES
+            parts = [p for p in cls._INLINE_SPLIT_RE.split(seg_text) if p.strip()]
+            if not parts and seg_text.strip():
+                parts = [seg_text]
+            added_any = False
+            for part in parts:
+                part_c = cls._strip_leading_judicial_titles(part) if is_jud_r else part
+                cand, raw_after_ctx = cls._extract_name_from_segment(part_c)
+                cand, _ = cls._strip_leading_descriptors(cand, strip_judicial=is_jud_r)
+                if (
+                    allow_wrap_join
+                    and len(parts) == 1
+                    and cand
+                    and len(cand.split()) == 1
+                    and not raw_after_ctx.strip()
+                    and line_idx + 1 < len(lines)
+                ):
+                    nxt_line = lines[line_idx + 1].strip()
+                    if nxt_line and ":" not in nxt_line and not re.search(r'\d', nxt_line):
+                        nxt_cand, nxt_after = cls._extract_name_from_segment(nxt_line)
+                        if nxt_cand and len(nxt_cand.split()) == 1:
+                            joined = f"{cand} {nxt_cand}"
+                            joined_after = cls._extend_after_ctx(lines, line_idx + 1, nxt_after)
+                            if _valid_person(joined, after_c=joined_after, allow_short_last=True, allow_judicial=is_jud_r):
+                                registry.add_person(joined, seg_role, strong=True, tckn=_extract_tckn_hint(joined_after))
+                                added_any = True
+                                continue
+                after_ctx = cls._extend_after_ctx(lines, line_idx, raw_after_ctx)
+                valid_after = after_ctx
+                if (
+                    not is_jud_r
+                    and not raw_after_ctx.strip()
+                    and _fold_tr((after_ctx.split() or [""])[0].strip(":.,")) in cls._NEXT_LINE_JUDICIAL_TITLES
+                ):
+                    # Açık taraf başlığı altındaki ad: sonraki satırın "Hâkim ..." ile başlaması (imza bloğu düzeni)
+                    # bu adı yargı personeli adayı yapıp reddetmemeli; yalnızca aynı satırdaki unvan sayılır.
+                    valid_after = ""
+                if _valid_person(cand, after_c=valid_after, allow_short_last=True, allow_judicial=is_jud_r):
+                    registry.add_person(cand, seg_role, strong=True, tckn=_extract_tckn_hint(after_ctx))
+                    added_any = True
+            return added_any
 
         def _parse_header_line(seg_line: str) -> Tuple[Optional[str], str]:
             """Tek bir başlık segmentinden taraf rolü ve kalan metni çıkarır (ön etiketleri soyar)."""
             cur = seg_line
             for _ in range(3):
+                if ":" not in cur:
+                    return None, ""
                 m_h = cls._HEADER_COLON_RE.match(cur)
                 if m_h:
                     h_raw = m_h.group("hdr")
                     r_rest = m_h.group("rest")
                     found_role = cls._extract_header_role(
-                        h_raw, include_judicial_headers=doc_has_judicial_ctx
+                        h_raw, include_judicial_headers=jctx()
                     )
                     if found_role:
                         return found_role, r_rest
@@ -4066,10 +4333,14 @@ class UyapRedactor:
                 return None, ""
             return None, ""
 
+        list_cont = False
         for i, raw_line in enumerate(lines):
+            cur_i[0] = i
             stripped = raw_line.strip()
             if not stripped:
                 active_role = None
+                active_role_just_opened = False
+                list_cont = False
                 table_col_roles = {}
                 continue
 
@@ -4087,7 +4358,7 @@ class UyapRedactor:
                     continue
                 if cells and not any(":" in c for c in cells):
                     row_key_role = (
-                        cls._extract_header_role(cells[0], include_judicial_headers=doc_has_judicial_ctx)
+                        cls._extract_header_role(cells[0], include_judicial_headers=jctx())
                         if len(cells) >= 2 and cells[0]
                         else None
                     )
@@ -4113,7 +4384,7 @@ class UyapRedactor:
                         if kv_matched:
                             continue
                     hdr_roles = {
-                        idx: cls._extract_header_role(c, include_judicial_headers=doc_has_judicial_ctx)
+                        idx: cls._extract_header_role(c, include_judicial_headers=jctx())
                         for idx, c in enumerate(cells)
                     }
                     hdr_roles = {idx: r for idx, r in hdr_roles.items() if r}
@@ -4138,64 +4409,95 @@ class UyapRedactor:
             else:
                 table_col_roles = {}
 
-            # A. Taraf başlık satırı, boru (|) ayraçlı satırlar ve çok satırlı numaralı liste
-            hdr_segments = [s.strip() for s in raw_line.split("|") if s.strip()] if "|" in raw_line else [raw_line]
+            # A. Taraf/yargı başlık satırı, çok sütunlu başlıklar, PDF alt-satır ':' ve çok satırlı numaralı liste
+            if "|" in raw_line:
+                hdr_segments = [s.strip() for s in raw_line.split("|") if s.strip()]
+            else:
+                col_cands = [s.strip() for s in re.split(r'(?:\t|[ ]{3,})', raw_line) if s.strip()]
+                if len(col_cands) >= 2 and sum(1 for c in col_cands if _parse_header_line(c)[0] is not None) >= 2:
+                    hdr_segments = col_cands
+                else:
+                    hdr_segments = [raw_line]
+
             matched_hdr_seg = False
+            opened_empty_hdr = False
             for seg in hdr_segments:
                 role, rest = _parse_header_line(seg)
                 if role:
                     matched_hdr_seg = True
                     active_role = role if len(hdr_segments) == 1 else None
-                    is_jud_role = role in MaskRegistry.JUDICIAL_ROLES
-                    parts = [p for p in cls._INLINE_SPLIT_RE.split(rest) if p.strip()]
-                    if not parts and rest.strip():
-                        parts = [rest]
-                    for part in parts:
-                        part_c = cls._strip_leading_judicial_titles(part) if is_jud_role else part
-                        cand, raw_after_ctx = cls._extract_name_from_segment(part_c)
-                        cand, _ = cls._strip_leading_descriptors(cand, strip_judicial=is_jud_role)
-                        if (
-                            len(hdr_segments) == 1
-                            and len(parts) == 1
-                            and cand
-                            and len(cand.split()) == 1
-                            and not raw_after_ctx.strip()
-                            and i + 1 < len(lines)
-                        ):
-                            nxt_line = lines[i + 1].strip()
-                            if nxt_line and ":" not in nxt_line and not re.search(r'\d', nxt_line):
-                                nxt_cand, nxt_after = cls._extract_name_from_segment(nxt_line)
-                                if nxt_cand and len(nxt_cand.split()) == 1:
-                                    joined = f"{cand} {nxt_cand}"
-                                    joined_after = cls._extend_after_ctx(lines, i + 1, nxt_after)
-                                    if _valid_person(joined, after_c=joined_after, allow_short_last=True, allow_judicial=is_jud_role):
-                                        registry.add_person(joined, role, strong=True)
-                                        continue
-                        after_ctx = cls._extend_after_ctx(lines, i, raw_after_ctx)
-                        if _valid_person(cand, after_c=after_ctx, allow_short_last=True, allow_judicial=is_jud_role):
-                            registry.add_person(cand, role, strong=True)
-            if matched_hdr_seg:
-                pass
-            elif cls._HEADER_COLON_RE.match(raw_line):
-                active_role = None
-            elif active_role:
-                m_item = cls._LIST_ITEM_START_RE.match(raw_line)
-                if m_item:
-                    is_jud_active = active_role in MaskRegistry.JUDICIAL_ROLES
-                    parts = [p for p in cls._INLINE_SPLIT_RE.split(raw_line) if p.strip()]
-                    for part in parts:
-                        part_c = cls._strip_leading_judicial_titles(part) if is_jud_active else part
-                        cand, after_ctx = cls._extract_name_from_segment(part_c)
-                        cand, _ = cls._strip_leading_descriptors(cand, strip_judicial=is_jud_active)
-                        after_ctx = cls._extend_after_ctx(lines, i, after_ctx)
-                        if _valid_person(cand, after_c=after_ctx, allow_short_last=True, allow_judicial=is_jud_active):
-                            registry.add_person(cand, active_role, strong=True)
-                else:
-                    # Liste dışı satır (adres devamı değilse bloğu kapat)
-                    if not re.match(r'^[ \t]{2,}', raw_line):
-                        active_role = None
+                    opened_empty_hdr = bool(len(hdr_segments) == 1 and not rest.strip())
+                    hdr_added = _register_segment_parts(rest, role, i, allow_wrap_join=(len(hdr_segments) == 1))
+                    list_cont = bool(hdr_added and len(hdr_segments) == 1)
 
-            # B. Cümle içi rol / yakınlık + ad ("davacı Ahmet Yılmaz", "müşterek çocuk Defne Aktaş", "Hâkim Ayşe Kaya")
+            if matched_hdr_seg:
+                active_role_just_opened = opened_empty_hdr
+            elif ":" in raw_line and (m_hc := cls._HEADER_COLON_RE.match(raw_line)):
+                if not (active_role and re.match(r'^[ \t]{2,}', raw_line) and _is_subitem_attr(m_hc.group("hdr"))):
+                    active_role = None
+                active_role_just_opened = False
+            else:
+                # Tek başına başlık satırı (":" içermeyen; sonraki boş olmayan satır ":" veya "1- ..." ile başlıyorsa)
+                standalone_handled = False
+                if ":" not in raw_line and not cls._LIST_ITEM_START_RE.match(raw_line) and len(stripped) <= 60:
+                    nxt_ne = ""
+                    for cand_j in range(i + 1, min(len(lines), i + 3)):
+                        if lines[cand_j].strip():
+                            nxt_ne = lines[cand_j]
+                            break
+                    if nxt_ne and (re.match(r'^[ \t]*:', nxt_ne) or cls._LIST_ITEM_START_RE.match(nxt_ne)):
+                        hdr_cand = re.sub(r'[*_#>`"\']', '', stripped).strip()
+                        st_role = cls._extract_header_role(hdr_cand, include_judicial_headers=jctx())
+                        if st_role:
+                            active_role = st_role
+                            active_role_just_opened = False
+                            standalone_handled = True
+                        elif not re.match(r'^[ \t]{2,}', raw_line):
+                            active_role = None
+                            active_role_just_opened = False
+                            standalone_handled = True
+
+                if not standalone_handled and active_role:
+                    m_colon_cont = re.match(r'^[ \t]*:[ \t]*(?P<val>.+)$', raw_line)
+                    if m_colon_cont:
+                        val = m_colon_cont.group("val")
+                        has_list_prefix = bool(cls._LIST_ITEM_START_RE.match(val))
+                        list_cont = bool(_register_segment_parts(val, active_role, i, allow_wrap_join=True))
+                        active_role_just_opened = False
+                        if not has_list_prefix and active_role in MaskRegistry.JUDICIAL_ROLES:
+                            active_role = None
+                    else:
+                        m_item = cls._LIST_ITEM_START_RE.match(raw_line)
+                        if m_item:
+                            list_cont = bool(_register_segment_parts(raw_line, active_role, i, allow_wrap_join=False))
+                            active_role_just_opened = False
+                        elif active_role_just_opened:
+                            _register_segment_parts(raw_line, active_role, i, allow_wrap_join=False)
+                            active_role_just_opened = False
+                            if active_role in MaskRegistry.JUDICIAL_ROLES:
+                                active_role = None
+                        else:
+                            active_role_just_opened = False
+                            indented = bool(re.match(r'^[ \t]{2,}\S', raw_line))
+                            # Numarasız girintili liste devamı ("  Ad Soyad"): yalnızca bir önceki satır kişi kaydettiyse,
+                            # ":" / rakam içermiyorsa ve taraf rolündeyse (yargı rolleri tek kişilik) aynı role yaz.
+                            if (
+                                list_cont
+                                and indented
+                                and active_role not in MaskRegistry.JUDICIAL_ROLES
+                                and ":" not in raw_line
+                                and not re.search(r'\d', raw_line)
+                            ):
+                                list_cont = bool(_register_segment_parts(raw_line, active_role, i, allow_wrap_join=False))
+                            else:
+                                list_cont = False
+                                # Liste dışı satır (girintili alt bilgi/adres devamı değilse bloğu kapat)
+                                if not indented:
+                                    active_role = None
+                else:
+                    active_role_just_opened = False
+
+            # B. Cümle içi rol / yakınlık + ad ("davacı Ahmet Yılmaz", "davalılar A, B ve C", "Hâkim Ayşe Kaya")
             if not stripped.startswith("#"):
                 def _register_prose_match(
                     cand_name: str,
@@ -4204,7 +4506,7 @@ class UyapRedactor:
                     after_b: str,
                     allow_judicial: bool = False,
                     strong: bool = False,
-                ) -> None:
+                ) -> bool:
                     # 3-4 belirteçte sonda saygı/mahkeme eki ("Mahkememize", "Bey", "Hanım") varsa kırp
                     b_toks = cand_name.split()
                     if len(b_toks) >= 3 and _fold_tr(b_toks[-1]) in {
@@ -4213,6 +4515,8 @@ class UyapRedactor:
                     }:
                         cand_name = " ".join(b_toks[:-1])
                         after_b = " " + b_toks[-1] + after_b
+                    before_b = before_b[-80:] if len(before_b) > 80 else before_b
+                    after_b = after_b[:80] if len(after_b) > 80 else after_b
                     cand_name, _ = cls._strip_leading_descriptors(cand_name, b_role, strip_judicial=allow_judicial)
                     after_b = cls._extend_after_ctx(lines, i, after_b)
                     if _valid_person(cand_name, before_c=before_b, after_c=after_b, allow_judicial=allow_judicial):
@@ -4234,43 +4538,84 @@ class UyapRedactor:
                             entry = acc["entries"].setdefault(ck, {"lines": set(), "hits": []})
                             entry["lines"].add((doc_seq, i))
                             entry["hits"].append((cand_name, b_role))
+                        return True
+                    return False
 
                 for m_b in cls._PROSE_ROLE_RE.finditer(raw_line):
+                    _s_b, _e_b = m_b.start("name"), m_b.end("name")
                     _register_prose_match(
                         m_b.group("name"),
                         MaskRegistry.normalize_person_role(m_b.group("role")),
-                        raw_line[:m_b.start("name")],
-                        raw_line[m_b.end("name"):],
+                        raw_line[max(0, _s_b - 80):_s_b],
+                        raw_line[_e_b:_e_b + 80],
                     )
+                for m_pl in cls._PROSE_PLURAL_ROLE_RE.finditer(raw_line):
+                    pl_role = MaskRegistry.normalize_person_role(m_pl.group("role"))
+                    if not pl_role or pl_role == "KİŞİ":
+                        continue
+                    _s_pl, _e_pl = m_pl.start("name"), m_pl.end("name")
+                    if not _register_prose_match(
+                        m_pl.group("name"),
+                        pl_role,
+                        raw_line[max(0, _s_pl - 80):_s_pl],
+                        raw_line[_e_pl:_e_pl + 80],
+                    ):
+                        continue
+                    pos = _e_pl
+                    line_len = len(raw_line)
+                    while pos < line_len:
+                        m_suf = cls._PLURAL_SUF_RE.match(raw_line, pos)
+                        if m_suf and m_suf.end() > pos:
+                            pos = m_suf.end()
+                        m_sep = cls._PLURAL_SEP_RE.match(raw_line, pos)
+                        if not m_sep:
+                            break
+                        cand_start = m_sep.end()
+                        m_next = cls._PLURAL_NEXT_RE.match(raw_line, cand_start)
+                        if not m_next:
+                            break
+                        next_end = m_next.end("name")
+                        if not _register_prose_match(
+                            m_next.group("name"),
+                            pl_role,
+                            raw_line[max(0, cand_start - 80):cand_start],
+                            raw_line[next_end:next_end + 80],
+                        ):
+                            break
+                        pos = next_end
                 for m_k in cls._PROSE_KIN_RE.finditer(raw_line):
+                    _s_k, _e_k = m_k.start("name"), m_k.end("name")
                     _register_prose_match(
                         m_k.group("name"),
                         None,
-                        raw_line[:m_k.start("name")],
-                        raw_line[m_k.end("name"):],
+                        raw_line[max(0, _s_k - 80):_s_k],
+                        raw_line[_e_k:_e_k + 80],
                     )
                 for m_is in cls._PROSE_ISIMLI_RE.finditer(raw_line):
+                    _s_is, _e_is = m_is.start("name"), m_is.end("name")
                     _register_prose_match(
                         m_is.group("name"),
                         None,
-                        raw_line[:m_is.start("name")],
-                        raw_line[m_is.end("name"):],
+                        raw_line[max(0, _s_is - 80):_s_is],
+                        raw_line[_e_is:_e_is + 80],
                     )
                 for m_j in cls._JUDICIAL_PROSE_RE.finditer(raw_line):
                     j_role = MaskRegistry.normalize_person_role(m_j.group("role"), include_judicial_headers=False)
                     j_after = m_j.group("after") or ""
+                    _s_j, _e_j = m_j.start("name"), m_j.end("after")
                     _register_prose_match(
                         m_j.group("name"),
                         j_role,
-                        raw_line[:m_j.start("name")],
-                        j_after + raw_line[m_j.end("after"):],
+                        raw_line[max(0, _s_j - 80):_s_j],
+                        (j_after + raw_line[_e_j:_e_j + 80])[:80],
                         allow_judicial=True,
                         strong=bool(j_after.strip()),
                     )
 
             # C. TCKN'ye bitişik ad ("Ahmet Yılmaz (T.C. Kimlik No: ...)")
             for m_c in cls._TCKN_ANCHOR_RE.finditer(raw_line):
-                prefix = raw_line[:m_c.start()]
+                p_off = max(0, m_c.start() - 120)
+                prefix = raw_line[p_off:m_c.start()]
                 m_pre = re.search(
                     r'(?P<name>' + cls._CAP_TOK_RE_STR + r'(?:[ \t]+' + cls._CAP_TOK_RE_STR + r'){1,4})[ \t]*$',
                     prefix,
@@ -4278,19 +4623,20 @@ class UyapRedactor:
                 if not m_pre:
                     continue
                 cand_c = m_pre.group("name")
-                before_c = prefix[:m_pre.start("name")]
+                abs_start = p_off + m_pre.start("name")
+                before_c = raw_line[max(0, abs_start - 80):abs_start]
                 cand_c, c_role = cls._strip_leading_descriptors(cand_c, None)
                 tckn_raw = m_c.group("tckn") or ""
                 tckn_digits = re.sub(r'\D', '', _ocr_digits(tckn_raw))
                 tckn_val = tckn_digits if len(tckn_digits) >= 9 else None
-                if _valid_person(cand_c, before_c=before_c, after_c=raw_line[m_c.start():], allow_short_last=True):
+                if _valid_person(cand_c, before_c=before_c, after_c=raw_line[m_c.start():m_c.start() + 80], allow_short_last=True):
                     registry.add_person(cand_c, c_role, strong=True, tckn=tckn_val)
 
             # D. Kimlik tablosu: Adı Soyadı / Adı + Soyadı
             has_official_near = bool(cls._NON_JUDICIAL_OFFICIAL_LINE_RE.search("\n".join(lines[max(0, i - 2):i + 1])))
             m_dfull = cls._ID_FULL_RE.match(raw_line)
             if m_dfull and not has_official_near:
-                role_d = cls._find_role_above(lines, i, include_judicial_headers=doc_has_judicial_ctx)
+                role_d = cls._find_role_above(lines, i, include_judicial_headers=jctx())
                 is_jud_d = role_d in MaskRegistry.JUDICIAL_ROLES
                 rest_d = cls._strip_leading_judicial_titles(m_dfull.group("rest")) if is_jud_d else m_dfull.group("rest")
                 cand_d, after_d = cls._extract_name_from_segment(rest_d)
@@ -4301,7 +4647,7 @@ class UyapRedactor:
 
             m_dsame = cls._ID_SAME_LINE_SPLIT_RE.search(raw_line)
             if m_dsame and not has_official_near:
-                role_d = cls._find_role_above(lines, i, include_judicial_headers=doc_has_judicial_ctx)
+                role_d = cls._find_role_above(lines, i, include_judicial_headers=jctx())
                 is_jud_d = role_d in MaskRegistry.JUDICIAL_ROLES
                 cand_d = f"{m_dsame.group('fn')} {m_dsame.group('ln')}"
                 cand_d, _ = cls._strip_leading_descriptors(cand_d, strip_judicial=is_jud_d)
@@ -4321,7 +4667,7 @@ class UyapRedactor:
                         if m_dlast:
                             ln_cand, after_ln = cls._extract_name_from_segment(m_dlast.group("rest"))
                             near_off = bool(cls._NON_JUDICIAL_OFFICIAL_LINE_RE.search("\n".join(lines[max(0, i - 2):j + 1])))
-                            role_d = cls._find_role_above(lines, i, include_judicial_headers=doc_has_judicial_ctx)
+                            role_d = cls._find_role_above(lines, i, include_judicial_headers=jctx())
                             is_jud_d = role_d in MaskRegistry.JUDICIAL_ROLES
                             combined, _ = cls._strip_leading_descriptors(f"{fn_cand} {ln_cand}".strip(), strip_judicial=is_jud_d)
                             after_ln = cls._extend_after_ctx(lines, j, after_ln)
@@ -4343,13 +4689,13 @@ class UyapRedactor:
 
             # D2. İmza bloğu: hemen önceki satır tek başına rol başlığıysa ("## Davacı", "TANIK:", "HÂKİM:")
             sig_clean = re.sub(r'[*_#>`"\':|\s]+', ' ', stripped).strip()
-            allow_sig_jud = doc_has_judicial_ctx and not cls._is_non_judicial_header_phrase(sig_clean)
+            allow_sig_jud = jctx() and not cls._is_non_judicial_header_phrase(sig_clean)
             sig_role = MaskRegistry.normalize_person_role(sig_clean, include_judicial_headers=allow_sig_jud)
             if (
                 sig_role and sig_role != "KİŞİ"
                 and not any(w in _fold_tr(sig_clean) for w in ("vekil", "mudafi", "bilirkisi"))
                 and i + 1 < len(lines)
-                and _fold_tr(cls._find_role_above(lines, i + 1, include_judicial_headers=doc_has_judicial_ctx) or "") == _fold_tr(sig_role)
+                and _fold_tr(cls._find_role_above(lines, i + 1, include_judicial_headers=jctx()) or "") == _fold_tr(sig_role)
             ):
                 nxt = lines[i + 1].strip()
                 is_jud_sig = sig_role in MaskRegistry.JUDICIAL_ROLES
@@ -4360,12 +4706,12 @@ class UyapRedactor:
 
             # D3. Yargı imza bloğu: unvan/sicil satırı üstte veya altta ("Hâkim 112233 / Ayşe Yılmaz", "BAŞKAN 123456 / e-imzalıdır / Mehmet Öz")
             sig_j_role, sig_j_strong = cls._parse_judicial_sig_title_line(
-                raw_line, include_judicial_headers=doc_has_judicial_ctx
+                raw_line, include_judicial_headers=jctx()
             )
             if sig_j_role:
                 has_nearby_sig_cue = sig_j_strong or any(
                     cls._is_sig_meta_line(lines[k])
-                    or (k != i and cls._parse_judicial_sig_title_line(lines[k], include_judicial_headers=doc_has_judicial_ctx)[0] is not None)
+                    or (k != i and cls._parse_judicial_sig_title_line(lines[k], include_judicial_headers=jctx())[0] is not None)
                     or re.search(r'(?i)e[\s\-]?imzal[ıi]|\bsicil\b', lines[k])
                     for k in range(max(0, i - 2), min(len(lines), i + 4))
                 )
@@ -4375,7 +4721,7 @@ class UyapRedactor:
                         ln_j = lines[j].strip()
                         if not ln_j or cls._is_sig_meta_line(ln_j):
                             continue
-                        if cls._parse_judicial_sig_title_line(ln_j, include_judicial_headers=doc_has_judicial_ctx)[0] is not None or ":" in ln_j:
+                        if cls._parse_judicial_sig_title_line(ln_j, include_judicial_headers=jctx())[0] is not None or ":" in ln_j:
                             break
                         cand_s = _extract_sig_name(ln_j)
                         if cand_s and _valid_person(cand_s, allow_judicial=True):
@@ -4390,7 +4736,7 @@ class UyapRedactor:
                             ln_j = lines[j].strip()
                             if not ln_j or cls._is_sig_meta_line(ln_j):
                                 continue
-                            if cls._parse_judicial_sig_title_line(ln_j, include_judicial_headers=doc_has_judicial_ctx)[0] is not None or ":" in ln_j:
+                            if cls._parse_judicial_sig_title_line(ln_j, include_judicial_headers=jctx())[0] is not None or ":" in ln_j:
                                 break
                             cand_s = _extract_sig_name(ln_j)
                             if cand_s and _valid_person(cand_s, allow_judicial=True):
@@ -4402,7 +4748,7 @@ class UyapRedactor:
                 cols = [c.strip() for c in re.split(r'(?:\t|[ ]{3,})', raw_line) if c.strip()]
                 if len(cols) >= 2:
                     col_parsed = [
-                        cls._parse_judicial_sig_title_line(c, include_judicial_headers=doc_has_judicial_ctx)
+                        cls._parse_judicial_sig_title_line(c, include_judicial_headers=jctx())
                         for c in cols
                     ]
                     if all(r is not None for r, _ in col_parsed):
@@ -4495,7 +4841,10 @@ class UyapRedactor:
         label: Optional[str] = None,
     ) -> bool:
         """Eşleşen kişi adının korunan aralıkta veya engelleyici ön/art bağlamda olup olmadığını denetler."""
-        if any(s < pe and e > ps for ps, pe in protected_spans):
+        if isinstance(protected_spans, _SpanIndex):
+            if protected_spans.overlaps(s, e):
+                return True
+        elif any(s < pe and e > ps for ps, pe in protected_spans):
             return True
         ls = text.rfind("\n", 0, s) + 1
         le = text.find("\n", e)
@@ -4546,13 +4895,14 @@ class UyapRedactor:
             (m.start(), m.end()) for m in re.finditer(r'\[ADRES_\d+\][ \t]+\([^)\r\n]+\)', text)
         )
         protected_spans.extend((m.start(), m.end()) for m in re.finditer(r'https?://\S+|\S+@\S+', text))
+        protected_spans = _SpanIndex(protected_spans)
 
         count = 0
 
         def repl(m: re.Match) -> str:
             nonlocal count
             s, e = m.start(), m.end()
-            if any(s < pe and e > ps for ps, pe in protected_spans):
+            if protected_spans.overlaps(s, e):
                 return m.group(0)
 
             matched = m.group(0)
@@ -4588,6 +4938,15 @@ class UyapRedactor:
                 return matched
             count += 1
             registry.occurrences["kisi"] += 1
+            if (
+                registry.name_display == "bas_harf"
+                and not path_mode
+                and not honorific_tail
+                and not MaskRegistry.is_judicial_label(label)
+            ):
+                init_form = registry.initial_form(matched, label)
+                if init_form:
+                    return f"{init_form} {label}"
             return f"{label}{honorific_tail}" if honorific_tail else label
 
         return rx.sub(repl, text), count
@@ -5851,6 +6210,7 @@ class UyapRedactor:
         progress_cb: Optional[Callable[[str, str, Dict], None]] = None,
         mask_names: bool = True,
         mask_judicial_names: bool = True,
+        ad_gorunumu: Optional[str] = None,
     ) -> Tuple[str, Dict]:
         """
         İzole temiz klasör üretimi:
@@ -5865,7 +6225,16 @@ class UyapRedactor:
 
         Hedef klasöre orijinal UDF, PDF, TIFF veya ZIP gibi ikili dosyalar aktarılmaz.
         Otomatik maskeleme hatasız değildir; özellikle OCR'lı belgeler gözden geçirilmelidir.
+
+        Taraf/tanık ad görünümü `ad_gorunumu` ile seçilir: 'etiket' ([DAVALI_2], varsayılan),
+        'bas_harf' (Ahmet Y. [DAVALI_2]) veya 'acik' (taraf adları açık). Verilmezse eski
+        `mask_names` bayrağından türetilir (True -> 'etiket', False -> 'acik'). Hâkim/savcı/kâtip
+        adları bundan bağımsızdır (`mask_judicial_names`) ve her zaman yalnızca etiketle gizlenir.
         """
+        if ad_gorunumu is None:
+            ad_gorunumu = "etiket" if mask_names else "acik"
+        ad_gorunumu = MaskRegistry.normalize_ad_gorunumu(ad_gorunumu)
+        mask_names = ad_gorunumu != "acik"
         src_folder = os.path.abspath(src_folder)
         clean_src = src_folder.rstrip(os.sep)
         if not dest_folder:
@@ -5934,6 +6303,7 @@ class UyapRedactor:
             "kisi_listesi": [],
             "mask_names": bool(mask_names),
             "mask_judicial_names": bool(mask_judicial_names),
+            "ad_gorunumu": ad_gorunumu,
         })
 
         def _add(st: Dict[str, int]) -> None:
@@ -6090,6 +6460,7 @@ class UyapRedactor:
 
             # Tek, yalnızca bellekte tutulan etiket kaydı: tüm belgelerde aynı değer = aynı etiket
             registry = MaskRegistry(known_tckns)
+            registry.name_display = ad_gorunumu
 
             # 1. Mevcut Markdown ve Metin Belgelerini Topla (determinizm için sıralı)
             md_files = []
@@ -6682,6 +7053,9 @@ class UyapRedactor:
         dist = gs.get("mask_distinct", {})
         mask_names = gs.get("mask_names", True)
         mask_judicial_names = gs.get("mask_judicial_names", True)
+        ad_gorunumu = MaskRegistry.normalize_ad_gorunumu(
+            gs.get("ad_gorunumu"), default=("etiket" if mask_names else "acik")
+        )
         show_person_labels = bool(mask_names or mask_judicial_names)
         role_counts = gs.get("person_role_counts") or {}
         names = [
@@ -6750,8 +7124,17 @@ class UyapRedactor:
             w("- **Aynı numara = aynı değer.** Aynı kişinin TCKN'si ve adı tüm belgelerde aynı etiketi taşır; farklı "
               "numaralar farklı değerlerdir. Böylece yapay zekâ kimin hangi hesaba/adrese sahip olduğunu "
               "değeri görmeden izleyebilir.\n")
-            w("- TCKN, IBAN, telefon, adres, sicil ve kişi ad-soyad eşleme tablosu **bilerek hiçbir yere yazılmadı**; "
-              "yalnızca işlem sırasında bellekte tutuldu.\n")
+            if ad_gorunumu == "bas_harf":
+                w("- **Taraf/tanık ad görünümü: ad + soyad baş harfi.** Taraf ve tanık adları "
+                  "`Ad S. [DAVALI_1]` biçiminde yazıldı: ön ad, soyadın yalnızca baş harfi ve etiket çıktıda "
+                  "birlikte görünür. Bu, kasıtlı bir **kısmi eşlemedir**; ön ad açıktır ve tam ad değildir. "
+                  "Hâkim/savcı/kâtip adları bundan etkilenmez, her zaman yalnızca etiketle gizlenir.\n")
+                w("- TCKN, IBAN, telefon, adres, sicil ve tam ad-soyad eşleme tablosu **hiçbir yere yazılmadı**; "
+                  "yalnızca işlem sırasında bellekte tutuldu. Tek istisna yukarıdaki ad + soyad baş harfi + etiket "
+                  "görünümüdür (tam soyad ve tam ad-soyad yazılmaz).\n")
+            else:
+                w("- TCKN, IBAN, telefon, adres, sicil ve kişi ad-soyad eşleme tablosu **bilerek hiçbir yere yazılmadı**; "
+                  "yalnızca işlem sırasında bellekte tutuldu.\n")
             w("- Adreslerde eşleştirme yaklaşıktır: kısaltmalar (Mah./Mahallesi, Sk./Sokak, No:) ve il/ilçe "
               "kuyruğu yok sayılır; yine de aynı adresin farklı yazımları (ör. '28/3' ile '28 İç Kapı No:3') "
               "farklı numara alabilir.\n")
@@ -6803,13 +7186,17 @@ class UyapRedactor:
             w("- Maskeleme kural tabanlıdır ve hatasız değildir. Özellikle OCR'lı belgelerde bozulmuş, satırlara "
               "bölünmüş veya alışılmadık biçimdeki numaralar ve adresler gözden kaçabilir. Paylaşmadan önce "
               "göz atın.\n")
+            if ad_gorunumu == "bas_harf":
+                w("- Ad + soyad baş harfi görünümü seçildiği için taraf/tanık ön adları çıktıda açıktır; ön ad ve "
+                  "soyad baş harfi birlikte kişiyi tanıtabilir. Paylaşım riskini buna göre değerlendirin; en güvenli "
+                  "görünüm yalnızca etiket olandır.\n")
             if mask_names:
                 w("- Kişi ad-soyadlarında metinli belgeler ile taranmış (OCR) belgelerde yargı/taraf/tanık/imza olarak "
                   "geçen kişiler tanınır; bağlamsız üçüncü kişiler, OCR'ın bozduğu yazımlar ve tek başına geçen ön ad/soyad "
                   "açık kalabilir.\n")
                 w("- Doğum tarihi, anne/baba adı ve nüfus kayıt yeri maskelenmez (dava analizi için gereklidir).\n")
             elif mask_judicial_names:
-                w("- Taraf/tanık ad-soyadları kullanıcı tercihiyle (--taraf-isimlerini-koru) açık bırakıldı; "
+                w("- Taraf/tanık ad-soyadları kullanıcı tercihiyle (--ad-gorunumu=acik) açık bırakıldı; "
                   "hâkim/savcı/kâtip ad-soyadları gizlenmeye devam eder.\n")
                 w("- Doğum tarihi, anne/baba adı ve nüfus kayıt yeri maskelenmez (dava analizi için gereklidir).\n")
             else:
@@ -6871,11 +7258,29 @@ def main():
         "--taraf-isimlerini-maskele",
         action="store_true",
         default=False,
-        help="Eski bayrak (geriye dönük uyumluluk): taraf/tanık adları artık varsayılan olarak maskelendiği için etkisizdir",
+        help="Eski bayrak (geriye dönük uyumluluk): --ad-gorunumu=etiket ile aynı anlama gelir",
+    )
+    parser.add_argument(
+        "--ad-gorunumu",
+        choices=["etiket", "bas-harf", "acik"],
+        default=None,
+        help=(
+            "Taraf/tanık adlarının çıktıdaki görünümü: etiket = [DAVALI_1] (varsayılan); "
+            "bas-harf = 'Ahmet Y. [DAVALI_1]' (ad + soyad baş harfi + etiket; kısmi ad görünür); "
+            "acik = ad-soyad açık. Hâkim/savcı/kâtip adları bundan bağımsızdır (her zaman yalnız etiket)"
+        ),
     )
 
     args = parser.parse_args()
-    mask_names = not (bool(args.taraf_isimlerini_koru) or bool(args.isimleri_koru))
+    # Eski bayraklar: --taraf-isimlerini-koru / --isimleri-koru -> acik; --taraf-isimlerini-maskele -> etiket.
+    # Açık --ad-gorunumu her zaman eski bayrakların önüne geçer.
+    if args.ad_gorunumu is not None:
+        ad_gorunumu = MaskRegistry.normalize_ad_gorunumu(args.ad_gorunumu)
+    elif bool(args.taraf_isimlerini_koru) or bool(args.isimleri_koru):
+        ad_gorunumu = "acik"
+    else:
+        ad_gorunumu = "etiket"
+    mask_names = ad_gorunumu != "acik"
     mask_judicial_names = not bool(args.yargi_isimlerini_koru)
 
     if not os.path.exists(args.path):
@@ -6893,6 +7298,7 @@ def main():
         target_dir = args.path if os.path.isdir(args.path) else os.path.dirname(args.path)
         known_tckns = UyapRedactor.collect_known_tckns_from_folder(target_dir)
         registry = MaskRegistry(known_tckns)
+        registry.name_display = ad_gorunumu
         in_place_stats = UyapRedactor._empty_stats()
         skip_names = UyapRedactor.SKIP_DIRS
         real_target = os.path.realpath(target_dir)
@@ -6968,6 +7374,7 @@ def main():
             out_target,
             mask_names=mask_names,
             mask_judicial_names=mask_judicial_names,
+            ad_gorunumu=ad_gorunumu,
         )
     except ValueError as ve:
         print(f"Hata: {ve}", file=sys.stderr)
