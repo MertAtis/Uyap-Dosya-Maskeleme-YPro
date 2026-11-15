@@ -98,6 +98,19 @@ class SnappyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             UyapRedactor._snappy_raw_decompress(_varint(100) + bytes([0]) + b"a")  # uzunluk uyuşmazlığı
 
+    def test_kesik_snappy_tamponu_indexerror_yerine_valueerror_verir(self):
+        for bad in (
+            b"",
+            _varint(10) + bytes([1]),           # copy-1 eksik ofset baytı
+            _varint(10) + bytes([2, 1]),        # copy-2 eksik ofset baytı
+            _varint(10) + bytes([3, 1, 0]),     # copy-4 eksik ofset baytı
+            _varint(10) + bytes([60 << 2]),     # uzun literal boyu eksik baytlar
+            _varint(10) + bytes([(5 - 1) << 2]) + b"abc",  # literal verisi kesik
+        ):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    UyapRedactor._snappy_raw_decompress(bad)
+
 
 class PagesExtractionTests(unittest.TestCase):
     def setUp(self):
@@ -154,6 +167,63 @@ class PagesExtractionTests(unittest.TestCase):
         self.assertIn("İşlenemeyen dosyalar", report)
         self.assertIn("bozuk.pages", report)  # sessizce atlanmaz, raporda yazılır
         self.assertNotIn("protokol.pages", report.split("İşlenemeyen dosyalar", 1)[1])
+
+    def test_kontrol_karakterleri_ve_mac_paket_pages_dizini_desteklenir(self):
+        """Pages IWA içi \x04/\x05/\x0c kesme karakterleri satır sonuna çevrilir; macOS paket .pages işlenir ve denetlenir."""
+        src = os.path.join(self.tmp, "PaketDava")
+        out = os.path.join(self.tmp, "paket_cikti")
+        pkg_zip = os.path.join(self.tmp, "tmp_pkg.pages")
+        pkg_dir = os.path.join(src, "paket.pages")
+        os.makedirs(pkg_dir)
+        _make_pages(
+            pkg_zip,
+            [
+                f"Davacı Ali VELİOĞLU\x04TCKN: {T1}\x05Tarih\x0c01.03.2025",
+                "İkinci satır\x01\x02temiz",
+            ],
+        )
+        with zipfile.ZipFile(pkg_zip, "r") as zf:
+            zf.extractall(pkg_dir)
+        # Paket içi yardımcı .txt/.md çıktısı klasöre sızmamalı
+        with open(os.path.join(pkg_dir, "Metadata", "note.txt"), "w", encoding="utf-8") as f:
+            f.write("paket icindeki yardimci metin")
+
+        extracted = UyapRedactor.extract_pages_raw(pkg_dir)
+        self.assertIn("Davacı Ali VELİOĞLU\nTCKN:", extracted)
+        self.assertIn("Tarih\n01.03.2025", extracted)
+        self.assertNotIn("\x04", extracted)
+        self.assertNotIn("\x05", extracted)
+        self.assertNotIn("\x0c", extracted)
+        self.assertNotIn("\x01", extracted)
+
+        dest, stats = UyapRedactor.export_isolated_clean_folder(src, dest_folder=out, ad_gorunumu="bas_harf")
+        md_path = os.path.join(dest, "paket.md")
+        self.assertTrue(os.path.isfile(md_path), os.listdir(dest))
+        self.assertFalse(os.path.exists(os.path.join(dest, "paket.pages")))
+        self.assertEqual(stats.get("unprocessed"), [])
+        body = open(md_path, encoding="utf-8").read()
+        self.assertIn("Ali V. [DAVACI_1]", body)
+        self.assertIn("[TCKN_1]", body)
+        self.assertNotIn(T1, body)
+        rep = A.audit(src, dest, ad_gorunumu="bas_harf")
+        self.assertEqual(rep["leaks"].get("tckn", []), [])
+        self.assertEqual(rep["leaks"].get("person_name", []), [])
+        self.assertEqual(rep["unaligned"], [])
+
+    def test_gercek_pages_sablonlarinda_kontrol_karakteri_kalmaz(self):
+        tpl_root = "/Applications/Pages.app/Contents/SharedSupport/Templates"
+        if not os.path.isdir(tpl_root):
+            self.skipTest("Pages.app şablonları bu ortamda yok")
+        checked = 0
+        for root, _, files in os.walk(tpl_root):
+            if "ISO.template" in files:
+                txt = UyapRedactor.extract_pages_raw(os.path.join(root, "ISO.template"))
+                bad = [c for c in txt if ord(c) < 32 and c not in "\n\t\r"]
+                self.assertEqual(bad, [], f"Ham kontrol karakteri kaldı: {root}")
+                checked += 1
+                if checked >= 15:
+                    break
+        self.assertGreater(checked, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +300,30 @@ class AuditV152Tests(unittest.TestCase):
         self._w(os.path.join(out, "v.md"), "Av. Test Kişi\nAdres : [ADRES_1]\nSon cümle burada.\n")
         res = A.audit(src, out)
         self.assertEqual(res["unaligned"], [])
+
+    def test_bas_harf_hizalama_ve_tutarsizlik_denetimi(self):
+        src, out, _ = self._dirs()
+        self._w(
+            os.path.join(src, "d.md"),
+            f"Davacı Ali VELİOĞLU TCKN {T1} ile davalı Veli KAYA görüşmüştür.\nSonra Ali VELİOĞLU imza attı.\n",
+        )
+        self._w(
+            os.path.join(out, "d.md"),
+            "Davacı Ali V. [DAVACI_1] TCKN [TCKN_1] ile davalı Veli K. [DAVALI_1] görüşmüştür.\n"
+            "Sonra Ali V. [DAVACI_1] imza attı.\n",
+        )
+        res = A.audit(src, out, ad_gorunumu="bas_harf")
+        self.assertEqual(res["unaligned"], [])
+        self.assertEqual(res["consistency_label_multi_value"], {})
+        kinds = sorted(A.mask_kind(x[2]) for x in res["over"])
+        self.assertEqual(kinds, ["DAVACI", "DAVACI", "DAVALI", "TCKN"])
+
+        # Aynı bas_harf etiketi farklı kişiye giderse çelişki yakalanmalı
+        src2, out2, _ = self._dirs()
+        self._w(os.path.join(src2, "d.md"), "Davacı Ali VARDAR geldi.\nSonra Ali VELİOĞLU konuştu.\n")
+        self._w(os.path.join(out2, "d.md"), "Davacı Ali V. [DAVACI_1] geldi.\nSonra Ali V. [DAVACI_1] konuştu.\n")
+        res2 = A.audit(src2, out2, ad_gorunumu="bas_harf")
+        self.assertTrue(res2["consistency_label_multi_value"])
 
 
 if __name__ == "__main__":

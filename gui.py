@@ -37,7 +37,7 @@ from tkinter import ttk, filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
 
 # Uygulama Sürümü ve Otomatik Güncelleme Kaynağı
-APP_VERSION = "1.5.2"
+APP_VERSION = "1.5.3"
 RUN_BUTTON_TEXT = "▶  Başlat"
 GITHUB_REPO = "MertAtis/Uyap-Dosya-Maskeleme-YPro"
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -631,19 +631,32 @@ class GlassStatCard(tk.Frame):
         self.lbl_title.pack(anchor="w", fill="x")
 
         # 3. İstatistik Sayı Değeri (SF Pro Display)
+        self._base_font = Theme.font_display(13, "bold")
+        self._compact_font = Theme.font_text(8, "bold")
         self.lbl_val = tk.Label(
             self,
             text=str(value),
-            font=Theme.font_display(13, "bold"),
+            font=self._base_font,
             fg=color,
-            bg=Theme.BG_SURFACE
+            bg=Theme.BG_SURFACE,
+            anchor="w",
+            justify="left",
         )
-        self.lbl_val.pack(anchor="w")
+        self.lbl_val.pack(anchor="w", fill="x")
 
-        # Hover mikro etkileşimi
+        # Hover mikro etkileşimi + uzun içerikte dinamik satır kaydırma
         for w in (self, self.top_highlight, self.lbl_title, self.lbl_val):
             w.bind("<Enter>", self._on_enter)
             w.bind("<Leave>", self._on_leave)
+        self.bind("<Configure>", self._sync_val_wrap, add="+")
+
+    def _sync_val_wrap(self, _e=None):
+        txt = self.lbl_val.cget("text")
+        if len(str(txt)) > 8:
+            avail = max(self.winfo_width() - 16, 70)
+            self.lbl_val.config(wraplength=avail)
+        else:
+            self.lbl_val.config(wraplength=0)
 
     def _on_enter(self, e):
         self.config(highlightbackground=Theme.BORDER_HOVER)
@@ -652,7 +665,12 @@ class GlassStatCard(tk.Frame):
         self.config(highlightbackground=Theme.BORDER_GLASS)
 
     def update_value(self, val):
-        self.lbl_val.config(text=str(val))
+        s = str(val)
+        if len(s) > 8:
+            avail = max(self.winfo_width() - 16, 70)
+            self.lbl_val.config(text=s, font=self._compact_font, wraplength=avail)
+        else:
+            self.lbl_val.config(text=s, font=self._base_font, wraplength=0)
 
 
 # Eski isimle geriye dönük tam uyumluluk
@@ -1147,7 +1165,7 @@ class UyapRedactorApp(_AppBase):
             self.stats_frame.columnconfigure(c, weight=1, uniform="stat")
         for i, card in enumerate(self._cards):
             r, c = divmod(i, cols)
-            card.grid(row=r, column=c, sticky="ew",
+            card.grid(row=r, column=c, sticky="nsew",
                       padx=(0 if c == 0 else 2, 0 if c == cols - 1 else 2), pady=(0 if r == 0 else 4, 0))
 
         # Durum satırı: geniş yan yana, dar alt alta
@@ -1726,7 +1744,7 @@ class UyapRedactorApp(_AppBase):
             if final_stats.get("warning_no_documents"):
                 no_doc_msg = (
                     "Seçilen klasörde işlenebilir belge bulunamadı.\n\n"
-                    "Desteklenen türler: .udf, .pdf, .doc/.docx, .xlsx, .eyp, .zip, .tif/.tiff, .jpg/.png/.heic, .md, .txt\n\n"
+                    "Desteklenen türler: .udf, .pdf, .doc/.docx, .xlsx, .pages, .eyp, .zip, .tif/.tiff, .jpg/.png/.heic, .md, .txt\n\n"
                     "Lütfen doğru dava klasörünü seçtiğinizden emin olun."
                 )
                 self.msg_queue.put(("log", f"\n⚠️ {no_doc_msg}\n"))

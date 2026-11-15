@@ -1160,9 +1160,19 @@ class UyapRedactor:
         "asliye", "sulh", "agir", "bolge", "adliye", "yargitay", "danistay", "anayasa",
         "klasor", "klasoru", "proje", "uyap", "ad", "adi", "soyad", "soyadi", "isim", "soyisim",
         "baba", "anne", "ana", "dogum", "yeri", "nufus", "medeni", "hali", "uyrugu",
+        "tckn", "tc", "ykn", "iban", "tel", "telefon", "gsm", "cep", "faks", "fax",
+        "vkn", "mersis", "sicil", "eposta", "mail", "uets", "kep", "pasaport", "mrz",
+        "no", "numara", "numarasi", "seri",
         "ve", "veya", "ile", "icin", "uzere", "gibi", "gore", "not", "notu", "layiha", "layihasi",
         "savunma", "savunmasi", "beyan", "beyani", "beyanlari", "ifadesi", "ifadeleri", "listesi", "metni",
         "arasinda", "karsin", "aleyhine", "lehine", "kain", "parsel", "pafta",
+    })
+
+    _PROSE_TRAILING_TRIM_WORDS = frozenset({
+        "mahkememize", "mahkemenize", "mahkemesine", "mahkemeye", "mahkememiz",
+        "bey", "hanim", "tckn", "tc", "ykn", "iban", "tel", "telefon", "gsm", "cep",
+        "faks", "fax", "vkn", "mersis", "sicil", "eposta", "mail", "uets", "kep",
+        "pasaport", "mrz", "no", "numara", "numarasi", "seri", "kimlik", "adres", "adresi",
     })
 
     _LEGAL_ENTITY_WORDS = frozenset({
@@ -1863,6 +1873,10 @@ class UyapRedactor:
                     and cls._is_safe_src_path(os.path.join(root, d), real_scan)
                 ]
                 in_kaynak = cls._is_skipped_dir(root, scan_dir, ("_kaynak",))
+                pkg_pages = [d for d in dirs if d.lower().endswith(".pages")]
+                if pkg_pages:
+                    dirs[:] = [d for d in dirs if not d.lower().endswith(".pages")]
+                    files = list(files) + pkg_pages
                 for f in files:
                     ext = os.path.splitext(f)[1].lower()
                     fp = os.path.join(root, f)
@@ -4509,14 +4523,12 @@ class UyapRedactor:
                     allow_judicial: bool = False,
                     strong: bool = False,
                 ) -> bool:
-                    # 3-4 belirteçte sonda saygı/mahkeme eki ("Mahkememize", "Bey", "Hanım") varsa kırp
+                    # 3-4 belirteçte sonda saygı/mahkeme eki veya alan etiketi ("Mahkememize", "Bey", "TCKN", "IBAN") varsa kırp
                     b_toks = cand_name.split()
-                    if len(b_toks) >= 3 and _fold_tr(b_toks[-1]) in {
-                        "mahkememize", "mahkemenize", "mahkemesine", "mahkemeye", "mahkememiz",
-                        "bey", "hanim",
-                    }:
-                        cand_name = " ".join(b_toks[:-1])
+                    while len(b_toks) >= 3 and _fold_tr(b_toks[-1]) in cls._PROSE_TRAILING_TRIM_WORDS:
                         after_b = " " + b_toks[-1] + after_b
+                        b_toks.pop()
+                    cand_name = " ".join(b_toks)
                     before_b = before_b[-80:] if len(before_b) > 80 else before_b
                     after_b = after_b[:80] if len(after_b) > 80 else after_b
                     cand_name, _ = cls._strip_leading_descriptors(cand_name, b_role, strip_judicial=allow_judicial)
@@ -5314,20 +5326,24 @@ class UyapRedactor:
     @staticmethod
     def _snappy_raw_decompress(data: bytes) -> bytes:
         """Ham (çerçevesiz) Snappy açıcı; yalnızca standart kütüphane. Hatalı girdide ValueError."""
+        ln = len(data)
         pos = 0
         n = 0
         shift = 0
         while True:
+            if pos >= ln:
+                raise ValueError("snappy: kesik uzunluk varint")
             b = data[pos]
             pos += 1
             n |= (b & 0x7F) << shift
             if not b & 0x80:
                 break
             shift += 7
+            if shift > 35:
+                raise ValueError("snappy: varint çok uzun")
         if n > 256 * 1024 * 1024:
             raise ValueError("snappy: beklenmedik büyük çıktı boyutu")
         out = bytearray()
-        ln = len(data)
         while pos < ln:
             tag = data[pos]
             pos += 1
@@ -5336,6 +5352,8 @@ class UyapRedactor:
                 length = tag >> 2
                 if length >= 60:
                     nb = length - 59
+                    if pos + nb > ln:
+                        raise ValueError("snappy: kesik literal uzunluğu")
                     length = int.from_bytes(data[pos:pos + nb], "little")
                     pos += nb
                 length += 1
@@ -5345,14 +5363,20 @@ class UyapRedactor:
                 pos += length
             else:
                 if kind == 1:
+                    if pos >= ln:
+                        raise ValueError("snappy: kesik kopya ofseti")
                     length = 4 + ((tag >> 2) & 7)
                     offset = ((tag >> 5) << 8) | data[pos]
                     pos += 1
                 elif kind == 2:
+                    if pos + 2 > ln:
+                        raise ValueError("snappy: kesik kopya ofseti")
                     length = 1 + (tag >> 2)
                     offset = int.from_bytes(data[pos:pos + 2], "little")
                     pos += 2
                 else:
+                    if pos + 4 > ln:
+                        raise ValueError("snappy: kesik kopya ofseti")
                     length = 1 + (tag >> 2)
                     offset = int.from_bytes(data[pos:pos + 4], "little")
                     pos += 4
@@ -5370,7 +5394,10 @@ class UyapRedactor:
     def _pb_varint(buf: bytes, pos: int):
         res = 0
         shift = 0
+        ln = len(buf)
         while True:
+            if pos >= ln:
+                raise ValueError("protobuf: kesik varint")
             b = buf[pos]
             pos += 1
             res |= (b & 0x7F) << shift
@@ -5411,11 +5438,14 @@ class UyapRedactor:
         """iWork .iwa akışı: [0x00][3 bayt uzunluk LE][ham snappy] parçaları; CRC/akış başlığı yoktur."""
         out = bytearray()
         pos = 0
-        while pos < len(raw):
-            if raw[pos] != 0 or pos + 4 > len(raw):
+        n = len(raw)
+        while pos < n:
+            if pos + 4 > n or raw[pos] != 0:
                 raise ValueError("iwa: geçersiz parça başlığı")
             ln = int.from_bytes(raw[pos + 1:pos + 4], "little")
             pos += 4
+            if pos + ln > n:
+                raise ValueError("iwa: kesik parça verisi")
             out += cls._snappy_raw_decompress(raw[pos:pos + ln])
             pos += ln
         return bytes(out)
@@ -5427,23 +5457,34 @@ class UyapRedactor:
     def extract_pages_raw(cls, file_path: str) -> str:
         """
         Apple Pages (.pages) belgesinin gövde metnini Index/Document.iwa içinden çıkarır.
+        Hem tek dosyalı ZIP arşivlerini hem macOS Paket (.pages dizini) biçimini destekler.
         Yalnızca standart kütüphane kullanılır. Biçim tanınmazsa veya metin bulunamazsa "" döner;
         çağıran dosyayı sessizce atmaz, 'işlenemeyen' listesine yazar.
         """
         try:
-            with zipfile.ZipFile(file_path, "r") as zf:
-                names = zf.namelist()
-                doc_names = [n for n in names if n.endswith("Index/Document.iwa")]
-                if not doc_names:
+            if os.path.isdir(file_path):
+                doc_iwa = os.path.join(file_path, "Index", "Document.iwa")
+                if not os.path.isfile(doc_iwa):
                     return ""
-                data = cls._iwa_decompress(zf.read(doc_names[0]))
+                with open(doc_iwa, "rb") as rf:
+                    data = cls._iwa_decompress(rf.read())
+            else:
+                with zipfile.ZipFile(file_path, "r") as zf:
+                    names = zf.namelist()
+                    doc_names = [n for n in names if n.endswith("Index/Document.iwa")]
+                    if not doc_names:
+                        return ""
+                    data = cls._iwa_decompress(zf.read(doc_names[0]))
         except Exception:
             return ""
         chunks: List[str] = []
         try:
             pos = 0
-            while pos < len(data):
+            n_data = len(data)
+            while pos < n_data:
                 ln, pos = cls._pb_varint(data, pos)
+                if pos + ln > n_data:
+                    return ""
                 info = data[pos:pos + ln]
                 pos += ln
                 lens_types = []
@@ -5457,6 +5498,8 @@ class UyapRedactor:
                                 mlen = v2
                         lens_types.append((mtype, mlen))
                 for mtype, mlen in lens_types:
+                    if pos + mlen > n_data:
+                        return ""
                     payload = data[pos:pos + mlen]
                     pos += mlen
                     if mtype in cls._IWA_TEXT_STORAGE_TYPES:
@@ -5466,9 +5509,12 @@ class UyapRedactor:
         except Exception:
             return ""
         text = "\n".join(chunks)
-        # Pages: U+2029 paragraf, U+2028 satır sonu, U+FFFC nesne yer tutucusu, U+0007 tablo hücresi
+        # Pages: U+2029 paragraf, U+2028 satır sonu, U+FFFC nesne yer tutucusu,
+        # U+0004/U+0005/U+000B/U+000C sayfa-bölüm kesmeleri, U+0007 tablo hücresi
         text = text.replace("\u2029", "\n").replace("\u2028", "\n").replace("\ufffc", "")
+        text = text.replace("\x04", "\n").replace("\x05", "\n").replace("\x0b", "\n").replace("\x0c", "\n")
         text = text.replace("\x07", "\t").replace("\r\n", "\n").replace("\r", "\n")
+        text = re.sub(r"[\x00-\x08\x0e-\x1f\x7f]", "", text)
         text = re.sub(r"[ \t]+\n", "\n", text)
         text = re.sub(r"\n{3,}", "\n\n", text)
         return text.strip()
@@ -6493,6 +6539,10 @@ class UyapRedactor:
                     and not _is_dest_subtree(os.path.join(root, d))
                     and cls._is_safe_src_path(os.path.join(root, d), real_src)
                 )
+                pkg_pages = [d for d in dirs if d.lower().endswith(".pages")]
+                if pkg_pages:
+                    dirs[:] = [d for d in dirs if not d.lower().endswith(".pages")]
+                    files = sorted(list(files) + pkg_pages)
                 for f in sorted(files):
                     ext = os.path.splitext(f)[1].lower()
                     if ext in cls.ARCHIVE_EXTS:
@@ -6636,7 +6686,8 @@ class UyapRedactor:
                     continue
                 dirs[:] = sorted(
                     d for d in dirs
-                    if not cls._is_skipped_dir(os.path.join(root, d), src_folder, cls.SKIP_DIRS)
+                    if not d.lower().endswith(".pages")
+                    and not cls._is_skipped_dir(os.path.join(root, d), src_folder, cls.SKIP_DIRS)
                     and not _is_dest_subtree(os.path.join(root, d))
                     and cls._is_safe_src_path(os.path.join(root, d), real_src)
                 )
@@ -6748,6 +6799,10 @@ class UyapRedactor:
                         and not _is_dest_subtree(os.path.join(root, d))
                         and cls._is_safe_src_path(os.path.join(root, d), real_src)
                     )
+                    pkg_pages = [d for d in dirs if d.lower().endswith(".pages")]
+                    if pkg_pages:
+                        dirs[:] = [d for d in dirs if not d.lower().endswith(".pages")]
+                        files = sorted(list(files) + pkg_pages)
                     for f in sorted(files):
                         ext = os.path.splitext(f)[1].lower()
                         if ext not in exts:
@@ -7086,6 +7141,10 @@ class UyapRedactor:
                     and not _is_dest_subtree(os.path.join(root, d))
                     and cls._is_safe_src_path(os.path.join(root, d), real_src)
                 )
+                pkg_pages = [d for d in dirs if d.lower().endswith(".pages")]
+                if pkg_pages:
+                    dirs[:] = [d for d in dirs if not d.lower().endswith(".pages")]
+                    files = sorted(list(files) + pkg_pages)
                 for f in sorted(files):
                     ext = os.path.splitext(f)[1].lower()
                     if (

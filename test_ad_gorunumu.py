@@ -528,6 +528,29 @@ class TestApiVeCliUyumu(_Base):
         self.assertIn("Ahmet YILMAZ", t)
         self.assertIn("[HAKİM_1]", t)
 
+    def test_tckn_sozcugu_kisi_adina_yutulmaz(self) -> None:
+        tckn = "10000000146"
+        doc = f"Davacı Ali VELİOĞLU TCKN {tckn} duruşmaya katıldı.\nDAVACI : Ali VELİOĞLU - T.C. {tckn}\n"
+        self.write_src({"dilekce.md": doc})
+        for mode in ("etiket", "bas_harf"):
+            out_dir = os.path.join(self._tmp.name, f"out_{mode}")
+            dest, _ = UyapRedactor.export_isolated_clean_folder(
+                self.src, dest_folder=out_dir, ad_gorunumu=mode
+            )
+            with open(os.path.join(dest, "dilekce.md"), encoding="utf-8") as f:
+                masked = f.read()
+            self.assertNotIn("VELİOĞLU", masked)
+            self.assertNotIn(tckn, masked)
+            self.assertIn("[TCKN_1]", masked)
+            if mode == "etiket":
+                self.assertIn("Davacı [DAVACI_1] TCKN [TCKN_1]", masked)
+            else:
+                self.assertIn("Davacı Ali V. [DAVACI_1] TCKN [TCKN_1]", masked)
+            rep = audit_output.audit(self.src, dest, ad_gorunumu=mode)
+            self.assertEqual(rep["leaks"].get("person_name", []), [])
+            self.assertEqual(rep["leaks"].get("tckn", []), [])
+            self.assertEqual(rep["unaligned"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

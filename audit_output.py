@@ -120,10 +120,10 @@ def exists_nfc_nfd(base_dir: str, rel: str) -> bool:
     return False
 
 
-def _find_nfc_nfd_file(base_dir: str, rel: str) -> Optional[str]:
+def _find_nfc_nfd_file(base_dir: str, rel: str, allow_dir: bool = False) -> Optional[str]:
     for form in ("NFC", "NFD"):
         p = os.path.join(base_dir, unicodedata.normalize(form, rel))
-        if os.path.isfile(p):
+        if os.path.isfile(p) or (allow_dir and os.path.isdir(p)):
             return p
     return None
 
@@ -154,7 +154,7 @@ def _extract_non_ocr_from_base(base_dir: str, rel: str, allow_kaynak: bool = Tru
         off_rel = stem + ext
         for pref in prefixes:
             cand = os.path.join(pref, off_rel) if pref else off_rel
-            p = _find_nfc_nfd_file(base_dir, cand)
+            p = _find_nfc_nfd_file(base_dir, cand, allow_dir=(ext == ".pages"))
             if p:
                 raw = fn(p)
                 return UyapRedactor.normalize_spaces(raw) if raw else None
@@ -505,7 +505,70 @@ def _extract_with_regex(src_line: str, out_line: str, rx: re.Pattern) -> Optiona
     raw_labels = rx.findall(out_line)
     if not raw_labels:
         return []
-    labels = [re.match(MASK_RE.pattern, lab).group(0) for lab in raw_labels]
+    labels = [re.search(MASK_RE.pattern, lab).group(0) for lab in raw_labels]
+    pattern = "^" + "(.*?)".join(re.escape(p) for p in parts) + "$"
+    try:
+        m = re.match(pattern, src_line, re.S)
+    except re.error:
+        return None
+    if not m:
+        return None
+    return list(zip(labels, m.groups()))
+
+
+_NON_JUD_PERSON_ALTS = "|".join(
+    re.escape(r) for r in MaskRegistry.PERSON_ROLES if r not in MaskRegistry.JUDICIAL_ROLES
+)
+_BAS_HARF_MASK_RE = re.compile(
+    rf"(?P<prefix>(?:[A-ZÇĞİÖŞÜÂÎÛ][A-Za-zÇĞİÖŞÜçğıöşüÂÎÛâîû'’\-]+[ \t]+){{1,3}}[A-ZÇĞİÖŞÜÂÎÛ]\.[ \t]+)"
+    rf"(?P<lab>\[(?:{_NON_JUD_PERSON_ALTS})_\d+\])"
+)
+_BAS_HARF_STOP_PREFIX_WORDS = (
+    UyapRedactor._PERSON_STOP_WORDS
+    | UyapRedactor._PERSON_CORP_TITLE_WORDS
+    | UyapRedactor._PLACE_STRUCTURE_WORDS
+)
+
+
+def _extract_bas_harf_pieces(src_line: str, out_line: str) -> Optional[List[Tuple[str, str]]]:
+    """'Ad S. [ROL_n]' (bas_harf) çıktı satırlarını kaynak satırdaki tam ad ve diğer maskelerle eşler."""
+    if not _BAS_HARF_MASK_RE.search(out_line):
+        return None
+    spans: List[Tuple[int, int, str]] = []
+    for m in _BAS_HARF_MASK_RE.finditer(out_line):
+        s, e = m.start(), m.end()
+        pref = m.group("prefix")
+        lab = m.group("lab")
+        # Ön ek başındaki rol/bağlam sözcüklerini ("Davacı", "Müvekkil", "Sayın") adın dışında bırak
+        # Basit ve güvenli: son belirteç "S. " öncesindeki en fazla 3 ön ad sözcüğünü kontrol et
+        m_split = re.match(r"^(?P<givens>(?:[^\s]+[ \t]+){1,3})(?P<init>[A-ZÇĞİÖŞÜÂÎÛ]\.[ \t]+)$", pref)
+        if m_split:
+            giv_str = m_split.group("givens")
+            g_parts = re.findall(r"[^\s]+[ \t]+", giv_str)
+            while len(g_parts) > 1 and _fold_tr(g_parts[0].strip()) in _BAS_HARF_STOP_PREFIX_WORDS:
+                s += len(g_parts[0])
+                g_parts.pop(0)
+        spans.append((s, e, lab))
+
+    mask_rx = MASK_WITH_HINT_RE if ADRES_HINT_RE.search(out_line) else MASK_RE
+    for m in mask_rx.finditer(out_line):
+        ms, me = m.start(), m.end()
+        if any(ms < pe and me > ps for ps, pe, _ in spans):
+            continue
+        lab = re.search(MASK_RE.pattern, m.group(0)).group(0)
+        spans.append((ms, me, lab))
+
+    if not spans:
+        return None
+    spans.sort(key=lambda x: x[0])
+    parts: List[str] = []
+    labels: List[str] = []
+    pos = 0
+    for s, e, lab in spans:
+        parts.append(out_line[pos:s])
+        labels.append(lab)
+        pos = e
+    parts.append(out_line[pos:])
     pattern = "^" + "(.*?)".join(re.escape(p) for p in parts) + "$"
     try:
         m = re.match(pattern, src_line, re.S)
@@ -522,8 +585,10 @@ def extract_mask_pieces(src_line: str, out_line: str) -> Optional[List[Tuple[str
     if res is not None:
         return res
     if ADRES_HINT_RE.search(out_line):
-        return _extract_with_regex(src_line, out_line, MASK_WITH_HINT_RE)
-    return None
+        res = _extract_with_regex(src_line, out_line, MASK_WITH_HINT_RE)
+        if res is not None:
+            return res
+    return _extract_bas_harf_pieces(src_line, out_line)
 
 
 _NAME_ONLY_LINE_RE = re.compile(r"^[A-Za-zÇĞİÖŞÜçğıöşüÂÎÛâîû'’.\-]+(?: [A-Za-zÇĞİÖŞÜçğıöşüÂÎÛâîû'’.\-]+){0,2}$")
@@ -663,6 +728,10 @@ def _collect_source_rel_candidates(
                 dirs[:] = []
                 continue
             dirs.sort()
+            pkg_pages = [d for d in dirs if d.lower().endswith(".pages")]
+            if pkg_pages:
+                dirs[:] = [d for d in dirs if not d.lower().endswith(".pages")]
+                files = sorted(list(files) + pkg_pages)
             for f in sorted(files):
                 full_p = os.path.join(root, f)
                 rel_p = unicodedata.normalize("NFC", os.path.relpath(full_p, base_dir))

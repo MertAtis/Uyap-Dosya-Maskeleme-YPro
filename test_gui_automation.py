@@ -670,6 +670,9 @@ class TestUyapRedactorApp(unittest.TestCase):
         self.assertEqual(self.app.card_sicil.lbl_val.cget("text"), "6")
         self.assertEqual(self.app.card_adres.lbl_val.cget("text"), "11")
         self.assertEqual(self.app.card_files.lbl_val.cget("text"), "15 (0 UDF, 0 Office, 5 OCR)")
+        self.app.update_idletasks()
+        self.assertGreater(int(self.app.card_files.lbl_val.cget("wraplength")), 0)
+        self.assertIn("8", str(self.app.card_files.lbl_val.cget("font")))
 
         # 5. done mesajı
         self.app.is_running = True

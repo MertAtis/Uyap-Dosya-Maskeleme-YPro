@@ -19,7 +19,7 @@
 ## ✨ Öne Çıkan Özellikler
 
 - **🔒 Çevrimdışı Çalışma:** Hiçbir harici API'ye, sunucuya veya buluta veri göndermez. Tüm işlem yerel Python çekirdeği ile RAM üzerinde gerçekleşir.
-- **🛡️ Orijinale Dokunmama (Non-Destructive):** Orijinal `.udf`, `.pdf`, `.doc`, `.docx`, `.xlsx`, `.eyp`, `.zip`, `.tif`/`.tiff`, `.png`/`.jpg`/`.heic` dosyalarınıza kesinlikle dokunmaz. İşlem yalnızca ayrı bir izole çıktı klasörüne maskelenmiş `.md` metinleri üretir.
+- **🛡️ Orijinale Dokunmama (Non-Destructive):** Orijinal `.udf`, `.pdf`, `.doc`, `.docx`, `.xlsx`, `.pages`, `.eyp`, `.zip`, `.tif`/`.tiff`, `.png`/`.jpg`/`.heic` dosyalarınıza kesinlikle dokunmaz. İşlem yalnızca ayrı bir izole çıktı klasörüne maskelenmiş `.md` metinleri üretir.
 - **⚖️ Hukuki Bütünlük:** Olay örgüsü, tarihler, para miktarları, mahkeme esas/karar numaraları, kanun maddeleri, olay yeri, kurum/şirket adları, Ticaret Sicil numaraları, kurum/oda adresleri, vekil/bilirkişi adları ve anne/baba adları açık kalır ve korunur. Varsayılan olarak hem taraf/tanık ad-soyadları (`[DAVACI_1]`, `[TANIK_2]`, `[KİŞİ_1]`) hem de hâkim, savcı ve zabıt kâtibi ad-soyadları (`[HAKİM_1]`, `[SAVCI_1]`, `[KÂTİP_1]`) rol bazlı tutarlı takma adlarla gizlenir (isteğe bağlı olarak ayrı ayrı kapatılabilir). Kural tabanlı maskeleme hatasız değildir; çıktıyı paylaşmadan önce rapordaki uyarılara göz atın.
 - **📱 Cep Telefonu ve İletişim Koruması:** Müvekkil ve taraf cep telefonlarının tüm Türkiye formatlarını (`05xx`, `+90 5xx`, boşluklu, parantezli) tespit ederek maskeler.
 - **🪪 Kimlik Kartı & MRZ Koruma:** Taranmış evraklardaki kimlik fotokopilerinde yer alan yeni/eski seri numaralarını ve 3 satırlı ICAO/MRZ şeritlerini (`I<TUR...`) kapatır.
@@ -80,7 +80,7 @@ Kullanıcı deneyimini sadeleştirmek ve veri güvenliğini en üst seviyeye ç�
 * **📦 İzole Temiz Dava Klasörü Oluşturma:**  
   Orijinal klasöre ASLA dokunmaz. Seçilen dava klasörünün yanına `<Dava Klasörü> (Maskelenmis AI)` adında izole bir klasör üretir.
 * **📄 İkili Dosya Aktarılmaz:**  
-  Orijinal `.udf`, `.pdf`, `.doc`, `.docx`, `.xlsx`, `.tif`, `.heic`, `.eyp`, `.zip` veya ikili ekler hedef klasöre KESİNLİKLE kopyalanmaz. Yalnızca maskelenmiş metin `.md` dosyaları aktarılır.
+  Orijinal `.udf`, `.pdf`, `.doc`, `.docx`, `.xlsx`, `.pages`, `.tif`, `.heic`, `.eyp`, `.zip` veya ikili ekler hedef klasöre KESİNLİKLE kopyalanmaz. Yalnızca maskelenmiş metin `.md` dosyaları aktarılır.
 * **👁️ Yerel Apple Vision OCR Motoru:**  
   Taranmış fotokopi ve ekler macOS yerel OCR motoruyla çevrimdışı olarak çözülür ve `.md` formatında temiz klasöre kazandırılır.
 * **🔒 Katmanlı Kişisel Veri Maskelemesi:**  
