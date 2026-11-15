@@ -143,24 +143,36 @@ chmod +x build_dmg.sh
 
 ```text
 uyap-dosya-maskeleme-ypro/
-├── gui.py                  # macOS Tkinter modern grafik arayüzü (2x4 İstatistik Paneli & AutoUpdater)
-├── uyap_redactor.py        # Katmanlı maskeleme (MaskRegistry: tutarlı numaralı etiket) ve INDEX.md senkronizasyon motoru
-├── audit_output.py         # Geliştirici denetimi: sızıntı / fazla maskeleme / tutarlılık / yapı / koruma ölçümü
-├── test_uyap_redactor.py   # Çekirdek motor test paketi
-├── test_audit_output.py    # Denetim aracı testleri
-├── test_gui_automation.py  # 40 Testlik GUI, AutoUpdater ve UI/UX otomasyon paketi
-├── test_standalone_binary_qa.py # Standalone ikili dosya, otool ve Apple Vision QA paketi
-├── build_dmg.sh            # Bağımsız standalone .app ve .dmg derleme betiği (Resmî Dağıtım)
-├── build_app.sh            # Geliştiriciler için hızlı yerel test .app derleme betiği
-├── UYAP Maskeleme.spec     # PyInstaller bağımsız derleme spesifikasyonu
-├── requirements.txt        # Sistem gereksinimleri (Zero-Dependency)
-├── bundle/                 # macOS uygulama kaynakları
-│   ├── Info.plist          # Paket meta verileri
-│   ├── app.icns            # Uygulama simgesi
-│   └── launcher.sh         # macOS yerel geliştirici başlatıcı betiği
-├── README.md               # Dokümantasyon
-└── .gitignore              # Git yoksayma kuralları
+├── CLAUDE.md                        # Kalıcı mimari kurallar ve değişmez tasarım ilkeleri
+├── AGENTS.md                        # Çoklu-ajan (Antigravity/Codex/Cursor) çalışma kuralları
+├── gui.py                           # v1.5.4 Editorial LegalTech Tkinter arayüzü (2x4 İstatistik Paneli & AutoUpdater)
+├── uyap_redactor.py                 # Katmanlı maskeleme (MaskRegistry: tutarlı numaralı etiket) ve INDEX.md senkronizasyon motoru
+├── audit_output.py                  # Geliştirici denetimi: sızıntı / fazla maskeleme / tutarlılık / yapı / koruma ölçümü
+├── test_uyap_redactor.py            # Çekirdek motor test paketi
+├── test_audit_output.py             # Denetim aracı testleri
+├── test_gui_automation.py          # 56 testlik GUI, Editorial LegalTech UI/UX ve AutoUpdater otomasyon paketi
+├── test_ad_gorunumu.py              # Ad görünümü (etiket / bas-harf / acik) regresyon testleri
+├── test_pdf_duzeni_ad_gorunumu.py   # PDF düzeni ve ad görünümü doğrulama testleri
+├── test_pages_ve_denetim_v152.py    # Apple Pages (.pages) ve denetim hizalama testleri
+├── test_yargi_adlari.py             # Hâkim / Savcı / Kâtip etiketleme ve muafiyet testleri
+├── test_yanlis_yakalama.py          # Yanlış pozitif (kurum/vekil/bilirkişi) koruma testleri
+├── test_redos_koruma.py             # Düzenli ifade ReDoS güvenlik ve performans testleri
+├── test_senaryolar.py               # Kapsamlı gerçekçi dava senaryoları testi
+├── test_yuz_senaryo.py              # 100+ uç senaryo doğrulama paketi
+├── test_standalone_binary_qa.py     # Standalone .app ikili dosya (24 test), otool ve Apple Vision QA paketi
+├── build_dmg.sh                     # Bağımsız standalone .app ve .dmg derleme betiği (Resmî Dağıtım)
+├── build_app.sh                     # Geliştiriciler için hızlı yerel test .app derleme betiği
+├── UYAP Maskeleme.spec              # PyInstaller bağımsız derleme spesifikasyonu
+├── requirements.txt                 # Sistem gereksinimleri (Zero-Dependency)
+├── bundle/                          # macOS uygulama kaynakları
+│   ├── Info.plist                   # Paket meta verileri (v1.5.4)
+│   ├── app.icns                     # Uygulama simgesi
+│   └── launcher.sh                  # macOS yerel geliştirici başlatıcı betiği
+├── README.md                        # Dokümantasyon
+└── .gitignore                       # Git yoksayma kuralları
 ```
+
+> **Toplam Test Paketi (685 Test):** `661` çekirdek/GUI/senaryo testi (`PYTHONDONTWRITEBYTECODE=1 pytest -q --ignore=test_standalone_binary_qa.py`) + `24` standalone `.app` QA testi (`test_standalone_binary_qa.py`). Mimari kurallar ve derleme sonrası temizlik adımları [`CLAUDE.md`](CLAUDE.md) ile [`AGENTS.md`](AGENTS.md) içinde tanımlıdır.
 
 ---
 
