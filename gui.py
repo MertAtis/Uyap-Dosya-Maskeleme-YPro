@@ -37,7 +37,7 @@ from tkinter import ttk, filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
 
 # Uygulama Sürümü ve Otomatik Güncelleme Kaynağı
-APP_VERSION = "1.5.3"
+APP_VERSION = "1.5.4"
 RUN_BUTTON_TEXT = "▶  Başlat"
 GITHUB_REPO = "MertAtis/Uyap-Dosya-Maskeleme-YPro"
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -379,41 +379,41 @@ except ImportError:
 # TASARIM SİSTEMİ — SHADCN ZINC & APPLE HIG & LIQUID GLASS
 # ==============================================================================
 class Theme:
-    # macOS Backdrop & Glass Surfaces
-    BG_CANVAS = "#F4F4F6"         # Apple HIG hafif soğuk kanvas
-    BG_SURFACE = "#FFFFFF"        # Saf beyaz cam panel
-    BG_SURFACE_ALT = "#FAFAFB"    # İkincil hafif cam yüzey
-    BORDER_GLASS = "#E4E4E7"      # Zinc-200 1px rafine kenarlık
-    BORDER_HOVER = "#A1A1AA"      # Zinc-400 fare üzerine gelme kenarlığı
-    BORDER_SHINE = "#FFFFFF"      # Cam üst kenar ışık yansıması (Liquid Glass)
+    # Editorial LegalTech — Sıcak Fildişi Kanvas & Kurumsal Hukuk Paleti
+    BG_CANVAS = "#F7F6F2"         # Sıcak fildişi / parşömen kanvas
+    BG_SURFACE = "#FFFFFF"        # Saf beyaz belge yüzeyi
+    BG_SURFACE_ALT = "#EFECE6"    # İkincil sıcak taş yüzeyi
+    BORDER_GLASS = "#E5E2DC"      # 1px ince taş kenarlık
+    BORDER_HOVER = "#B8B3A8"      # Fare üzeri sıcak taş kenarlığı
+    BORDER_SHINE = "#FFFFFF"      # Üst kenar vurgusu
 
-    # Tipografi Renkleri (Zinc Scale)
-    TEXT_PRIMARY = "#09090B"      # Zinc-950 en yüksek kontrast
-    TEXT_SECONDARY = "#3F3F46"    # Zinc-700 ikincil metin
-    TEXT_MUTED = "#71717A"        # Zinc-500 açıklama / soluk metin
-    TEXT_TERTIARY = "#A1A1AA"     # Zinc-400 yer tutucu / mikro metin
+    # Tipografi Renkleri (Editoryal Mürekkep Ölçeği)
+    TEXT_PRIMARY = "#141413"      # Koyu antrasit mürekkep
+    TEXT_SECONDARY = "#4A4843"    # İkincil sıcak arduvaz
+    TEXT_MUTED = "#78756E"        # Etiket / açıklama taş grisi
+    TEXT_TERTIARY = "#9E9A91"     # Yer tutucu / yardımcı metin
 
-    # Apple Vurgu Renkleri (System Colors)
-    BLUE_PRIMARY = "#0071E3"      # Apple System Blue
-    BLUE_HOVER = "#0077ED"
-    BLUE_PRESS = "#005BB5"
+    # Ana Vurgu (Kurumsal Hukuk Laciverti)
+    BLUE_PRIMARY = "#1B2A4A"      # Derin kurumsal lacivert
+    BLUE_HOVER = "#243760"
+    BLUE_PRESS = "#111C33"
 
-    # Stat Kartı Vurguları (Canlı Apple Paleti)
-    STAT_TCKN = "#EF4444"         # Apple Red (Zinc-500 Red)
-    STAT_TEL = "#0284C7"          # Apple Sky / Cyan
-    STAT_SERI = "#8B5CF6"         # Apple Purple
-    STAT_MRZ = "#F43F5E"          # Apple Rose
-    STAT_IBAN = "#D97706"         # Apple Amber
-    STAT_SICIL = "#6366F1"        # Apple Indigo
-    STAT_ADRES = "#059669"        # Apple Emerald
-    STAT_FILES = "#18181B"        # Deep Zinc
+    # Stat Kartı Vurguları (Ağırbaşlı Editoryal Mürekkep Tonları)
+    STAT_TCKN = "#7F1D1D"         # Derin Bordo / Mühür Kırmızısı
+    STAT_TEL = "#1E3A5F"          # Koyu Lacivert
+    STAT_SERI = "#3F3D56"         # Arduvaz İndigo
+    STAT_MRZ = "#6B2D3E"          # Koyu Mürdüm
+    STAT_IBAN = "#784B23"         # Antik Bronz / Kehribar
+    STAT_SICIL = "#2C4251"        # Prusya Grisi
+    STAT_ADRES = "#1E4D3B"        # Koyu Orman Yeşili
+    STAT_FILES = "#141413"        # Antrasit
 
-    # Terminal / Konsol (Koyu Cam Konsol)
-    TERM_BG = "#09090B"           # Zinc-950 koyu zemin
-    TERM_BAR = "#18181B"          # Zinc-900 konsol başlık çubuğu
-    TERM_BORDER = "#27272A"       # Zinc-800 konsol sınırı
-    TERM_FG = "#F4F4F5"           # Zinc-100 ana metin
-    TERM_LINE = "#27272A"
+    # İşlem Günlüğü (Fildişi Denetim Levhası)
+    TERM_BG = "#FCFBF9"           # Sıcak fildişi belge zemini
+    TERM_BAR = "#F2EFE9"          # Üst başlık şeridi
+    TERM_BORDER = "#E5E2DC"       # İnce taş çerçeve
+    TERM_FG = "#1C1B18"           # Okunaklı koyu mürekkep
+    TERM_LINE = "#E5E2DC"
 
     # Tipografi Tanımları (Apple HIG Font Hiyerarşisi)
     @staticmethod
@@ -474,33 +474,33 @@ class GlassButton(tk.Frame):
             self.bg_hover = Theme.BLUE_HOVER
             self.bg_press = Theme.BLUE_PRESS
             self.fg_normal = "#FFFFFF"
-            self.border_normal = "#0062C4"
-            self.border_hover = "#005BB5"
-            self.bg_disabled = "#E4E4E7"
-            self.fg_disabled = "#A1A1AA"
-            self.border_disabled = "#E4E4E7"
+            self.border_normal = "#142038"
+            self.border_hover = "#0F172A"
+            self.bg_disabled = "#E5E2DC"
+            self.fg_disabled = "#9E9A91"
+            self.border_disabled = "#E5E2DC"
             default_font = Theme.font_text(11, "bold")
         elif variant == "secondary":
             self.bg_normal = "#FFFFFF"
-            self.bg_hover = "#F4F4F5"
-            self.bg_press = "#E4E4E7"
+            self.bg_hover = "#F5F3EE"
+            self.bg_press = "#EAE6DF"
             self.fg_normal = Theme.BLUE_PRIMARY
             self.border_normal = Theme.BORDER_GLASS
             self.border_hover = Theme.BORDER_HOVER
-            self.bg_disabled = "#FAFAFA"
-            self.fg_disabled = "#A1A1AA"
-            self.border_disabled = "#E4E4E7"
+            self.bg_disabled = "#FAF9F6"
+            self.fg_disabled = "#A19E95"
+            self.border_disabled = "#E5E2DC"
             default_font = Theme.font_text(11, "bold")
         else:  # subtle
-            self.bg_normal = "#27272A"
-            self.bg_hover = "#3F3F46"
-            self.bg_press = "#18181B"
-            self.fg_normal = "#F4F4F5"
-            self.border_normal = "#3F3F46"
-            self.border_hover = "#52525B"
-            self.bg_disabled = "#18181B"
-            self.fg_disabled = "#71717A"
-            self.border_disabled = "#27272A"
+            self.bg_normal = "#E7E4DD"
+            self.bg_hover = "#DCD8CF"
+            self.bg_press = "#CFCBC0"
+            self.fg_normal = "#3F3D39"
+            self.border_normal = "#D6D2C8"
+            self.border_hover = "#B8B3A8"
+            self.bg_disabled = "#F2EFE9"
+            self.fg_disabled = "#A19E95"
+            self.border_disabled = "#E5E2DC"
             default_font = Theme.font_text(9, "bold")
 
         cur_bg = self.bg_normal if state == "normal" else self.bg_disabled
@@ -597,10 +597,9 @@ class GlassButton(tk.Frame):
 
 class GlassStatCard(tk.Frame):
     """
-    Apple & Shadcn Liquid Glass İstatistik Kartı.
-    - Katmanlı cam panel (#FFFFFF üzerinde 1px #E4E4E7 kenarlık).
-    - Üst kenarda 1px ışık yansıması simülasyonu.
-    - Canlı ve ayırt edici Apple HIG tipografisi.
+    Editoryal Hukuk İstatistik Kartı.
+    - Saf beyaz yüzey üzerinde 1px sıcak taş kenarlık.
+    - Üstte 2px editoryal vurgu şeridi (veri algılandığında kartın mürekkep rengiyle yanar).
     - Fare üzerine gelindiğinde mikro kenarlık tepkisi.
     """
     def __init__(self, parent, title, value="0", color=Theme.BLUE_PRIMARY, **kwargs):
@@ -609,15 +608,15 @@ class GlassStatCard(tk.Frame):
             bg=Theme.BG_SURFACE,
             highlightbackground=Theme.BORDER_GLASS,
             highlightthickness=1,
-            padx=7,
-            pady=3,
+            padx=8,
+            pady=4,
             **kwargs
         )
         self.color = color
 
-        # 1. Üst kenar Liquid Glass ışık yansıması (Subtle Highlight Bevel)
-        self.top_highlight = tk.Frame(self, bg="#F4F4F6", height=1)
-        self.top_highlight.pack(fill="x", pady=(0, 1))
+        # 1. Üst kenar editoryal vurgu şeridi
+        self.top_highlight = tk.Frame(self, bg=Theme.BG_SURFACE_ALT, height=2)
+        self.top_highlight.pack(fill="x", pady=(0, 3))
 
         # 2. Başlık / Etiket
         self.lbl_title = tk.Label(
@@ -653,7 +652,7 @@ class GlassStatCard(tk.Frame):
     def _sync_val_wrap(self, _e=None):
         txt = self.lbl_val.cget("text")
         if len(str(txt)) > 8:
-            avail = max(self.winfo_width() - 16, 70)
+            avail = max(self.winfo_width() - 18, 70)
             self.lbl_val.config(wraplength=avail)
         else:
             self.lbl_val.config(wraplength=0)
@@ -666,8 +665,10 @@ class GlassStatCard(tk.Frame):
 
     def update_value(self, val):
         s = str(val)
+        is_nonzero = s != "0" and not s.startswith("0 (")
+        self.top_highlight.config(bg=self.color if is_nonzero else Theme.BG_SURFACE_ALT)
         if len(s) > 8:
-            avail = max(self.winfo_width() - 16, 70)
+            avail = max(self.winfo_width() - 18, 70)
             self.lbl_val.config(text=s, font=self._compact_font, wraplength=avail)
         else:
             self.lbl_val.config(text=s, font=self._base_font, wraplength=0)
@@ -675,6 +676,192 @@ class GlassStatCard(tk.Frame):
 
 # Eski isimle geriye dönük tam uyumluluk
 ModernCard = GlassStatCard
+
+
+class LegalCheckToggle(tk.Frame):
+    """Ham OS onay kutusu yerine minimalist hukuk bürosu onay anahtarı."""
+
+    def __init__(self, parent, text, variable: tk.BooleanVar, state="normal", **kwargs):
+        bg = kwargs.pop("bg", Theme.BG_SURFACE)
+        super().__init__(parent, bg=bg, cursor="pointinghand" if state == "normal" else "arrow", **kwargs)
+        self.variable = variable
+        self._state = state
+        self._bg = bg
+
+        self.box = tk.Label(
+            self,
+            text="✓" if variable.get() else " ",
+            font=Theme.font_text(9, "bold"),
+            width=2,
+            padx=1,
+            pady=0,
+            highlightthickness=1,
+            cursor="pointinghand" if state == "normal" else "arrow",
+        )
+        self.box.pack(side="left", padx=(0, 7))
+
+        self.lbl = tk.Label(
+            self,
+            text=text,
+            font=Theme.font_text(10),
+            fg=Theme.TEXT_PRIMARY,
+            bg=bg,
+            anchor="w",
+            justify="left",
+            cursor="pointinghand" if state == "normal" else "arrow",
+        )
+        self.lbl.pack(side="left", fill="x", expand=True)
+
+        self._trace_id = variable.trace_add("write", lambda *_: self._sync_visual())
+        self.bind("<Destroy>", self._on_destroy, add="+")
+        for w in (self, self.box, self.lbl):
+            w.bind("<ButtonRelease-1>", self._toggle)
+        self._sync_visual()
+
+    def _on_destroy(self, event):
+        if event.widget is self:
+            try:
+                self.variable.trace_remove("write", self._trace_id)
+            except Exception:
+                pass
+
+    def _toggle(self, _e=None):
+        if self._state == "normal":
+            self.variable.set(not bool(self.variable.get()))
+
+    def _sync_visual(self):
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        checked = bool(self.variable.get())
+        enabled = self._state == "normal"
+        if checked:
+            box_bg = Theme.BLUE_PRIMARY if enabled else Theme.TEXT_TERTIARY
+            box_border = box_bg
+            box_txt = "✓"
+        else:
+            box_bg = "#FFFFFF" if enabled else Theme.BG_SURFACE_ALT
+            box_border = Theme.BORDER_HOVER if enabled else Theme.BORDER_GLASS
+            box_txt = " "
+        self.box.config(
+            text=box_txt,
+            bg=box_bg,
+            fg="#FFFFFF",
+            highlightbackground=box_border,
+            cursor="pointinghand" if enabled else "arrow",
+        )
+        self.lbl.config(
+            fg=Theme.TEXT_PRIMARY if enabled else Theme.TEXT_TERTIARY,
+            cursor="pointinghand" if enabled else "arrow",
+        )
+        super().config(cursor="pointinghand" if enabled else "arrow")
+
+    def config(self, **kwargs):
+        if "state" in kwargs:
+            self._state = str(kwargs.pop("state"))
+            self._sync_visual()
+        if "wraplength" in kwargs:
+            self.lbl.config(wraplength=kwargs.pop("wraplength"))
+        if "text" in kwargs:
+            self.lbl.config(text=kwargs.pop("text"))
+        if kwargs:
+            super().config(**kwargs)
+
+    def configure(self, **kwargs):
+        self.config(**kwargs)
+
+    def cget(self, key):
+        if key == "state":
+            return self._state
+        if key in ("wraplength", "text"):
+            return self.lbl.cget(key)
+        return super().cget(key)
+
+
+class LegalSegmentRadio(tk.Frame):
+    """Ham radyo düğmesi yerine zarif segmented control (sekme kapsülü) seçeneği."""
+
+    def __init__(self, parent, text, variable: tk.StringVar, value: str, state="normal", **kwargs):
+        super().__init__(
+            parent,
+            bg=Theme.BG_SURFACE_ALT,
+            highlightthickness=0,
+            padx=9,
+            pady=3,
+            cursor="pointinghand" if state == "normal" else "arrow",
+            **kwargs,
+        )
+        self.variable = variable
+        self.value = value
+        self._state = state
+
+        self.lbl = tk.Label(
+            self,
+            text=text,
+            font=Theme.font_text(9, "normal"),
+            bg=Theme.BG_SURFACE_ALT,
+            fg=Theme.TEXT_SECONDARY,
+            cursor="pointinghand" if state == "normal" else "arrow",
+        )
+        self.lbl.pack()
+
+        self._trace_id = variable.trace_add("write", lambda *_: self._sync_visual())
+        self.bind("<Destroy>", self._on_destroy, add="+")
+        for w in (self, self.lbl):
+            w.bind("<ButtonRelease-1>", self._select)
+        self._sync_visual()
+
+    def _on_destroy(self, event):
+        if event.widget is self:
+            try:
+                self.variable.trace_remove("write", self._trace_id)
+            except Exception:
+                pass
+
+    def _select(self, _e=None):
+        if self._state == "normal":
+            self.variable.set(self.value)
+
+    def _sync_visual(self):
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        active = self.variable.get() == self.value
+        enabled = self._state == "normal"
+        if active:
+            bg = Theme.BLUE_PRIMARY if enabled else Theme.TEXT_TERTIARY
+            fg = "#FFFFFF"
+            font = Theme.font_text(9, "bold")
+        else:
+            bg = Theme.BG_SURFACE_ALT
+            fg = Theme.TEXT_SECONDARY if enabled else Theme.TEXT_TERTIARY
+            font = Theme.font_text(9, "normal")
+        cur = "pointinghand" if enabled else "arrow"
+        super().config(bg=bg, cursor=cur)
+        self.lbl.config(bg=bg, fg=fg, font=font, cursor=cur)
+
+    def config(self, **kwargs):
+        if "state" in kwargs:
+            self._state = str(kwargs.pop("state"))
+            self._sync_visual()
+        if "text" in kwargs:
+            self.lbl.config(text=kwargs.pop("text"))
+        if kwargs:
+            super().config(**kwargs)
+
+    def configure(self, **kwargs):
+        self.config(**kwargs)
+
+    def cget(self, key):
+        if key == "state":
+            return self._state
+        if key == "text":
+            return self.lbl.cget("text")
+        return super().cget(key)
 
 
 class GlassStatusPill(tk.Frame):
@@ -764,7 +951,7 @@ class GlassStatusPill(tk.Frame):
         except Exception:
             self.is_pulsing = False
             return
-        colors = ["#0071E3", "#38BDF8", "#818CF8", "#0071E3"]
+        colors = ["#1B2A4A", "#2E4A82", "#4B6CB7", "#1B2A4A"]
         self.pulse_index = (self.pulse_index + 1) % len(colors)
         try:
             self.lbl_dot.config(fg=colors[self.pulse_index])
@@ -834,9 +1021,9 @@ class GlassProgressBar(tk.Canvas):
             self.create_oval(fill_w - h, 0, fill_w, h, fill=self.fill_color, outline="")
             self.create_rectangle(r, 0, fill_w - r, h, fill=self.fill_color, outline="")
 
-            # Sıvı Cam Üst Işık Yansıması (Liquid Glass Highlight)
+            # Üst ışık yansıması (Editoryal Lacivert Pah)
             shine_h = max(2, int(h * 0.35))
-            self.create_rectangle(r, 1, fill_w - r, shine_h, fill="#60A5FA", outline="")
+            self.create_rectangle(r, 1, fill_w - r, shine_h, fill="#3B538A", outline="")
 
 
 # ==============================================================================
@@ -927,40 +1114,40 @@ class UyapRedactorApp(_AppBase):
         # ------------------------------------------------------------------
         # 1. ÜST BAŞLIK
         # ------------------------------------------------------------------
-        header = tk.Frame(self, bg=Theme.BG_SURFACE, padx=12, pady=6,
+        header = tk.Frame(self, bg=Theme.BG_SURFACE, padx=14, pady=8,
                           highlightbackground=Theme.BORDER_GLASS, highlightthickness=1)
         header.pack(fill="x", side="top")
         header.columnconfigure(2, weight=1)
 
-        self.lbl_title = tk.Label(header, text="🛡️ UYAP Maskeleme", font=Theme.font_display(13, "bold"),
+        self.lbl_title = tk.Label(header, text="§  UYAP Maskeleme", font=Theme.font_display(13, "bold"),
                                   fg=Theme.TEXT_PRIMARY, bg=Theme.BG_SURFACE)
         self.lbl_title.grid(row=0, column=0, sticky="w")
 
-        self.lbl_subtitle = tk.Label(header, text="Çevrimdışı • Orijinal dosyalara dokunmaz",
+        self.lbl_subtitle = tk.Label(header, text="Hukuk Büroları İçin Çevrimdışı Belge Anonimleştirme",
                                      font=Theme.font_text(10), fg=Theme.TEXT_MUTED, bg=Theme.BG_SURFACE, anchor="w")
         self.lbl_subtitle.grid(row=0, column=1, sticky="w", padx=(10, 0))
 
         self.btn_update = GlassButton(header, text=f"v{APP_VERSION} • Güncelle", variant="secondary",
-                                      command=self._on_update_button_click, padx=8, pady=2,
+                                      command=self._on_update_button_click, padx=10, pady=3,
                                       font=Theme.font_text(10, "bold"))
         self.btn_update.grid(row=0, column=3, sticky="e")
 
         # ------------------------------------------------------------------
         # 7. ALT BİLGİ (başlıktan hemen sonra pack'lenir ki küçülünce kaybolmasın)
         # ------------------------------------------------------------------
-        footer = tk.Frame(self, bg=Theme.BG_SURFACE, padx=12, pady=4,
+        footer = tk.Frame(self, bg=Theme.BG_SURFACE, padx=14, pady=5,
                           highlightbackground=Theme.BORDER_GLASS, highlightthickness=1)
         footer.pack(fill="x", side="bottom")
         tk.Label(footer, text="⌘O Seç • ⌘R Başlat • ⌘K Temizle • Sürükle-bırak desteklenir", font=Theme.font_text(9),
                  fg=Theme.TEXT_MUTED, bg=Theme.BG_SURFACE).pack(side="left")
-        self.lbl_secure = tk.Label(footer, text="🔒 Ağ bağlantısı gerektirmez", font=Theme.font_text(9),
+        self.lbl_secure = tk.Label(footer, text="Çevrimdışı • Ağ bağlantısı gerektirmez", font=Theme.font_text(9),
                                    fg=Theme.TEXT_MUTED, bg=Theme.BG_SURFACE)
         self.lbl_secure.pack(side="right")
 
         # ------------------------------------------------------------------
         # ANA İÇERİK
         # ------------------------------------------------------------------
-        main = tk.Frame(self, bg=Theme.BG_CANVAS, padx=12, pady=8)
+        main = tk.Frame(self, bg=Theme.BG_CANVAS, padx=14, pady=8)
         main.pack(fill="both", expand=True)
         main.columnconfigure(0, weight=1)
         main.rowconfigure(4, weight=1)
@@ -971,19 +1158,20 @@ class UyapRedactorApp(_AppBase):
 
         self.folder_var = tk.StringVar(value="")
         self.entry_wrap = tk.Frame(self.controls, bg=Theme.BG_SURFACE,
-                                   highlightbackground=Theme.BORDER_GLASS, highlightthickness=1, padx=6)
-        tk.Label(self.entry_wrap, text="Klasör", font=Theme.font_text(10, "bold"),
-                 fg=Theme.TEXT_MUTED, bg=Theme.BG_SURFACE).pack(side="left", padx=(0, 6))
+                                   highlightbackground=Theme.BORDER_GLASS, highlightthickness=1, padx=8)
+        tk.Label(self.entry_wrap, text="Klasör", width=6, anchor="w", font=Theme.font_text(10, "bold"),
+                 fg=Theme.TEXT_SECONDARY, bg=Theme.BG_SURFACE).pack(side="left")
+        tk.Frame(self.entry_wrap, bg=Theme.BORDER_GLASS, width=1).pack(side="left", fill="y", padx=(4, 8), pady=5)
         self.entry_folder = tk.Entry(self.entry_wrap, textvariable=self.folder_var, width=1,
                                      font=Theme.font_text(11), bg=Theme.BG_SURFACE, fg=Theme.TEXT_PRIMARY,
                                      relief="flat", bd=0, highlightthickness=0,
                                      insertbackground=Theme.TEXT_PRIMARY)
-        self.entry_folder.pack(side="left", fill="x", expand=True, ipady=4)
+        self.entry_folder.pack(side="left", fill="x", expand=True, ipady=5)
 
         self.btn_browse = GlassButton(self.controls, text="Seç…", variant="secondary",
                                       command=self._select_folder, padx=10, pady=4)
         self.btn_run = GlassButton(self.controls, text=RUN_BUTTON_TEXT, variant="primary",
-                                   command=self._start_process, padx=12, pady=4)
+                                   command=self._start_process, padx=14, pady=4)
         self.btn_open_folder = GlassButton(self.controls, text="Aç", variant="secondary",
                                            command=self._open_dest_folder, state="disabled", padx=10, pady=4)
 
@@ -992,73 +1180,63 @@ class UyapRedactorApp(_AppBase):
         self.out_row.grid(row=1, column=0, sticky="ew", pady=(0, 6))
         self.out_row.columnconfigure(0, weight=1)
         out_wrap = tk.Frame(self.out_row, bg=Theme.BG_SURFACE,
-                            highlightbackground=Theme.BORDER_GLASS, highlightthickness=1, padx=6)
+                            highlightbackground=Theme.BORDER_GLASS, highlightthickness=1, padx=8)
         out_wrap.grid(row=0, column=0, sticky="ew", padx=(0, 6))
-        tk.Label(out_wrap, text="Kaydet", font=Theme.font_text(10, "bold"),
-                 fg=Theme.TEXT_MUTED, bg=Theme.BG_SURFACE).pack(side="left", padx=(0, 6))
+        tk.Label(out_wrap, text="Kaydet", width=6, anchor="w", font=Theme.font_text(10, "bold"),
+                 fg=Theme.TEXT_SECONDARY, bg=Theme.BG_SURFACE).pack(side="left")
+        tk.Frame(out_wrap, bg=Theme.BORDER_GLASS, width=1).pack(side="left", fill="y", padx=(4, 8), pady=5)
         self.entry_out = tk.Entry(out_wrap, textvariable=self.out_var, width=1,
                                   font=Theme.font_text(11), bg=Theme.BG_SURFACE, fg=Theme.TEXT_PRIMARY,
                                   relief="flat", bd=0, highlightthickness=0,
                                   insertbackground=Theme.TEXT_PRIMARY)
-        self.entry_out.pack(side="left", fill="x", expand=True, ipady=4)
+        self.entry_out.pack(side="left", fill="x", expand=True, ipady=5)
         self.lbl_out_hint = tk.Label(out_wrap, text="boşsa kaynağın yanına", font=Theme.font_text(9),
-                                     fg=Theme.TEXT_MUTED, bg=Theme.BG_SURFACE)
-        self.lbl_out_hint.pack(side="right")
+                                     fg=Theme.TEXT_TERTIARY, bg=Theme.BG_SURFACE)
+        self.lbl_out_hint.pack(side="right", padx=(6, 0))
         self.btn_out_browse = GlassButton(self.out_row, text="Konum…", variant="secondary",
                                           command=self._select_output_folder, padx=10, pady=4)
         self.btn_out_browse.grid(row=0, column=1)
 
-        # 3b. Kişi takma adları seçenekleri
+        # 3b. Kişi takma adları seçenek kartı
         self.mask_judicial_names_var = tk.BooleanVar(value=True)
-        self.options_row = tk.Frame(self.out_row, bg=Theme.BG_CANVAS)
+        self.options_row = tk.Frame(
+            self.out_row, bg=Theme.BG_SURFACE,
+            highlightbackground=Theme.BORDER_GLASS, highlightthickness=1, padx=10, pady=5
+        )
         self.options_row.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(5, 0))
         self.options_row.columnconfigure(0, weight=1)
-        self.chk_mask_judicial_names = tk.Checkbutton(
+        self.chk_mask_judicial_names = LegalCheckToggle(
             self.options_row,
             text="Hâkim/savcı/kâtip adlarını gizle ([HAKİM_1], [SAVCI_1], [KÂTİP_1])",
             variable=self.mask_judicial_names_var,
-            font=Theme.font_text(10),
-            fg=Theme.TEXT_PRIMARY,
-            bg=Theme.BG_CANVAS,
-            activebackground=Theme.BG_CANVAS,
-            activeforeground=Theme.TEXT_PRIMARY,
-            selectcolor=Theme.BG_SURFACE,
-            highlightthickness=0,
-            bd=0,
-            anchor="w",
-            justify="left",
         )
         self.chk_mask_judicial_names.grid(row=0, column=0, sticky="w")
         self.ad_gorunumu_var = tk.StringVar(value="etiket")
-        self.ad_row = tk.Frame(self.options_row, bg=Theme.BG_CANVAS)
-        self.ad_row.grid(row=1, column=0, sticky="w", pady=(2, 0))
+        self.ad_row = tk.Frame(self.options_row, bg=Theme.BG_SURFACE)
+        self.ad_row.grid(row=1, column=0, sticky="w", pady=(5, 0))
         self.lbl_ad_gorunumu = tk.Label(
             self.ad_row,
             text="Taraf/tanık adı:",
-            font=Theme.font_text(10),
-            fg=Theme.TEXT_PRIMARY,
-            bg=Theme.BG_CANVAS,
+            font=Theme.font_text(10, "bold"),
+            fg=Theme.TEXT_SECONDARY,
+            bg=Theme.BG_SURFACE,
             anchor="w",
         )
         self.lbl_ad_gorunumu.pack(side="left")
+        self.seg_box = tk.Frame(
+            self.ad_row, bg=Theme.BG_SURFACE_ALT,
+            highlightbackground=Theme.BORDER_GLASS, highlightthickness=1, padx=2, pady=2
+        )
+        self.seg_box.pack(side="left", padx=(8, 0))
         self.radio_ad_gorunumu = {}
-        for deger, metin in self.AD_GORUNUMU_SECENEKLERI:
-            rb = tk.Radiobutton(
-                self.ad_row,
+        for idx, (deger, metin) in enumerate(self.AD_GORUNUMU_SECENEKLERI):
+            rb = LegalSegmentRadio(
+                self.seg_box,
                 text=metin,
                 variable=self.ad_gorunumu_var,
                 value=deger,
-                font=Theme.font_text(10),
-                fg=Theme.TEXT_PRIMARY,
-                bg=Theme.BG_CANVAS,
-                activebackground=Theme.BG_CANVAS,
-                activeforeground=Theme.TEXT_PRIMARY,
-                selectcolor=Theme.BG_SURFACE,
-                highlightthickness=0,
-                bd=0,
-                anchor="w",
             )
-            rb.pack(side="left", padx=(8, 0))
+            rb.pack(side="left", padx=(0 if idx == 0 else 2, 0))
             self.radio_ad_gorunumu[deger] = rb
 
         # 4. İstatistik kartları
@@ -1083,29 +1261,35 @@ class UyapRedactorApp(_AppBase):
         )
         self.progress = GlassProgressBar(self.status_row, height=6, bg=Theme.BG_CANVAS)
 
-        # 6. İşlem günlüğü
+        # 6. İşlem günlüğü (Fildişi Denetim Levhası)
         log_panel = tk.Frame(main, bg=Theme.TERM_BG, highlightbackground=Theme.TERM_BORDER, highlightthickness=1)
         log_panel.grid(row=4, column=0, sticky="nsew")
-        log_header = tk.Frame(log_panel, bg=Theme.TERM_BAR, padx=8, pady=3)
+        log_header = tk.Frame(log_panel, bg=Theme.TERM_BAR, padx=10, pady=4)
         log_header.pack(fill="x")
-        self.lbl_console_title = tk.Label(log_header, text="İşlem Günlüğü", font=Theme.font_mono(9, "bold"),
-                                          fg=Theme.TEXT_TERTIARY, bg=Theme.TERM_BAR)
+        self.lbl_console_title = tk.Label(log_header, text="İşlem Günlüğü", font=Theme.font_text(9, "bold"),
+                                          fg=Theme.TEXT_SECONDARY, bg=Theme.TERM_BAR)
         self.lbl_console_title.pack(side="left")
         self.btn_clear = GlassButton(log_header, text="Temizle", variant="subtle",
                                      command=self._clear_logs, padx=8, pady=1)
         self.btn_clear.pack(side="right")
 
         self.log_text = ScrolledText(log_panel, font=Theme.font_mono(10), bg=Theme.TERM_BG, fg=Theme.TERM_FG,
-                                     relief="flat", wrap="word", bd=0, padx=10, pady=6, height=4, width=1,
-                                     insertbackground="#FFFFFF")
+                                     relief="flat", wrap="word", bd=0, highlightthickness=0,
+                                     highlightbackground=Theme.TERM_BG, highlightcolor=Theme.TERM_BG,
+                                     padx=12, pady=8, height=3, width=1,
+                                     insertbackground=Theme.TEXT_PRIMARY)
+        try:
+            self.log_text.frame.config(bg=Theme.TERM_BG, bd=0, highlightthickness=0)
+        except Exception:
+            pass
         self.log_text.pack(fill="both", expand=True)
-        self.log_text.tag_configure("mask", foreground="#34D399")
-        self.log_text.tag_configure("ocr", foreground="#A78BFA")
-        self.log_text.tag_configure("sync", foreground="#38BDF8")
-        self.log_text.tag_configure("error", foreground="#F87171")
-        self.log_text.tag_configure("header", foreground="#FCD34D", font=Theme.font_mono(10, "bold"))
-        self.log_text.tag_configure("info", foreground="#94A3B8")
-        self.log_text.tag_configure("dim", foreground="#52525B")
+        self.log_text.tag_configure("mask", foreground="#166534")
+        self.log_text.tag_configure("ocr", foreground="#3730A3")
+        self.log_text.tag_configure("sync", foreground="#1E40AF")
+        self.log_text.tag_configure("error", foreground="#991B1B")
+        self.log_text.tag_configure("header", foreground="#141413", font=Theme.font_mono(10, "bold"))
+        self.log_text.tag_configure("info", foreground="#57534E")
+        self.log_text.tag_configure("dim", foreground="#8A867E")
 
         self._apply_layout("wide")
         self.bind("<Configure>", self._on_window_resize, add="+")
@@ -1183,7 +1367,18 @@ class UyapRedactorApp(_AppBase):
             self.progress.grid(row=0, column=1, sticky="ew")
 
         # Seçenekler satırı
-        self.chk_mask_judicial_names.config(wraplength=380 if narrow else 0)
+        self.chk_mask_judicial_names.config(wraplength=310 if narrow else 0)
+        if narrow:
+            self.lbl_out_hint.pack_forget()
+            self.lbl_ad_gorunumu.pack_forget()
+            self.seg_box.pack_configure(padx=(0, 0))
+        else:
+            if not self.lbl_out_hint.winfo_ismapped():
+                self.lbl_out_hint.pack(side="right", padx=(6, 0))
+            if not self.lbl_ad_gorunumu.winfo_ismapped():
+                self.seg_box.pack_forget()
+                self.lbl_ad_gorunumu.pack(side="left")
+                self.seg_box.pack(side="left", padx=(8, 0))
 
         # İkincil metinler yalnızca geniş düzende
         if narrow:

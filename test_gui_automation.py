@@ -155,8 +155,8 @@ class TestGlassButton(unittest.TestCase):
         self.assertEqual(btn_sec.fg_normal, Theme.BLUE_PRIMARY)
 
         btn_subtle = GlassButton(self.root, text="Temizle", variant="subtle")
-        self.assertEqual(btn_subtle.bg_normal, "#27272A")
-        self.assertEqual(btn_subtle.fg_normal, "#F4F4F5")
+        self.assertEqual(btn_subtle.bg_normal, "#E7E4DD")
+        self.assertEqual(btn_subtle.fg_normal, "#3F3D39")
 
         btn_prim.destroy()
         btn_sec.destroy()
@@ -476,7 +476,8 @@ class TestUyapRedactorApp(unittest.TestCase):
         # Hiçbir ana öğe pencerenin sağ kenarından taşmamalı
         win_right = self.app.winfo_rootx() + self.app.winfo_width()
         for w in (self.app.btn_browse, self.app.btn_open_folder, self.app.card_mrz,
-                  self.app.card_files, self.app.btn_clear, self.app.btn_update):
+                  self.app.card_files, self.app.btn_clear, self.app.btn_update,
+                  self.app.options_row, self.app.chk_mask_judicial_names, self.app.seg_box):
             self.assertLessEqual(w.winfo_rootx() + w.winfo_width(), win_right + 1, str(w))
 
         resize(760, 560)
@@ -1137,6 +1138,22 @@ class TestPersonPseudonymGUI(unittest.TestCase):
 
             log_content = self.app.log_text.get("1.0", tk.END)
             self.assertNotIn("KİŞİ ETİKETLERİ", log_content)
+
+    def test_legal_toggle_and_segment_radio_interaction(self):
+        """Özel LegalCheckToggle ve LegalSegmentRadio etkileşim ve disabled davranışı."""
+        init_jud = self.app.mask_judicial_names_var.get()
+        self.app.chk_mask_judicial_names._toggle()
+        self.assertEqual(self.app.mask_judicial_names_var.get(), not init_jud)
+        self.app.chk_mask_judicial_names.config(state="disabled")
+        self.app.chk_mask_judicial_names._toggle()
+        self.assertEqual(self.app.mask_judicial_names_var.get(), not init_jud)
+        self.app.chk_mask_judicial_names.config(state="normal")
+
+        self.app.radio_ad_gorunumu["bas_harf"]._select()
+        self.assertEqual(self.app.ad_gorunumu_var.get(), "bas_harf")
+        self.app.radio_ad_gorunumu["acik"].config(state="disabled")
+        self.app.radio_ad_gorunumu["acik"]._select()
+        self.assertEqual(self.app.ad_gorunumu_var.get(), "bas_harf")
 
     def test_kisi_listesi_printed_only_in_gui_log_when_non_empty(self):
         with tempfile.TemporaryDirectory() as d:
