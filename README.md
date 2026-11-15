@@ -27,9 +27,10 @@
 - **🔄 Tek Tıkla Otomatik Güncelleme (Auto-Updater):** Yeni bir sürüm çıktığında uygulama açılışında haber verir; tek tıkla arka planda DMG'yi indirip baştan kurulum gerektirmeden kendini yerinde günceller.
 - **📦 EYP ve Arşiv Desteği:** DYS üzerinden gelen `.eyp` (Elektronik Yazışma Paketleri) ve `.zip` arşivlerini güvenli şekilde geçici dizine açar (zip-slip/zip-bomb korumalı); içindeki desteklenen belgeleri `<arşiv> (EYP)` / `<arşiv> (ZIP)` klasörüne metin olarak aktarır ve paket üstverilerini/imza dosyalarını eler.
 - **💼 Word ve Excel Belgesi Desteği:** `.docx`, `.doc` ve `.xlsx` belgelerini çevrimdışı olarak metne / Markdown tablolarına dönüştürüp maskeler.
+- **🍎 Apple Pages Desteği:** `.pages` belgelerinin gövde metni (Index/Document.iwa) ek paket gerektirmeden çıkarılır ve maskelenir; metin çıkarılamayan `.pages` dosyaları sessizce atlanmaz, raporda "İşlenemeyen dosyalar" altında listelenir.
 - **👁️ Apple Vision OCR Uyumu:** Taranmış `.pdf`, `.tif`/`.tiff`, `.png`, `.jpg`/`.jpeg` ve `.heic` belgelerini yerel OCR ile metne dönüştürerek maskeler.
 - **📝 Doğrudan UYAP UDF Desteği:** Yargı PRO `.md` türevi olmayan çıplak `.udf` dosyaları da doğrudan metne dökülüp maskelenir.
-- **📋 Eksiksiz Raporlama:** Desteklenen türler: `.md`, `.txt`, `.udf`, `.pdf`, `.doc`, `.docx`, `.xlsx`, `.eyp`, `.zip`, `.tif`/`.tiff`, `.png`, `.jpg`/`.jpeg`, `.heic`. İşlenemeyen dosyalar (`desteklenmeyen tür`, `metin çıkarılamadı`, `şifreli` vb.) `DAVA_DÖNÜŞÜM_VE_GÜVENLİK_RAPORU.md` raporda listelenir.
+- **📋 Eksiksiz Raporlama:** Desteklenen türler: `.md`, `.txt`, `.udf`, `.pdf`, `.doc`, `.docx`, `.xlsx`, `.pages`, `.eyp`, `.zip`, `.tif`/`.tiff`, `.png`, `.jpg`/`.jpeg`, `.heic`. İşlenemeyen dosyalar (`desteklenmeyen tür`, `metin çıkarılamadı`, `şifreli` vb.) `DAVA_DÖNÜŞÜM_VE_GÜVENLİK_RAPORU.md` raporda listelenir.
 
 ---
 

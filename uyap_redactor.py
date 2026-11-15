@@ -1093,8 +1093,8 @@ class UyapRedactor:
     SKIP_DIRS_OCR = (".git", "node_modules")
 
     # Desteklenen belge / arşiv türleri ve arşiv güvenlik sınırları
-    TEXT_DOC_EXTS = (".udf", ".docx", ".doc", ".xlsx")
-    OFFICE_DOC_EXTS = (".docx", ".doc", ".xlsx")
+    TEXT_DOC_EXTS = (".udf", ".docx", ".doc", ".xlsx", ".pages")
+    OFFICE_DOC_EXTS = (".docx", ".doc", ".xlsx", ".pages")
     OCR_DOC_EXTS = (".pdf", ".tif", ".tiff", ".png", ".jpg", ".jpeg", ".heic")
     OCR_PRESCAN_MAX_MEM_BYTES = 200 * 1024 * 1024  # Ön tarama ham OCR bellek tavanı (200 MB)
     ARCHIVE_EXTS = (".eyp", ".zip")
@@ -1801,6 +1801,8 @@ class UyapRedactor:
             return cls.extract_word_raw(fp)
         if ext == ".xlsx":
             return cls.extract_xlsx_raw(fp)
+        if ext == ".pages":
+            return cls.extract_pages_raw(fp)
         if ext in (".md", ".txt") or os.path.basename(fp) in cls.META_JSON_NAMES:
             try:
                 with open(fp, "r", encoding="utf-8", errors="replace") as rf:
@@ -5309,6 +5311,168 @@ class UyapRedactor:
         text = text.replace("\r\n", "\n").replace("\r", "\n")
         return text.strip()
 
+    @staticmethod
+    def _snappy_raw_decompress(data: bytes) -> bytes:
+        """Ham (çerçevesiz) Snappy açıcı; yalnızca standart kütüphane. Hatalı girdide ValueError."""
+        pos = 0
+        n = 0
+        shift = 0
+        while True:
+            b = data[pos]
+            pos += 1
+            n |= (b & 0x7F) << shift
+            if not b & 0x80:
+                break
+            shift += 7
+        if n > 256 * 1024 * 1024:
+            raise ValueError("snappy: beklenmedik büyük çıktı boyutu")
+        out = bytearray()
+        ln = len(data)
+        while pos < ln:
+            tag = data[pos]
+            pos += 1
+            kind = tag & 3
+            if kind == 0:
+                length = tag >> 2
+                if length >= 60:
+                    nb = length - 59
+                    length = int.from_bytes(data[pos:pos + nb], "little")
+                    pos += nb
+                length += 1
+                if pos + length > ln:
+                    raise ValueError("snappy: literal taşması")
+                out += data[pos:pos + length]
+                pos += length
+            else:
+                if kind == 1:
+                    length = 4 + ((tag >> 2) & 7)
+                    offset = ((tag >> 5) << 8) | data[pos]
+                    pos += 1
+                elif kind == 2:
+                    length = 1 + (tag >> 2)
+                    offset = int.from_bytes(data[pos:pos + 2], "little")
+                    pos += 2
+                else:
+                    length = 1 + (tag >> 2)
+                    offset = int.from_bytes(data[pos:pos + 4], "little")
+                    pos += 4
+                if offset == 0 or offset > len(out):
+                    raise ValueError("snappy: geçersiz kopya ofseti")
+                for _ in range(length):
+                    out.append(out[-offset])
+            if len(out) > n:
+                raise ValueError("snappy: çıktı boyutu aşıldı")
+        if len(out) != n:
+            raise ValueError("snappy: uzunluk uyuşmazlığı")
+        return bytes(out)
+
+    @staticmethod
+    def _pb_varint(buf: bytes, pos: int):
+        res = 0
+        shift = 0
+        while True:
+            b = buf[pos]
+            pos += 1
+            res |= (b & 0x7F) << shift
+            if not b & 0x80:
+                return res, pos
+            shift += 7
+            if shift > 70:
+                raise ValueError("protobuf: varint çok uzun")
+
+    @classmethod
+    def _pb_fields(cls, buf: bytes):
+        """Protobuf mesajını (alan_no, wire_type, değer) üçlülerine ayırır; hatalıysa ValueError."""
+        pos = 0
+        n = len(buf)
+        while pos < n:
+            key, pos = cls._pb_varint(buf, pos)
+            field, wt = key >> 3, key & 7
+            if wt == 0:
+                val, pos = cls._pb_varint(buf, pos)
+            elif wt == 2:
+                ln, pos = cls._pb_varint(buf, pos)
+                if pos + ln > n:
+                    raise ValueError("protobuf: uzunluk taşması")
+                val = buf[pos:pos + ln]
+                pos += ln
+            elif wt == 1:
+                val = buf[pos:pos + 8]
+                pos += 8
+            elif wt == 5:
+                val = buf[pos:pos + 4]
+                pos += 4
+            else:
+                raise ValueError("protobuf: desteklenmeyen wire type")
+            yield field, wt, val
+
+    @classmethod
+    def _iwa_decompress(cls, raw: bytes) -> bytes:
+        """iWork .iwa akışı: [0x00][3 bayt uzunluk LE][ham snappy] parçaları; CRC/akış başlığı yoktur."""
+        out = bytearray()
+        pos = 0
+        while pos < len(raw):
+            if raw[pos] != 0 or pos + 4 > len(raw):
+                raise ValueError("iwa: geçersiz parça başlığı")
+            ln = int.from_bytes(raw[pos + 1:pos + 4], "little")
+            pos += 4
+            out += cls._snappy_raw_decompress(raw[pos:pos + ln])
+            pos += ln
+        return bytes(out)
+
+    # Pages metin deposu (TSWP.StorageArchive) ileti türleri; metin alan 3 (tekrarlı string)
+    _IWA_TEXT_STORAGE_TYPES = frozenset({2001, 2022})
+
+    @classmethod
+    def extract_pages_raw(cls, file_path: str) -> str:
+        """
+        Apple Pages (.pages) belgesinin gövde metnini Index/Document.iwa içinden çıkarır.
+        Yalnızca standart kütüphane kullanılır. Biçim tanınmazsa veya metin bulunamazsa "" döner;
+        çağıran dosyayı sessizce atmaz, 'işlenemeyen' listesine yazar.
+        """
+        try:
+            with zipfile.ZipFile(file_path, "r") as zf:
+                names = zf.namelist()
+                doc_names = [n for n in names if n.endswith("Index/Document.iwa")]
+                if not doc_names:
+                    return ""
+                data = cls._iwa_decompress(zf.read(doc_names[0]))
+        except Exception:
+            return ""
+        chunks: List[str] = []
+        try:
+            pos = 0
+            while pos < len(data):
+                ln, pos = cls._pb_varint(data, pos)
+                info = data[pos:pos + ln]
+                pos += ln
+                lens_types = []
+                for field, wt, val in cls._pb_fields(info):
+                    if field == 2 and wt == 2:
+                        mtype, mlen = None, 0
+                        for f2, w2, v2 in cls._pb_fields(val):
+                            if f2 == 1 and w2 == 0:
+                                mtype = v2
+                            elif f2 == 3 and w2 == 0:
+                                mlen = v2
+                        lens_types.append((mtype, mlen))
+                for mtype, mlen in lens_types:
+                    payload = data[pos:pos + mlen]
+                    pos += mlen
+                    if mtype in cls._IWA_TEXT_STORAGE_TYPES:
+                        for f3, w3, v3 in cls._pb_fields(payload):
+                            if f3 == 3 and w3 == 2:
+                                chunks.append(v3.decode("utf-8", errors="replace"))
+        except Exception:
+            return ""
+        text = "\n".join(chunks)
+        # Pages: U+2029 paragraf, U+2028 satır sonu, U+FFFC nesne yer tutucusu, U+0007 tablo hücresi
+        text = text.replace("\u2029", "\n").replace("\u2028", "\n").replace("\ufffc", "")
+        text = text.replace("\x07", "\t").replace("\r\n", "\n").replace("\r", "\n")
+        text = re.sub(r"[ \t]+\n", "\n", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip()
+
     @classmethod
     def extract_word_raw(cls, file_path: str) -> str:
         """
@@ -5690,6 +5854,8 @@ class UyapRedactor:
             return cls.extract_word_raw(file_path)
         if ext == ".xlsx":
             return cls.extract_xlsx_raw(file_path)
+        if ext == ".pages":
+            return cls.extract_pages_raw(file_path)
         return ""
 
     @classmethod
@@ -5953,7 +6119,7 @@ class UyapRedactor:
     # Temiz klasör son işlemleri: kopuk görsel/ikili bağlantılar ve OCR kalite denetimi
     # ------------------------------------------------------------------
     BINARY_LINK_EXTS = (".pdf", ".udf", ".tif", ".tiff", ".png", ".jpg", ".jpeg", ".heic", ".gif", ".bmp",
-                        ".xlsx", ".xls", ".docx", ".doc", ".html", ".htm", ".eml", ".eyp", ".zip", ".rar",
+                        ".xlsx", ".xls", ".docx", ".doc", ".pages", ".html", ".htm", ".eml", ".eyp", ".zip", ".rar",
                         # e-yazışma paketi iç dosyaları (imza/mühür/üstveri): temiz klasöre aktarılmaz
                         ".imz", ".xml", ".psmdcp", ".p7s", ".cer", ".sig")
     IMAGE_LINK_EXTS = (".png", ".jpg", ".jpeg", ".heic", ".gif", ".bmp", ".tif", ".tiff")
@@ -6965,7 +7131,7 @@ class UyapRedactor:
                 ext = os.path.splitext(f)[1].lower()
                 if ext in (
                     ".udf", ".pdf", ".tif", ".tiff", ".png", ".jpg", ".jpeg", ".heic",
-                    ".doc", ".docx", ".xlsx", ".eyp", ".zip", ".bak",
+                    ".doc", ".docx", ".pages", ".xlsx", ".eyp", ".zip", ".bak",
                 ):
                     try:
                         os.remove(os.path.join(root, f))

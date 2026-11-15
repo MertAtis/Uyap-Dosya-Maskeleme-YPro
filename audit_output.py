@@ -149,6 +149,7 @@ def _extract_non_ocr_from_base(base_dir: str, rel: str, allow_kaynak: bool = Tru
         (".docx", UyapRedactor.extract_word_raw),
         (".doc", UyapRedactor.extract_word_raw),
         (".xlsx", UyapRedactor.extract_xlsx_raw),
+        (".pages", UyapRedactor.extract_pages_raw),
     ):
         off_rel = stem + ext
         for pref in prefixes:
@@ -525,6 +526,66 @@ def extract_mask_pieces(src_line: str, out_line: str) -> Optional[List[Tuple[str
     return None
 
 
+_NAME_ONLY_LINE_RE = re.compile(r"^[A-Za-zÇĞİÖŞÜçğıöşüÂÎÛâîû'’.\-]+(?: [A-Za-zÇĞİÖŞÜçğıöşüÂÎÛâîû'’.\-]+){0,2}$")
+
+
+def _pair_label_only_lines(s_lines, o_lines, i1, i2, j1, j2, line_pairs):
+    """Satır sayısı değişen bloklarda tek başına maske etiketi olan çıktı satırlarını kaynakla eşler.
+
+    Dar kurallar (yalnız şu iki biçim eşlenir, gerisi 'hizalanamayan' olarak raporlanır):
+    - [TCKN_n] satırı  -> 11 haneli (OCR toleranslı) kaynak satırı
+    - kişi etiketi satırı -> ardışık, yalnızca ad/soyad sözcüklerinden oluşan 1-3 kaynak satırı
+      (UYAP/OCR çıktısında ad ve soyadın ayrı satırlara bölünmesi)
+    Birden çok kaynak satırı birleştirilirse birleşik metin ilk satırın yerine (yerel s_lines'a) yazılır;
+    dönüş: (eşleşmeler, tüketilen kaynak satır kümesi).
+    """
+    paired_src = {ii for ii, _ in line_pairs}
+    paired_out = {jj for _, jj in line_pairs}
+    extra = []
+    cursor = i1
+    for jj in range(j1, j2):
+        if jj in paired_out:
+            # eşleşmiş çıktı satırının kaynağından sonrasına ilerle
+            for ii, j in line_pairs:
+                if j == jj:
+                    cursor = max(cursor, ii + 1)
+            continue
+        stripped = o_lines[jj].strip()
+        m = MASK_RE.fullmatch(stripped)
+        if not m:
+            continue
+        kind = mask_kind(stripped)
+        if kind == "TCKN":
+            for ii in range(cursor, i2):
+                if ii in paired_src:
+                    continue
+                d = re.sub(r"\D", "", ocr_digits(s_lines[ii]))
+                if len(d) == 11 and re.fullmatch(r"[\d lIO|/,.]+", s_lines[ii].strip()):
+                    extra.append((ii, jj))
+                    paired_src.add(ii)
+                    cursor = ii + 1
+                    break
+        elif kind in PERSON_KINDS:
+            run = []
+            ii = cursor
+            while ii < i2 and len(run) < 3:
+                if ii in paired_src or not _NAME_ONLY_LINE_RE.match(s_lines[ii].strip()):
+                    if run:
+                        break
+                    ii += 1
+                    continue
+                run.append(ii)
+                ii += 1
+            if run:
+                # birleşik metni ilk satıra yaz (s_lines yerel kopya), kalanları tüketilmiş say
+                s_lines[run[0]] = " ".join(s_lines[k].strip() for k in run)
+                for k in run:
+                    paired_src.add(k)
+                extra.append((run[0], jj))
+                cursor = run[-1] + 1
+    return extra, paired_src
+
+
 def analysis_flags(piece: str) -> List[str]:
     return [k for k, r in ANALYSIS_RE.items() if r.search(piece)]
 
@@ -658,6 +719,19 @@ def _match_masked_source_rel(masked_rel: str, src_candidates: List[str]) -> Opti
             pat_parts.append(seg_rx)
     rx = re.compile("^" + "/".join(pat_parts) + "$")
     matches = [c for c in src_candidates if rx.match(c)]
+    if len(matches) > 1:
+        # Aynı kaynak dosya iki adayla temsil edilir: "<ad>.md" ve "<ad>.<uzantı>.md" (örn. ".pdf.md").
+        # Bunlar tek kaynaktır; yalnızca gerçekten farklı kaynaklar belirsizlik sayılır.
+        def _canon(c: str) -> str:
+            base = c[:-3] if c.lower().endswith(".md") else c
+            stem, ext = os.path.splitext(base)
+            if ext.lower() in UyapRedactor.TEXT_DOC_EXTS + UyapRedactor.OCR_DOC_EXTS:
+                return stem
+            return base
+
+        if len({_canon(c) for c in matches}) == 1:
+            return min(matches, key=len)
+        return None
     if len(matches) == 1:
         return matches[0]
     return None
@@ -990,8 +1064,36 @@ def audit(
                                 val_to_labels[(kind, nv)].add(label)
                                 label_to_vals[label].add(nv)
                 if leftover:
-                    paired_i = {ii for ii, _ in line_pairs}
-                    rest_src = [s_lines[ii] for ii in range(i1, i2) if ii not in paired_i]
+                    extra_pairs, consumed_src = _pair_label_only_lines(s_lines, o_lines, i1, i2, j1, j2, line_pairs)
+                    line_pairs = line_pairs + extra_pairs
+                    for ii, jj in extra_pairs:
+                        pieces = extract_mask_pieces(s_lines[ii], o_lines[jj])
+                        if pieces is None:
+                            continue
+                        for label, piece in pieces:
+                            if MASK_WITH_HINT_RE.fullmatch(piece.strip() or "-"):
+                                continue
+                            kind = mask_kind(label)
+                            res["over"].append((rel, jj + 1, label, piece, analysis_flags(piece)))
+                            if is_numbered(label):
+                                nv = norm_value(kind, piece)
+                                if nv and kind == "TCKN" and not is_valid_tckn(nv):
+                                    nv = None
+                                if nv:
+                                    val_to_labels[(kind, nv)].add(label)
+                                    label_to_vals[label].add(nv)
+                    paired_i = {ii for ii, _ in line_pairs} | consumed_src
+                    # Adres etiketiyle eşleşen satırın hemen altındaki/üstündeki yalnız-sözcük satırı,
+                    # iki satıra bölünmüş adresin devamıdır; etikete yutulması beklenen davranıştır.
+                    adres_src = {ii for ii, jj in line_pairs if "[ADRES_" in o_lines[jj]}
+                    rest_src = [
+                        s_lines[ii] for ii in range(i1, i2)
+                        if ii not in paired_i
+                        and not (
+                            (ii - 1 in adres_src or ii + 1 in adres_src)
+                            and _NAME_ONLY_LINE_RE.match(s_lines[ii].strip())
+                        )
+                    ]
                     if rest_src:
                         res["unaligned"].append((rel, j1 + 1, rest_src, o_lines[j1:j2]))
     finally:
@@ -999,7 +1101,18 @@ def audit(
             shutil.rmtree(tmp_d, ignore_errors=True)
 
     res["consistency_value_multi_label"] = {k: v for k, v in val_to_labels.items() if len(v) > 1}
-    res["consistency_label_multi_value"] = {k: v for k, v in label_to_vals.items() if len(v) > 1}
+    def _distinct_values(label: str, vals: set) -> bool:
+        """Etiket kişi türündeyse ve değerler birbirinin belirteç alt kümesiyse (ör. 'Ali' ve 'Ali Veli')
+        aynı kişinin kısa anılması sayılır; çelişki değildir."""
+        if len(vals) < 2:
+            return False
+        if mask_kind(label) not in PERSON_KINDS:
+            return True
+        toks = [frozenset(str(v).split()) for v in vals]
+        longest = max(toks, key=len)
+        return not all(tk <= longest for tk in toks)
+
+    res["consistency_label_multi_value"] = {k: v for k, v in label_to_vals.items() if _distinct_values(k, v)}
 
     # D) Bağlantılar ve INDEX
     link_re = re.compile(r'!?\[[^\]\n]*\]\((?:<([^>\n]+)>|([^)\s\n]+))\)')
