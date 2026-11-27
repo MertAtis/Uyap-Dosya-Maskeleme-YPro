@@ -168,6 +168,81 @@ class MaskRegistry:
         "a": "aâ", "c": "cç", "g": "gğ", "i": "iıî", "o": "oö", "s": "sş", "u": "uüû",
     }
 
+    # Standart UYAP/adli/mali evrak adları ve tekil kavramlar — kişi adayı keşfinde ve yol maskelemede mutlak yasaklı
+    _FORBIDDEN_DOC_WORDS = frozenset({
+        "reddiyat", "mutemet", "alindi", "alindisi", "fis", "fisi",
+        "birim", "birime", "birimi", "birimine", "gonderilmesi", "gonderme", "gonderilen", "gonderen", "gonderildi",
+        "iade", "iadesi", "edilmesi", "edildi", "mazbata", "mazbatasi",
+        "tahsilat", "tahsil", "tahsili", "makbuz", "makbuzu",
+        "sayman", "saymanlik", "saymanligi", "vezne", "veznedar",
+        "posta", "kapali", "teblig", "tebligat", "eteblig", "etebligat",
+        "dosyanin", "dosya", "dosyaya", "acilis", "acilisi", "form", "formu",
+        "vekalet", "vekaletname", "pul", "pulu", "karar", "karari",
+        "cevap", "cevabi", "dava", "davasi", "harc", "harci", "harclar",
+        "masraf", "masrafi", "avans", "avansi", "gider", "gideri", "giderleri",
+        "gonderi", "barkod", "dekont", "dekontu", "fatura", "faturasi",
+        "tutanak", "tutanagi", "zabit", "zapti", "tensip", "muzekkere", "muzekkeresi",
+        "ilam", "ilami", "serh", "serhi", "suret", "sureti", "ornegi",
+        "kayit", "kaydi", "fotokopi", "fotokopisi", "basvuru", "tevzi", "havale",
+        "ihbarname", "ihbarnamesi", "sirkuleri", "rapor", "raporu",
+        "bilirkisi", "mutalaa", "iddianame", "tefhim", "kesinlesme", "gerekceli",
+        "istinaf", "temyiz", "feragat", "islah", "mazeret", "kesif", "kesfi",
+        "yemin", "isticvap", "beraat", "mahkumiyet", "erteleme", "tahliye",
+        "tutuklama", "yakalama", "haciz", "haczi", "satis", "ihale",
+        "odeme", "odemesi", "tahakkuk", "muhasebe", "defter", "defteri",
+        "belge", "belgesi", "evrak", "evraki", "evraka", "eki", "ekleri",
+        "liste", "listesi", "yazi", "yazisi", "kapak", "arsiv",
+        "teslim", "tesellum", "bulten", "bulteni", "duyuru", "duyurusu",
+        "tanzim", "duzenleme", "duzenlenmesi", "tasdik", "tasdiki",
+        "imza", "imzasi", "muhur", "muhru", "elektronik", "damga", "damgasi",
+        "uyap", "ptt", "mernis", "takbis", "segbis", "polnet",
+        "celse", "durusma", "muhabere", "talimat", "cezaevi", "infaz",
+        "mudafii", "mudafi", "vekil", "vekili", "muracaat", "sikayet", "sikayeti",
+        "yargilama", "bilgisi", "bilgileri", "ozeti", "ozet",
+        "taraf", "taraflar", "notu", "iptal", "tescil", "fesih", "feshi",
+        "ihtar", "ihtarname", "ihtarnamesi", "protokol", "protokolu",
+        "ibraname", "ibranamesi", "taahhut", "taahhutname", "taahhutnamesi",
+        "kefalet", "ipotek", "rehin", "teminat", "senet", "senedi", "bono",
+        "iflas", "konkordato", "tasfiye", "nafaka", "velayet", "vesayet",
+        "veraset", "intikal", "ecrimisil", "tahkikat", "kapatma", "kapanis",
+        "ucret", "ucreti", "ruhsat", "ruhsati", "ekspertiz", "maluliyet",
+    })
+
+    _FORBIDDEN_DOC_PHRASES = frozenset({
+        "reddiyat fisi", "posta reddiyat", "sayman mutemet alindisi", "sayman mutemet",
+        "mutemet alindisi", "tahsilat makbuzu", "dosyanin birime gonderilmesi",
+        "birime gonderilmesi", "dosyanin iade edilmesi", "iade edilmesi",
+        "kapali tebligat", "e teblig mazbatasi", "eteblig mazbatasi", "teblig mazbatasi",
+        "tebligat mazbatasi", "dava acilis formu", "acilis formu",
+        "vekalet pulu makbuzu", "vekalet pulu", "pulu makbuzu",
+        "ara karar cevabi", "ara karar", "karar cevabi",
+        "vezne alindisi", "masraf makbuzu", "harc makbuzu", "gider avansi",
+        "ust yazi", "gerekceli karar", "tensip zapti", "tensip tutanagi",
+        "durusma tutanagi", "bilirkisi raporu", "ek rapor", "muzekkere cevabi",
+        "odeme emri", "icra emri", "kesinlesme serhi", "yetki belgesi",
+        "imza sirkuleri", "nufus kaydi", "tapu kaydi", "sabika kaydi",
+        "adli sicil", "dosya kapak", "kapak bilgisi", "tevzi formu",
+        "basvuru formu", "havale formu", "gonderi bilgisi", "barkod bilgisi",
+        "cevap dilekcesi", "dava dilekcesi", "istinaf dilekcesi", "temyiz dilekcesi",
+        "beyan dilekcesi", "itiraz dilekcesi", "feragat dilekcesi", "mazeret dilekcesi",
+    })
+
+    @classmethod
+    def is_forbidden_person_phrase(cls, text: str) -> bool:
+        """Standart UYAP/adli/mali evrak adı veya yasaklı kavram içeriyorsa True döner."""
+        if not text:
+            return False
+        folded = _fold_tr(text)
+        raw_parts = [p for p in re.split(r'[ \t_.\-]+', folded) if p]
+        if not raw_parts:
+            return False
+        if any(p in cls._FORBIDDEN_DOC_WORDS for p in raw_parts):
+            return True
+        joined = " ".join(raw_parts)
+        if joined in cls._FORBIDDEN_DOC_PHRASES:
+            return True
+        return any(ph in joined for ph in cls._FORBIDDEN_DOC_PHRASES)
+
     PREFIX = {
         "tckn": "TCKN", "iban": "IBAN", "kart": "KART", "hesap": "HESAP",
         "telefon": "TEL", "seri_no": "SERİ_NO", "mrz": "MRZ", "sicil": "SİCİL", "adres": "ADRES",
@@ -427,6 +502,8 @@ class MaskRegistry:
             return
         clean = " ".join(unicodedata.normalize("NFC", full_name).strip().split())
         if not clean:
+            return
+        if self.is_forbidden_person_phrase(clean):
             return
         raw_toks = clean.split()
         ftoks = tuple(_fold_tr(t) for t in raw_toks)
@@ -1045,11 +1122,16 @@ class UyapRedactor:
 
     @staticmethod
     def _is_small_image(path: str, max_area: int = 150_000, min_side: int = 100) -> bool:
-        """Simge/logo/imza boyutundaki görseller (ör. 16×17, 94×29, 375×32) için True."""
+        """Simge/logo/imza boyutundaki görseller (ör. 16×17, 94×29, 375×32) için True; çok sayfalı TIFF asla atlanmaz."""
         try:
             from PIL import Image
+            ext = os.path.splitext(path)[1].lower()
             with Image.open(path) as im:
+                if getattr(im, "n_frames", 1) > 1:
+                    return False
                 w, h = im.size
+            if ext in (".tif", ".tiff"):
+                return w * h < 20_000 or min(w, h) < 50
             return w * h < max_area or min(w, h) < min_side
         except Exception:
             return False
@@ -1166,7 +1248,7 @@ class UyapRedactor:
         "ve", "veya", "ile", "icin", "uzere", "gibi", "gore", "not", "notu", "layiha", "layihasi",
         "savunma", "savunmasi", "beyan", "beyani", "beyanlari", "ifadesi", "ifadeleri", "listesi", "metni",
         "arasinda", "karsin", "aleyhine", "lehine", "kain", "parsel", "pafta",
-    })
+    }) | MaskRegistry._FORBIDDEN_DOC_WORDS
 
     _PROSE_TRAILING_TRIM_WORDS = frozenset({
         "mahkememize", "mahkemenize", "mahkemesine", "mahkemeye", "mahkememiz",
@@ -3676,6 +3758,7 @@ class UyapRedactor:
         "adres", "adresi", "tebligat", "mernis", "tckn", "tc", "kimlik",
         "telefon", "tel", "cep", "gsm", "eposta", "posta", "kep", "uets",
         "sicil", "baba", "anne", "dogum", "uyruk", "uyrugu",
+        "dosya", "evrak", "belge", "tur", "turu", "konu", "aciklama", "birim",
     })
     _LIST_ITEM_START_RE = re.compile(r'^[ \t]*(?:\*\*)?(?:\d{1,2}[ \t]*[.\-\)]+|[-•*–—][ \t]+)[ \t]*(?:\*\*)?(?P<rest>.+)$')
     _INLINE_SPLIT_RE = re.compile(r'(?:^|[ \t]+)(?:\*\*)?\d{1,2}[ \t]*[.\-\)]+[ \t]*(?:\*\*)?')
@@ -3781,6 +3864,8 @@ class UyapRedactor:
         if not candidate:
             return False
         clean = " ".join(unicodedata.normalize("NFC", candidate).strip().split())
+        if MaskRegistry.is_forbidden_person_phrase(clean):
+            return False
         toks = clean.split()
         if not (2 <= len(toks) <= 4):
             return False
@@ -3795,6 +3880,11 @@ class UyapRedactor:
             for ft in ftoks
         ):
             return False
+        if all(t.isupper() for t in toks) and any(
+            ft in cls._NON_PERSON_HEADER_WORDS or ft in cls._SUBITEM_ATTR_HDR_WORDS
+            for ft in ftoks
+        ):
+            return False
         if len(ftoks) == 2 and all(ft in cls._MONTH_DAY_WORDS for ft in ftoks):
             return False
         if all((_tr_lower(t) in cls._BASE_TR_VOCAB or ft in cls._FOLDED_BASE_TR_VOCAB) for t, ft in zip(toks, ftoks)):
@@ -3803,6 +3893,12 @@ class UyapRedactor:
         if cls._has_blocking_pre_title(before_ctx, allow_judicial=allow_judicial_pre_title):
             return False
         if after_ctx:
+            if re.match(
+                r'^\.(?:pdf|udf|docx?|xlsx|pages|tif|tiff|png|jpg|jpeg|heic|md|txt|eyp|zip)(?![A-Za-z0-9])',
+                after_ctx,
+                re.IGNORECASE,
+            ):
+                return False
             if cls._AFTER_CORP_TITLE_RE.match(after_ctx):
                 return False
             if not allow_judicial_pre_title and cls._AFTER_JUDICIAL_TITLE_RE.match(after_ctx):
@@ -3847,6 +3943,11 @@ class UyapRedactor:
         "dilekce", "dilekcesi", "rapor", "raporu", "tutanak", "tutanagi",
         "konu", "karar", "karari", "ozet", "ozeti", "aciklama", "aciklamalar",
         "talep", "talebi", "sonuc", "itiraz", "delil", "deliller",
+        "dosya", "dosyasi", "evrak", "belge", "belgesi", "tur", "turu",
+        "form", "formu", "makbuz", "makbuzu", "alindi", "alindisi", "fis", "fisi",
+        "reddiyat", "tahsilat", "mazbata", "mazbatasi", "teblig", "tebligat",
+        "birim", "birime", "iade", "gonderilmesi", "edilmesi", "acilis", "pulu",
+        "cevap", "cevabi",
     })
     _NON_JUDICIAL_HEADER_EXCL_WORDS = frozenset({
         "divan", "komisyon", "komisyonu", "yonetim", "denetim", "toplanti", "ihale",
@@ -3900,7 +4001,10 @@ class UyapRedactor:
         )
         if j_sig_role in MaskRegistry.JUDICIAL_ROLES:
             return j_sig_role
-        if any(w in folded for w in ("vekil", "mudafi", "adres", "tckn", "kimlik", "sicil", "telefon", "iban", "hesap")):
+        if any(w in folded for w in (
+            "vekil", "mudafi", "adres", "tckn", "kimlik", "sicil", "telefon", "iban", "hesap",
+            "dosya", "evrak", "belge", "turu", "formu", "makbuz", "alindi", "reddiyat", "tahsilat", "mazbata",
+        )):
             return None
         role = MaskRegistry.normalize_person_role(folded)
         if role:
@@ -4350,6 +4454,15 @@ class UyapRedactor:
             return None, ""
 
         list_cont = False
+        _doc_tbl_hdrs = frozenset({
+            "dosya", "dosya adi", "evrak", "evrak turu", "evrak adi",
+            "belge", "belge turu", "belge adi", "tur", "turu",
+            "konu", "aciklama", "birim", "metin", "yon", "tarih", "no",
+        })
+        _file_cell_rx = re.compile(
+            r'\.(?:pdf|udf|docx?|xlsx|pages|tif|tiff|png|jpg|jpeg|heic|md|txt|eyp|zip)\s*$',
+            re.IGNORECASE,
+        )
         for i, raw_line in enumerate(lines):
             cur_i[0] = i
             stripped = raw_line.strip()
@@ -4358,6 +4471,12 @@ class UyapRedactor:
                 active_role_just_opened = False
                 list_cont = False
                 table_col_roles = {}
+                continue
+            if i == 0 and re.match(
+                r'^#\s+.+\.(?:pdf|tif|tiff|png|jpg|jpeg|heic|udf|docx?|xlsx|pages|md|txt)\s*$',
+                stripped,
+                re.IGNORECASE,
+            ):
                 continue
 
             if "|" in raw_line:
@@ -4373,9 +4492,14 @@ class UyapRedactor:
                     # Ayraç satırı (| --- | --- |): sütun rollerini koru
                     continue
                 if cells and not any(":" in c for c in cells):
+                    c0_fold = re.sub(r'\s+', ' ', _fold_tr(cells[0])).strip() if cells[0] else ""
+                    c1_is_file_or_link = (
+                        len(cells) >= 2
+                        and ("](" in cells[1] or bool(_file_cell_rx.search(cells[1])))
+                    )
                     row_key_role = (
                         cls._extract_header_role(cells[0], include_judicial_headers=jctx())
-                        if len(cells) >= 2 and cells[0]
+                        if len(cells) >= 2 and cells[0] and c0_fold not in _doc_tbl_hdrs and not c1_is_file_or_link
                         else None
                     )
                     next_is_sep = (
@@ -4399,11 +4523,14 @@ class UyapRedactor:
                                 kv_matched = True
                         if kv_matched:
                             continue
-                    hdr_roles = {
-                        idx: cls._extract_header_role(c, include_judicial_headers=jctx())
-                        for idx, c in enumerate(cells)
-                    }
-                    hdr_roles = {idx: r for idx, r in hdr_roles.items() if r}
+                    hdr_roles = {}
+                    for idx, c in enumerate(cells):
+                        cf = re.sub(r'\s+', ' ', _fold_tr(c)).strip()
+                        if cf in _doc_tbl_hdrs:
+                            continue
+                        r_col = cls._extract_header_role(c, include_judicial_headers=jctx())
+                        if r_col:
+                            hdr_roles[idx] = r_col
                     if hdr_roles:
                         table_col_roles = hdr_roles
                         active_role = None
@@ -4411,6 +4538,8 @@ class UyapRedactor:
                     if table_col_roles:
                         for idx, role_col in table_col_roles.items():
                             if idx < len(cells) and cells[idx]:
+                                if "](" in cells[idx] or _file_cell_rx.search(cells[idx]):
+                                    continue
                                 is_jud_col = role_col in MaskRegistry.JUDICIAL_ROLES
                                 for part in [p for p in cls._INLINE_SPLIT_RE.split(cells[idx]) if p.strip()] or [cells[idx]]:
                                     part_c = cls._strip_leading_judicial_titles(part) if is_jud_col else part
@@ -4827,18 +4956,26 @@ class UyapRedactor:
                 surname_str = sv.strip()
                 break
 
-        is_jud_json = mapped_role in MaskRegistry.JUDICIAL_ROLES
-        for nk in cls._JSON_NAME_KEYS:
-            nv = lower_map.get(nk)
-            if isinstance(nv, str) and nv.strip():
-                cand = nv.strip()
-                if len(cand.split()) == 1 and nk in ("ad", "isim") and surname_str:
-                    cand = f"{cand} {surname_str}"
-                if is_jud_json:
-                    cand = cls._strip_leading_judicial_titles(cand)
-                cand, mapped_role = cls._strip_leading_descriptors(cand, mapped_role, strip_judicial=is_jud_json)
-                if cls._is_person_name(cand, allow_judicial_pre_title=mapped_role in MaskRegistry.JUDICIAL_ROLES):
-                    registry.add_person(cand, mapped_role, strong=True)
+        is_doc_meta_dict = mapped_role is None and any(
+            dk in lower_map for dk in (
+                "evrakturu", "evrak_turu", "belgeturu", "belge_turu",
+                "dosyaadi", "dosya_adi", "dosyayolu", "uzanti", "mime",
+                "evrakadi", "evrak_adi", "belgeadi", "belge_adi",
+            )
+        )
+        if not is_doc_meta_dict:
+            is_jud_json = mapped_role in MaskRegistry.JUDICIAL_ROLES
+            for nk in cls._JSON_NAME_KEYS:
+                nv = lower_map.get(nk)
+                if isinstance(nv, str) and nv.strip():
+                    cand = nv.strip()
+                    if len(cand.split()) == 1 and nk in ("ad", "isim") and surname_str:
+                        cand = f"{cand} {surname_str}"
+                    if is_jud_json:
+                        cand = cls._strip_leading_judicial_titles(cand)
+                    cand, mapped_role = cls._strip_leading_descriptors(cand, mapped_role, strip_judicial=is_jud_json)
+                    if cls._is_person_name(cand, allow_judicial_pre_title=mapped_role in MaskRegistry.JUDICIAL_ROLES):
+                        registry.add_person(cand, mapped_role, strong=True)
 
         for v in data.values():
             if isinstance(v, (dict, list)):
@@ -4881,89 +5018,413 @@ class UyapRedactor:
             return True
         return False
 
+    _FOLDED_OCR_SLIP_PAIRS = frozenset({
+        ("i", "r"), ("r", "i"), ("i", "l"), ("l", "i"), ("i", "1"), ("1", "i"),
+        ("l", "1"), ("1", "l"), ("i", "t"), ("t", "i"), ("l", "t"), ("t", "l"),
+        ("c", "q"), ("q", "c"), ("g", "["), ("[", "g"),
+        ("s", "q"), ("q", "s"), ("s", "5"), ("5", "s"),
+        ("o", "0"), ("0", "o"), ("e", "3"), ("3", "e"),
+    })
+
+    _FUZZY_INSTITUTION_BLOCK_WORDS = (
+        _LEGAL_ENTITY_WORDS
+        | _PERSON_CORP_TITLE_WORDS
+        | _PLACE_STRUCTURE_WORDS
+        | MaskRegistry._FORBIDDEN_DOC_WORDS
+        | frozenset({
+            "asliye", "sulh", "ceza", "hukuk", "icra", "idare", "ticaret", "bolge",
+            "adliye", "yargitay", "danistay", "anayasa", "cumhuriyet", "turkiye",
+            "devlet", "genel", "ozel", "milli", "kamu", "merkez", "ilce", "ili",
+        })
+    )
+
+    @classmethod
+    def _ocr_token_distance(cls, cand_raw: str, target_fold: str) -> Optional[Tuple[int, int]]:
+        """
+        OCR kaynaklı bozuk kelime ile kayıtlı kanonik ad/soyad belirteci arasındaki
+        (ocr_disi_duzenleme, ocr_harf_kaymasi) maliyetini döndürür; eşik dışındaysa None.
+        """
+        cf = _fold_tr(cand_raw)
+        if cf == target_fold:
+            return (0, 0)
+        if len(target_fold) <= 2:
+            return None
+        if abs(len(cf) - len(target_fold)) > 2:
+            return None
+        if (
+            len(target_fold) >= 4
+            and len(cf) == len(target_fold) + 2
+            and cf.endswith(("ln", "lm"))
+            and cf[:-2] == target_fold
+        ):
+            return (0, 1)
+
+        n, m = len(cf), len(target_fold)
+        inf = (99, 99)
+        dp = [[inf] * (m + 1) for _ in range(n + 1)]
+        dp[0][0] = (0, 0)
+        for i in range(1, n + 1):
+            dp[i][0] = (i, 0)
+        for j in range(1, m + 1):
+            dp[0][j] = (j, 0)
+
+        for i in range(1, n + 1):
+            ci = cf[i - 1]
+            for j in range(1, m + 1):
+                tj = target_fold[j - 1]
+                best = (dp[i - 1][j][0] + 1, dp[i - 1][j][1])
+                ins = (dp[i][j - 1][0] + 1, dp[i][j - 1][1])
+                if ins < best:
+                    best = ins
+                if ci == tj:
+                    sub = dp[i - 1][j - 1]
+                elif (ci, tj) in cls._FOLDED_OCR_SLIP_PAIRS:
+                    sub = (dp[i - 1][j - 1][0], dp[i - 1][j - 1][1] + 1)
+                else:
+                    sub = (dp[i - 1][j - 1][0] + 1, dp[i - 1][j - 1][1])
+                if sub < best:
+                    best = sub
+                if i >= 2 and cf[i - 2:i] == "rn" and tj == "m":
+                    dig = (dp[i - 2][j - 1][0], dp[i - 2][j - 1][1] + 1)
+                    if dig < best:
+                        best = dig
+                if j >= 2 and ci == "m" and target_fold[j - 2:j] == "rn":
+                    dig = (dp[i - 1][j - 2][0], dp[i - 1][j - 2][1] + 1)
+                    if dig < best:
+                        best = dig
+                dp[i][j] = best
+
+        non_ocr, ocr_slips = dp[n][m]
+        if len(target_fold) == 3:
+            if (non_ocr == 0 and ocr_slips <= 1) or (non_ocr == 1 and ocr_slips == 0):
+                return (non_ocr, ocr_slips)
+            return None
+        if (non_ocr == 0 and ocr_slips <= 2) or (non_ocr == 1 and ocr_slips <= 1):
+            return (non_ocr, ocr_slips)
+        return None
+
+    @classmethod
+    def _find_ocr_fuzzy_sections(cls, text: str) -> List[Tuple[int, int]]:
+        """Belgede bulanık OCR kişi eşlemesinin etkinleştirileceği aralıkları döndürür."""
+        if "(Yerel OCR)" in text:
+            if "\n---\n" in text or "\n### " in text or text.startswith("### "):
+                starts = [m.start() for m in re.finditer(r'(?m)^### ', text)]
+                if starts:
+                    spans: List[Tuple[int, int]] = []
+                    for idx, st in enumerate(starts):
+                        en = starts[idx + 1] if idx + 1 < len(starts) else len(text)
+                        sec = text[st:en]
+                        if "(Yerel OCR)" in sec or cls._is_corrupted_pdf_text(sec):
+                            spans.append((st, en))
+                    if spans:
+                        return spans
+            return [(0, len(text))]
+        probe = text
+        if len(text) > 12000:
+            mid = len(text) // 2
+            probe = text[:4000] + "\n" + text[mid:mid + 4000] + "\n" + text[-4000:]
+        if cls._is_corrupted_pdf_text(probe):
+            return [(0, len(text))]
+        return []
+
+    @classmethod
+    def _redact_ocr_fuzzy_names(
+        cls,
+        text: str,
+        registry: MaskRegistry,
+        section_spans: List[Tuple[int, int]],
+    ) -> Tuple[str, int]:
+        """
+        OCR'lı veya bozuk PDF katmanlı metin bölümlerinde, önceden güvenilir şekilde
+        keşfedilmiş tam ad-soyadları kontrollü Levenshtein <= 1 / Türkçe OCR harf kayması
+        toleransıyla maskeler; kurum ve mahkeme adlarını korur.
+        """
+        if not section_spans or not registry.has_persons():
+            return text, 0
+
+        # Yalnızca çok belirteçli (2-4) tam ad-soyad varyantları (kısaltma/tek ad hariç)
+        variants_by_len: Dict[int, List[Tuple[Tuple[str, ...], str]]] = {}
+        for vtoks, lab in registry._variant_to_label.items():
+            if 2 <= len(vtoks) <= 4:
+                variants_by_len.setdefault(len(vtoks), []).append((vtoks, lab))
+        if not variants_by_len:
+            return text, 0
+
+        label_to_display: Dict[str, str] = {}
+        for pk in registry._person_order:
+            lab = registry._person_labels.get(pk)
+            disp = registry._person_display.get(pk)
+            if lab and disp:
+                label_to_display.setdefault(lab, disp)
+
+        protected_list: List[Tuple[int, int]] = [
+            (m.start(), m.end()) for m in re.finditer(cls.MASK_ANY_RE, text)
+        ]
+        protected_list.extend(
+            (m.start(), m.end()) for m in re.finditer(r'\[ADRES_\d+\][ \t]+\([^)\r\n]+\)', text)
+        )
+        protected_list.extend((m.start(), m.end()) for m in re.finditer(r'https?://\S+|\S+@\S+', text))
+        protected_spans = _SpanIndex(protected_list)
+
+        tok_rx = re.compile(
+            r"(?<![A-Za-zÇĞİÖŞÜçğıöşüÂÎÛâîû0-9])"
+            r"(?:[A-ZÇĞİÖŞÜÂÎÛ][A-Za-zÇĞİÖŞÜçğıöşüÂÎÛâîû0-9\[]*|1[a-zçğıöşü]{2,})"
+            r"(?:'[A-Za-zÇĞİÖŞÜçğıöşü]+)?"
+        )
+        gap_rx = re.compile(r'^(?:[ \t]+|[ \t]*\r?\n[ \t]*)$')
+
+        replacements: List[Tuple[int, int, str]] = []
+        count = 0
+
+        for sec_s, sec_e in section_spans:
+            tokens: List[Tuple[int, int, str, str]] = []
+            for tm in tok_rx.finditer(text, sec_s, sec_e):
+                ts, te = tm.start(), tm.end()
+                if protected_spans.overlaps(ts, te):
+                    continue
+                raw_tok = tm.group(0)
+                base, sep, _suf = raw_tok.partition("'")
+                base_end = ts + len(base) if sep else te
+                if len(base) < 2 or len(base) > 40:
+                    continue
+                tokens.append((ts, base_end, te, raw_tok, base))
+
+            i = 0
+            n_toks = len(tokens)
+            while i < n_toks:
+                matched_here = False
+                for wlen in (4, 3, 2):
+                    if i + wlen > n_toks or wlen not in variants_by_len:
+                        continue
+                    win = tokens[i:i + wlen]
+                    # Bitişiklik kontrolü (yalnızca yatay boşluk veya tek satır sonu)
+                    contiguous = True
+                    for wi in range(wlen - 1):
+                        gap = text[win[wi][2]:win[wi + 1][0]]
+                        if not gap_rx.match(gap):
+                            contiguous = False
+                            break
+                    if not contiguous:
+                        continue
+                    # İlk n-1 belirteçte apostrof eki olmasın
+                    if any("'" in win[wi][3] for wi in range(wlen - 1)):
+                        continue
+
+                    span_s = win[0][0]
+                    span_e = win[-1][1]  # son kelimenin apostrof öncesi sonu
+                    if protected_spans.overlaps(span_s, span_e):
+                        continue
+
+                    bases = [w[4] for w in win]
+                    folded_bases = [_fold_tr(b) for b in bases]
+                    if any(fb in cls._FUZZY_INSTITUTION_BLOCK_WORDS for fb in folded_bases):
+                        continue
+                    if all(fb in cls._FOLDED_BASE_TR_VOCAB for fb in folded_bases):
+                        continue
+
+                    best_cost: Optional[Tuple[int, int]] = None
+                    best_labels: Set[str] = set()
+                    for vtoks, lab in variants_by_len[wlen]:
+                        tot_non = 0
+                        tot_ocr = 0
+                        ok = True
+                        has_strong_tok = False
+                        for b_raw, t_fold in zip(bases, vtoks):
+                            d = cls._ocr_token_distance(b_raw, t_fold)
+                            if d is None:
+                                ok = False
+                                break
+                            tot_non += d[0]
+                            tot_ocr += d[1]
+                            if len(t_fold) >= 4 or d == (0, 0):
+                                has_strong_tok = True
+                        if not ok or not has_strong_tok:
+                            continue
+                        if tot_non > 1 or (tot_non == 1 and tot_ocr > 2) or tot_ocr > 4:
+                            continue
+                        if tot_non == 0 and tot_ocr == 0:
+                            continue
+                        cost = (tot_non, tot_ocr)
+                        if best_cost is None or cost < best_cost:
+                            best_cost = cost
+                            best_labels = {lab}
+                        elif cost == best_cost:
+                            best_labels.add(lab)
+
+                    if len(best_labels) != 1:
+                        continue
+                    label = next(iter(best_labels))
+                    if cls._is_person_match_blocked(
+                        text, span_s, span_e, protected_spans, path_mode=False, label=label
+                    ):
+                        continue
+
+                    # Kurum/mahkeme devam sözcüğü kontrolü (ör. "... Asliye Hukuk")
+                    after_line = text[span_e:text.find("\n", span_e) if text.find("\n", span_e) != -1 else len(text)]
+                    m_after_w = re.match(r'^[ \t]+([A-Za-zÇĞİÖŞÜçğıöşü]+)', after_line)
+                    if m_after_w:
+                        aw_f = _fold_tr(m_after_w.group(1))
+                        if aw_f in cls._MASK_AFTER_PLACE_CORP_WORDS or aw_f in cls._LEGAL_ENTITY_WORDS or aw_f in {
+                            "asliye", "sulh", "ceza", "hukuk", "icra", "idare",
+                            "bolge", "adliye", "yargitay", "danistay", "anayasa",
+                        }:
+                            continue
+
+                    count += 1
+                    registry.occurrences["kisi"] += 1
+                    rep_str = label
+                    if registry.name_display == "bas_harf" and not MaskRegistry.is_judicial_label(label):
+                        canon_disp = label_to_display.get(label, "")
+                        init_form = registry.initial_form(canon_disp, label) if canon_disp else None
+                        if init_form:
+                            rep_str = f"{init_form} {label}"
+                    replacements.append((span_s, span_e, rep_str))
+                    i += wlen
+                    matched_here = True
+                    break
+                if not matched_here:
+                    i += 1
+
+        if not replacements:
+            return text, 0
+        out_parts: List[str] = []
+        prev = 0
+        for rs, re_end, rep_str in replacements:
+            if rs < prev:
+                continue
+            out_parts.append(text[prev:rs])
+            out_parts.append(rep_str)
+            prev = re_end
+        out_parts.append(text[prev:])
+        return "".join(out_parts), count
+
     @classmethod
     def redact_names(
         cls,
         text: str,
         registry: Optional[MaskRegistry] = None,
         path_mode: bool = False,
+        ocr_fuzzy: Optional[bool] = None,
     ) -> Tuple[str, int]:
         """
         Ön taramada keşfedilmiş (freeze_persons sonrası sabitlenmiş) kişi ad-soyadlarını
         tutarlı rol etiketlerine ([DAVACI_1], [HAKİM_1], [TANIK_2] ...) çevirir.
         `path_mode=True` yalnızca dosya/klasör yolları ve Markdown bağlantı hedeflerinde
         `_`, `-`, `.` ayırıcılarını eşler; düz metinde kullanılmaz.
+        `ocr_fuzzy` True ise (veya None iken '(Yerel OCR)' / bozuk PDF katmanı tespit edilirse)
+        keşfedilmiş tam ad-soyadlar için kontrollü bulanık OCR eşlemesi uygular.
         """
         if not text or registry is None or not registry.has_persons():
             return text, 0
         rx = registry._compiled_path_name_re if path_mode else registry._compiled_name_re
         if rx is None:
             return text, 0
-        if not rx.search(text):
+
+        fuzzy_sections: List[Tuple[int, int]] = []
+        if not path_mode:
+            if ocr_fuzzy is True:
+                fuzzy_sections = [(0, len(text))]
+            elif ocr_fuzzy is None:
+                fuzzy_sections = cls._find_ocr_fuzzy_sections(text)
+
+        has_exact = bool(rx.search(text))
+        if not has_exact and not fuzzy_sections:
             return text, 0
 
-        protected_spans: List[Tuple[int, int]] = [
-            (m.start(), m.end()) for m in re.finditer(cls.MASK_ANY_RE, text)
-        ]
-        protected_spans.extend(
-            (m.start(), m.end()) for m in re.finditer(r'\[ADRES_\d+\][ \t]+\([^)\r\n]+\)', text)
-        )
-        protected_spans.extend((m.start(), m.end()) for m in re.finditer(r'https?://\S+|\S+@\S+', text))
-        protected_spans = _SpanIndex(protected_spans)
-
         count = 0
-
-        def repl(m: re.Match) -> str:
-            nonlocal count
-            s, e = m.start(), m.end()
-            if protected_spans.overlaps(s, e):
-                return m.group(0)
-
-            matched = m.group(0)
-            label: Optional[str] = None
-            honorific_tail = ""
+        out_text = text
+        if has_exact:
+            protected_list: List[Tuple[int, int]] = [
+                (m.start(), m.end()) for m in re.finditer(cls.MASK_ANY_RE, text)
+            ]
+            protected_list.extend(
+                (m.start(), m.end()) for m in re.finditer(r'\[ADRES_\d+\][ \t]+\([^)\r\n]+\)', text)
+            )
+            protected_list.extend((m.start(), m.end()) for m in re.finditer(r'https?://\S+|\S+@\S+', text))
             if path_mode:
-                parts_list = [p for p in re.split(r'[ \t_.\-]+', _fold_tr(matched)) if p]
-                if len(parts_list) >= 2 and len(parts_list[0]) == 1 and "." in matched:
-                    label = registry._abbrev_to_label.get((parts_list[0], parts_list[-1]))
-                else:
-                    label = registry._variant_to_label.get(tuple(parts_list))
-            elif "." in matched:
-                parts = _fold_tr(matched).replace(".", " ").split()
-                if len(parts) < 2:
+                # Yol adlarındaki standart UYAP evrak türlerini/kelimelerini mutlak koru
+                for pm in re.finditer(r'[A-Za-zÇĞİÖŞÜçğıöşüÂÎÛâîû]+(?:[ \t_.\-]+[A-Za-zÇĞİÖŞÜçğıöşüÂÎÛâîû]+)*', text):
+                    seg_txt = pm.group(0)
+                    parts_f = [p for p in re.split(r'[ \t_.\-]+', _fold_tr(seg_txt)) if p]
+                    for w_idx, pf in enumerate(parts_f):
+                        if pf in MaskRegistry._FORBIDDEN_DOC_WORDS:
+                            # Kelime aralığını korunan aralık olarak ekle
+                            for wm in re.finditer(r'[A-Za-zÇĞİÖŞÜçğıöşüÂÎÛâîû]+', seg_txt):
+                                if _fold_tr(wm.group(0)) in MaskRegistry._FORBIDDEN_DOC_WORDS:
+                                    protected_list.append((pm.start() + wm.start(), pm.start() + wm.end()))
+                            break
+                    if MaskRegistry.is_forbidden_person_phrase(seg_txt):
+                        for ph in MaskRegistry._FORBIDDEN_DOC_PHRASES:
+                            ph_rx = r'[ \t_.\-]+'.join(re.escape(w) for w in ph.split())
+                            for hm in re.finditer(ph_rx, _fold_tr(seg_txt)):
+                                protected_list.append((pm.start() + hm.start(), pm.start() + hm.end()))
+            protected_spans = _SpanIndex(protected_list)
+
+            def repl(m: re.Match) -> str:
+                nonlocal count
+                s, e = m.start(), m.end()
+                if protected_spans.overlaps(s, e):
+                    return m.group(0)
+
+                matched = m.group(0)
+                if path_mode and MaskRegistry.is_forbidden_person_phrase(matched):
                     return matched
-                label = registry._abbrev_to_label.get((parts[0][0], parts[-1]))
-            else:
-                parts = tuple(_fold_tr(matched).split())
-                label = registry._variant_to_label.get(parts)
-                if not label and len(parts) == 2 and parts[1] in ("bey", "hanim"):
-                    h_label = registry._honorific_to_label.get(parts[0])
-                    if h_label:
-                        m_hon = re.match(r'^(\S+)([ \t]+\S+)$', matched)
-                        if m_hon:
-                            label = h_label
-                            honorific_tail = m_hon.group(2)
+                label: Optional[str] = None
+                honorific_tail = ""
+                if path_mode:
+                    parts_list = [p for p in re.split(r'[ \t_.\-]+', _fold_tr(matched)) if p]
+                    if len(parts_list) >= 2 and len(parts_list[0]) == 1 and "." in matched:
+                        label = registry._abbrev_to_label.get((parts_list[0], parts_list[-1]))
+                    else:
+                        label = registry._variant_to_label.get(tuple(parts_list))
+                elif "." in matched:
+                    parts = _fold_tr(matched).replace(".", " ").split()
+                    if len(parts) < 2:
+                        return matched
+                    label = registry._abbrev_to_label.get((parts[0][0], parts[-1]))
+                else:
+                    parts = tuple(_fold_tr(matched).split())
+                    label = registry._variant_to_label.get(parts)
+                    if not label and len(parts) == 2 and parts[1] in ("bey", "hanim"):
+                        h_label = registry._honorific_to_label.get(parts[0])
+                        if h_label:
+                            m_hon = re.match(r'^(\S+)([ \t]+\S+)$', matched)
+                            if m_hon:
+                                label = h_label
+                                honorific_tail = m_hon.group(2)
 
-            if not label:
-                return matched
-            if cls._is_person_match_blocked(
-                text, s, e, protected_spans, path_mode=path_mode, label=label
-            ):
-                return matched
-            count += 1
-            registry.occurrences["kisi"] += 1
-            if (
-                registry.name_display == "bas_harf"
-                and not path_mode
-                and not honorific_tail
-                and not MaskRegistry.is_judicial_label(label)
-            ):
-                init_form = registry.initial_form(matched, label)
-                if init_form:
-                    return f"{init_form} {label}"
-            return f"{label}{honorific_tail}" if honorific_tail else label
+                if not label:
+                    return matched
+                if cls._is_person_match_blocked(
+                    text, s, e, protected_spans, path_mode=path_mode, label=label
+                ):
+                    return matched
+                count += 1
+                registry.occurrences["kisi"] += 1
+                if (
+                    registry.name_display == "bas_harf"
+                    and not path_mode
+                    and not honorific_tail
+                    and not MaskRegistry.is_judicial_label(label)
+                ):
+                    init_form = registry.initial_form(matched, label)
+                    if init_form:
+                        return f"{init_form} {label}"
+                return f"{label}{honorific_tail}" if honorific_tail else label
 
-        return rx.sub(repl, text), count
+            out_text = rx.sub(repl, text)
+
+        if fuzzy_sections:
+            # Exact eşleşme sonrası aralıkları yeniden hesapla
+            if has_exact and out_text != text:
+                if ocr_fuzzy is True:
+                    fuzzy_sections = [(0, len(out_text))]
+                else:
+                    fuzzy_sections = cls._find_ocr_fuzzy_sections(out_text)
+            out_text, fuzzy_cnt = cls._redact_ocr_fuzzy_names(out_text, registry, fuzzy_sections)
+            count += fuzzy_cnt
+
+        return out_text, count
 
     @classmethod
     def _redact_md_link_targets(
@@ -5133,6 +5594,364 @@ class UyapRedactor:
             content = f.read()
         return cls.redact_text(content, known_tckns=known_tckns, registry=registry)
 
+    _UNREADABLE_OCR_PAGE_NOTE = (
+        "> ⚠️ Bu sayfa taranmış görseldir ancak düşük kontrast/tarama kalitesi nedeniyle "
+        "yerel OCR ile metin okunamadı."
+    )
+
+    _ALLOWED_FOREIGN_QWX_WORDS = frozenset({
+        "word", "excel", "whatsapp", "fax", "tax", "max", "min", "index",
+        "web", "www", "wifi", "pdf", "xml", "html", "px", "box", "six",
+        "two", "new", "law", "view", "show", "power", "windows", "text",
+        "next", "export", "fixed", "check", "quick", "query", "request",
+    })
+    _VALID_TR_DOUBLE_I = frozenset({
+        "fiil", "fiili", "fiilen", "siir", "siiri", "tabii", "camii",
+        "serii", "daimi", "daimii",
+    })
+    _BAD_TR_ONSETS = (
+        "dt", "gt", "tg", "gk", "bg", "bd", "bt", "pt", "kp", "pk",
+        "tk", "dk", "zt", "zd", "vt", "vd", "fb", "fp", "gb", "gd",
+    )
+
+    @staticmethod
+    def _pdf_page_image_area_ratio(page) -> float:
+        """PDF sayfasındaki gömülü görsellerin sayfa alanına oranını [0.0, 1.0] aralığında döndürür."""
+        if page is None:
+            return 0.0
+        try:
+            rect = page.rect
+            page_area = abs(float(rect.width) * float(rect.height))
+            if page_area <= 0:
+                return 0.0
+            infos = page.get_image_info(xrefs=False)
+            if not infos:
+                return 0.0
+            img_area = 0.0
+            rx0, ry0, rx1, ry1 = float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1)
+            for info in infos:
+                bbox = info.get("bbox")
+                if not bbox or len(bbox) != 4:
+                    continue
+                x0 = max(rx0, float(bbox[0]))
+                y0 = max(ry0, float(bbox[1]))
+                x1 = min(rx1, float(bbox[2]))
+                y1 = min(ry1, float(bbox[3]))
+                if x1 > x0 and y1 > y0:
+                    img_area += (x1 - x0) * (y1 - y0)
+            return min(1.0, img_area / page_area)
+        except Exception:
+            return 0.0
+
+    @classmethod
+    def _pdf_text_corruption_metrics(
+        cls,
+        text: str,
+        image_area_ratio: float = 0.0,
+    ) -> Tuple[bool, float, int]:
+        """
+        Gömülü PDF metin katmanının bozukluk/eksiklik ölçütlerini hesaplar.
+        Dönüş: (bozuk_mu, bozulma_puani [0..1], taninan_temiz_kelime_sayisi)
+        """
+        if not text:
+            return True, 1.0, 0
+        norm = cls.normalize_spaces(text)
+        # Mevcut maske etiketleri ([TCKN_1], [HAKİM_1] vb.) bozuk PDF karakteri sayılmaz
+        if "[" in norm:
+            norm = re.sub(cls.MASK_ANY_RE, " ", norm)
+        stripped = norm.strip()
+        if not stripped:
+            return False if "[" in text else True, 0.0 if "[" in text else 1.0, 0
+
+        alpha_chars = len(re.findall(r'[A-Za-zÇĞİÖŞÜçğıöşüÂÎÛâîû]', stripped))
+        alnum_chars = len(re.findall(r'[A-Za-zÇĞİÖŞÜçğıöşüÂÎÛâîû0-9]', stripped))
+        if alpha_chars < 5:
+            return True, 1.0, 0
+
+        raw_tokens = stripped.split()
+        fffd_cnt = stripped.count("\ufffd")
+        sym_word_hits = len(
+            re.findall(
+                r'[A-Za-zÇĞİÖŞÜçğıöşüÂÎÛâîû][$\[\]{}<>^~|\\]|[$\[\]{}<>^~|\\][A-Za-zÇĞİÖŞÜçğıöşüÂÎÛâîû]',
+                stripped,
+            )
+        )
+
+        mixed_digit_letter_cnt = 0
+        date_slash_one_cnt = 0
+        for tok in raw_tokens:
+            if tok.startswith(("http://", "https://", "www.")) or "@" in tok:
+                continue
+            if re.fullmatch(r'(?:0[1-9]|[12]\d|3[01])1(?:0[1-9]|1[0-2])1(?:19|20)\d{2}', tok.strip(".,;:()[]")):
+                date_slash_one_cnt += 1
+                continue
+            for sub in re.split(r'[:;,.()/"\'\-]+', tok):
+                if not sub:
+                    continue
+                if re.search(r'[a-zçğıöşü]', sub) and re.search(r'\d', sub):
+                    if re.fullmatch(r'(?:m|cm|mm|km)[23]|(?:mp3|mp4|h2o|co2|b2b|b2c|p2p|4k|3d|2d|a1|a2|b1|b2|c1|c2)', _tr_lower(sub)):
+                        continue
+                    mixed_digit_letter_cnt += 1
+                    break
+
+        single_toks = [
+            t for t in raw_tokens
+            if len(t) == 1 and not t.isdigit() and t not in ("-", "/", "•", "*", "—", "–", "|", ":", ".")
+        ]
+        single_ratio = len(single_toks) / max(1, len(raw_tokens))
+        punct_chars = sum(1 for c in stripped if not c.isalnum() and not c.isspace())
+        punct_ratio = punct_chars / max(1, alnum_chars)
+
+        words = re.findall(r'[A-Za-zÇĞİÖŞÜçğıöşüÂÎÛâîû]{2,}', stripped)
+        clean_hits = 0
+        garbled_word_cnt = 0
+        for w in words:
+            wf = _fold_tr(w)
+            in_vocab = wf in cls._TR_TEXT_CHECK_VOCAB or (len(wf) >= 5 and wf[:5] in cls._TR_TEXT_CHECK_STEMS5)
+            if in_vocab:
+                clean_hits += 1
+            is_garbled = False
+            if any(ch in wf for ch in ("q", "w", "x")) and wf not in cls._ALLOWED_FOREIGN_QWX_WORDS:
+                is_garbled = True
+            elif "ii" in wf and wf not in cls._VALID_TR_DOUBLE_I:
+                is_garbled = True
+            elif len(wf) >= 5 and wf.startswith(cls._BAD_TR_ONSETS):
+                is_garbled = True
+            elif len(wf) >= 5 and re.search(r'(?:m|t|n|l|r|s|z|k|p|v)[iı]g$', wf) and not in_vocab:
+                is_garbled = True
+            elif len(wf) >= 4 and not w.isupper() and not re.search(r'[aeiıoöuüâîû]', _tr_lower(w)):
+                is_garbled = True
+            if is_garbled:
+                garbled_word_cnt += 1
+
+        corrupt_tok_cnt = (
+            fffd_cnt + sym_word_hits + mixed_digit_letter_cnt + garbled_word_cnt + date_slash_one_cnt
+        )
+        tok_denom = max(1, len(raw_tokens))
+        corrupt_ratio = corrupt_tok_cnt / tok_denom
+        vocab_hit_ratio = clean_hits / max(1, len(words))
+
+        score = min(
+            1.0,
+            corrupt_ratio * 2.5
+            + single_ratio * 0.8
+            + max(0.0, punct_ratio - 0.25)
+            + (0.25 if (len(words) >= 8 and vocab_hit_ratio < 0.20) else 0.0)
+            + (0.35 if (image_area_ratio >= 0.50 and alpha_chars < 200) else 0.0),
+        )
+
+        is_corrupted = (
+            fffd_cnt >= 2
+            or sym_word_hits >= 2
+            or (corrupt_tok_cnt >= 2 and corrupt_ratio >= 0.06)
+            or (corrupt_tok_cnt >= 1 and len(words) >= 5 and vocab_hit_ratio < 0.25)
+            or (len(raw_tokens) >= 10 and single_ratio >= 0.30)
+            or (alnum_chars >= 20 and punct_ratio >= 0.45)
+            or (len(words) >= 12 and vocab_hit_ratio < 0.15 and corrupt_tok_cnt >= 1)
+            or (image_area_ratio >= 0.50 and (alpha_chars < 200 or corrupt_tok_cnt >= 1 or score >= 0.12))
+        )
+        return is_corrupted, score, clean_hits
+
+    @classmethod
+    def _is_corrupted_pdf_text(
+        cls,
+        text: str,
+        page=None,
+        image_area_ratio: Optional[float] = None,
+    ) -> bool:
+        """Gömülü PDF metin katmanının bozuk, kalitesiz OCR ürünü veya görsele göre eksik olup olmadığını döndürür."""
+        if image_area_ratio is None:
+            image_area_ratio = cls._pdf_page_image_area_ratio(page)
+        corrupted, _score, _hits = cls._pdf_text_corruption_metrics(text, image_area_ratio=image_area_ratio)
+        return corrupted
+
+    @staticmethod
+    def _vision_ocr_image(img_path: str) -> Tuple[bool, List[str]]:
+        """Tek bir görsel dosyasında Apple Vision OCR çalıştırır."""
+        try:
+            import Vision
+            from Cocoa import NSURL
+        except ImportError:
+            return False, []
+        try:
+            url = NSURL.fileURLWithPath_(img_path)
+            req_h = Vision.VNImageRequestHandler.alloc().initWithURL_options_(url, None)
+            req = Vision.VNRecognizeTextRequest.alloc().init()
+            req.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
+            req.setUsesLanguageCorrection_(True)
+            req.setRecognitionLanguages_(['tr-TR', 'en-US'])
+            succ, _ = req_h.performRequests_error_([req], None)
+            if not succ:
+                return False, []
+            lines = [r.topCandidates_(1)[0].string() for r in (req.results() or [])]
+            return True, lines
+        except Exception:
+            return False, []
+
+    @staticmethod
+    def _is_ocr_empty_or_noise(lines: List[str]) -> bool:
+        """OCR çıktısının boş veya yalnızca önemsiz gürültü olup olmadığını denetler."""
+        joined = "\n".join(lines).strip()
+        if not joined:
+            return True
+        alnum_cnt = sum(1 for c in joined if c.isalnum())
+        words = re.findall(r'[A-Za-zÇĞİÖŞÜçğıöşüÂÎÛâîû]{2,}', joined)
+        return alnum_cnt < 10 or (len(joined) < 15 and len(words) < 2)
+
+    @staticmethod
+    def _ocr_score_lines(lines: List[str]) -> Tuple[int, int]:
+        """OCR denemeleri arasında daha kapsamlı çıktıyı seçmek için (kelime_sayısı, alfanümerik_sayısı) döndürür."""
+        joined = "\n".join(lines).strip()
+        if not joined:
+            return (0, 0)
+        words = re.findall(r'[A-Za-zÇĞİÖŞÜçğıöşüÂÎÛâîû]{2,}', joined)
+        alnum_cnt = sum(1 for c in joined if c.isalnum())
+        return (len(words), alnum_cnt)
+
+    @staticmethod
+    def _otsu_threshold(hist: List[int]) -> int:
+        """Saf Python ile 256 seviyeli gri histogram üzerinden Otsu ikileştirme eşiği hesaplar."""
+        total = sum(hist[:256])
+        if total <= 0:
+            return 128
+        sum_total = sum(i * hist[i] for i in range(256))
+        sum_b = 0.0
+        w_b = 0
+        max_var = -1.0
+        best_t = 128
+        for t in range(256):
+            w_b += hist[t]
+            if w_b == 0:
+                continue
+            w_f = total - w_b
+            if w_f == 0:
+                break
+            sum_b += t * hist[t]
+            m_b = sum_b / w_b
+            m_f = (sum_total - sum_b) / w_f
+            var_between = w_b * w_f * (m_b - m_f) ** 2
+            if var_between > max_var:
+                max_var = var_between
+                best_t = t
+        return best_t
+
+    @classmethod
+    def _enhance_image_for_ocr(cls, src_img_path: str, out_dir: str, prefix: str) -> List[str]:
+        """Düşük kontrastlı/koyu taramalar için gri tonlama + kontrast artırma ve ikileştirme türevleri üretir."""
+        out_paths: List[str] = []
+        work_src = src_img_path
+        sips_tmp = None
+        if os.path.splitext(src_img_path)[1].lower() == ".heic" and os.path.isfile("/usr/bin/sips"):
+            sips_tmp = os.path.join(out_dir, f"{prefix}_sips.png")
+            try:
+                proc = subprocess.run(
+                    ["/usr/bin/sips", "-s", "format", "png", src_img_path, "--out", sips_tmp],
+                    capture_output=True,
+                    timeout=30,
+                )
+                if proc.returncode == 0 and os.path.isfile(sips_tmp):
+                    work_src = sips_tmp
+            except Exception:
+                pass
+        try:
+            from PIL import Image, ImageEnhance, ImageOps
+            with Image.open(work_src) as im:
+                if im.mode.startswith("I"):
+                    extrema = im.getextrema()
+                    arr_max = extrema[1] if isinstance(extrema, tuple) else 65535
+                    scale = 255.0 / max(1, arr_max)
+                    gray = im.point(lambda v: int(v * scale)).convert("L")
+                else:
+                    gray = im.convert("L")
+
+                auto = ImageOps.autocontrast(gray, cutoff=2)
+                enh = ImageEnhance.Contrast(auto).enhance(2.0)
+                enh_path = os.path.join(out_dir, f"{prefix}_enh.png")
+                enh.save(enh_path, "PNG")
+                out_paths.append(enh_path)
+
+                thresh = cls._otsu_threshold(auto.histogram())
+                bin_im = auto.point(lambda p, th=thresh: 255 if p > th else 0, mode="1")
+                bin_path = os.path.join(out_dir, f"{prefix}_bin.png")
+                bin_im.save(bin_path, "PNG")
+                out_paths.append(bin_path)
+        except Exception:
+            pass
+        finally:
+            if sips_tmp and os.path.isfile(sips_tmp):
+                try:
+                    os.remove(sips_tmp)
+                except OSError:
+                    pass
+        return out_paths
+
+    @classmethod
+    def _ocr_image_with_retry(
+        cls,
+        img_path: Optional[str],
+        tmpdir: str,
+        tag: str = "img",
+        pdf_page=None,
+    ) -> Tuple[bool, List[str]]:
+        """
+        Apple Vision OCR'ı çalıştırır; çıktı boş veya gürültü ise PDF için 300 DPI,
+        ardından gri tonlama + kontrast artırma ve Otsu ikileştirme ile yeniden dener.
+        """
+        best_succ = False
+        best_lines: List[str] = []
+        best_score = (0, 0)
+        cleanup_paths: List[str] = []
+
+        def _try(path_p: str) -> None:
+            nonlocal best_succ, best_lines, best_score
+            succ, lines = cls._vision_ocr_image(path_p)
+            if succ:
+                best_succ = True
+                sc = cls._ocr_score_lines(lines)
+                if sc > best_score:
+                    best_score = sc
+                    best_lines = lines
+
+        try:
+            src_for_enhance = img_path
+            if pdf_page is not None:
+                p150 = os.path.join(tmpdir, f"{tag}_150.png")
+                pix = pdf_page.get_pixmap(dpi=150)
+                pix.save(p150)
+                del pix
+                cleanup_paths.append(p150)
+                _try(p150)
+
+                if cls._is_ocr_empty_or_noise(best_lines):
+                    p300 = os.path.join(tmpdir, f"{tag}_300.png")
+                    pix3 = pdf_page.get_pixmap(dpi=300)
+                    pix3.save(p300)
+                    del pix3
+                    cleanup_paths.append(p300)
+                    src_for_enhance = p300
+                    _try(p300)
+            elif img_path:
+                _try(img_path)
+
+            if cls._is_ocr_empty_or_noise(best_lines) and src_for_enhance:
+                enhanced = cls._enhance_image_for_ocr(src_for_enhance, tmpdir, tag)
+                cleanup_paths.extend(enhanced)
+                for ep in enhanced:
+                    _try(ep)
+                    if not cls._is_ocr_empty_or_noise(best_lines):
+                        break
+        except Exception:
+            pass
+        finally:
+            for cp in cleanup_paths:
+                try:
+                    if os.path.isfile(cp):
+                        os.remove(cp)
+                except OSError:
+                    pass
+
+        return best_succ, best_lines
+
     @classmethod
     def extract_pdf_raw(cls, pdf_path: str, max_pages: int = 2000) -> str:
         """PDF'i çevrimdışı olarak HAM (maskesiz) metne dönüştürür; yalnızca bellekte kullanılmalıdır."""
@@ -5143,8 +5962,8 @@ class UyapRedactor:
             return ""
 
         try:
-            import Vision
-            from Cocoa import NSURL
+            import Vision  # noqa: F401
+            from Cocoa import NSURL  # noqa: F401
             has_vision = True
         except ImportError:
             has_vision = False
@@ -5165,24 +5984,47 @@ class UyapRedactor:
                     # PyMuPDF bazı yazı tiplerinde '-' karakterini U+00AD (yumuşak tire) olarak döndürür
                     text = page.get_text()
                     text = re.sub(r'(?<=\d)\u00ad(?=\d)', '', text).replace("\u00ad", "-").strip()
+                    img_ratio = cls._pdf_page_image_area_ratio(page)
+                    has_page_images = bool(page.get_images(full=False)) if hasattr(page, "get_images") else (img_ratio > 0.0)
 
                     if len(text) > 50:
-                        pages_content.append(f"### Sayfa {pno + 1}\n\n{text}")
+                        corrupted, orig_score, orig_hits = cls._pdf_text_corruption_metrics(
+                            text, image_area_ratio=img_ratio
+                        )
+                        if not corrupted or not has_vision:
+                            pages_content.append(f"### Sayfa {pno + 1}\n\n{text}")
+                        else:
+                            succ, ocr_lines = cls._ocr_image_with_retry(
+                                None, tmpdir, tag=f"pdf_{pno}", pdf_page=page
+                            )
+                            ocr_text = "\n".join(ocr_lines).strip() if succ else ""
+                            if ocr_text:
+                                _oc, ocr_score, ocr_hits = cls._pdf_text_corruption_metrics(ocr_text, image_area_ratio=0.0)
+                                orig_alpha = len(re.findall(r'[A-Za-zÇĞİÖŞÜçğıöşüÂÎÛâîû]', text))
+                                ocr_alpha = len(re.findall(r'[A-Za-zÇĞİÖŞÜçğıöşüÂÎÛâîû]', ocr_text))
+                                sparse_scan = img_ratio >= 0.50 and orig_alpha < 200 and ocr_alpha > orig_alpha * 1.2
+                                cleaner_ocr = (
+                                    (ocr_score < orig_score and (len(ocr_text) >= len(text) * 0.5 or ocr_hits >= orig_hits))
+                                    or (ocr_hits > orig_hits * 1.25 and ocr_score <= orig_score + 0.05)
+                                )
+                                if sparse_scan or cleaner_ocr:
+                                    pages_content.append(f"### Sayfa {pno + 1} (Yerel OCR)\n\n{ocr_text}")
+                                else:
+                                    pages_content.append(f"### Sayfa {pno + 1}\n\n{text}")
+                            else:
+                                pages_content.append(f"### Sayfa {pno + 1}\n\n{text}")
                     elif has_vision:
                         try:
-                            pix = page.get_pixmap(dpi=150)
-                            img_path = os.path.join(tmpdir, f"page_{pno}.png")
-                            pix.save(img_path)
-                            url = NSURL.fileURLWithPath_(img_path)
-                            req_h = Vision.VNImageRequestHandler.alloc().initWithURL_options_(url, None)
-                            req = Vision.VNRecognizeTextRequest.alloc().init()
-                            req.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
-                            req.setUsesLanguageCorrection_(True)
-                            req.setRecognitionLanguages_(['tr-TR', 'en-US'])
-                            succ, _ = req_h.performRequests_error_([req], None)
-                            if succ:
-                                lines = [r.topCandidates_(1)[0].string() for r in req.results()]
-                                pages_content.append(f"### Sayfa {pno + 1} (Yerel OCR)\n\n" + "\n".join(lines))
+                            succ, lines = cls._ocr_image_with_retry(
+                                None, tmpdir, tag=f"pdf_{pno}", pdf_page=page
+                            )
+                            ocr_body = "\n".join(lines).strip() if succ else ""
+                            if ocr_body:
+                                pages_content.append(f"### Sayfa {pno + 1} (Yerel OCR)\n\n{ocr_body}")
+                            elif has_page_images:
+                                pages_content.append(
+                                    f"### Sayfa {pno + 1} (Yerel OCR)\n\n{cls._UNREADABLE_OCR_PAGE_NOTE}"
+                                )
                         except Exception:
                             pass
         finally:
@@ -5207,7 +6049,7 @@ class UyapRedactor:
     ) -> Tuple[str, Dict[str, int]]:
         """
         PDF belgesini çevrimdışı olarak metne dönüştürür ve maskeler.
-        1. fitz ile dijital metin katmanı varsa doğrudan alır.
+        1. fitz ile dijital metin katmanı varsa doğrudan alır (bozuksa yerel OCR ile karşılaştırıp düzeltir).
         2. Taranmış fotokopi/resim sayfalarında macOS yerel Apple Vision OCR motorunu kullanır.
         3. Metni UyapRedactor filtrelerinden geçirerek maskeler.
         """
@@ -5217,56 +6059,109 @@ class UyapRedactor:
         return cls.redact_text(full_raw, known_tckns=known_tckns, registry=registry)
 
     @classmethod
-    def extract_image_raw(cls, img_path: str) -> str:
+    def extract_image_raw(cls, img_path: str, max_pages: int = 2000) -> str:
         """Taranmış görseli (.tif/.png/.jpg/.heic) Apple Vision OCR ile HAM (maskesiz) metne dönüştürür; yalnızca bellekte kullanılmalıdır."""
         try:
-            import Vision
-            from Cocoa import NSURL
+            import Vision  # noqa: F401
+            from Cocoa import NSURL  # noqa: F401
         except ImportError:
             return ""
 
-        pages_content = []
+        pages_content: List[str] = []
         ext = os.path.splitext(img_path)[1].lower()
+        total_pages = 1
+        page_count = 1
+        handled_by_pil = False
 
         # Çok sayfalı TIFF kontrolü (.heic doğrudan Vision'a gönderilir, PIL ile açılmaz)
         if ext != ".heic":
             try:
                 from PIL import Image, ImageSequence
                 with Image.open(img_path) as im:
-                    frames = [f.copy() for f in ImageSequence.Iterator(im)]
-                    if len(frames) > 1:
+                    n_frames = max(1, int(getattr(im, "n_frames", 1)))
+                    if n_frames > 1:
+                        handled_by_pil = True
+                        total_pages = n_frames
+                        page_count = min(total_pages, max_pages)
                         with tempfile.TemporaryDirectory() as tmpdir:
-                            for pno, frame in enumerate(frames[:60]):
+                            for pno, frame in enumerate(ImageSequence.Iterator(im)):
+                                if pno >= page_count:
+                                    break
                                 frame_path = os.path.join(tmpdir, f"frame_{pno}.png")
-                                frame.convert("RGB").save(frame_path, "PNG")
-                                url = NSURL.fileURLWithPath_(frame_path)
-                                req_h = Vision.VNImageRequestHandler.alloc().initWithURL_options_(url, None)
-                                req = Vision.VNRecognizeTextRequest.alloc().init()
-                                req.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
-                                req.setUsesLanguageCorrection_(True)
-                                req.setRecognitionLanguages_(['tr-TR', 'en-US'])
-                                succ, _ = req_h.performRequests_error_([req], None)
-                                if succ:
-                                    lines = [r.topCandidates_(1)[0].string() for r in req.results()]
-                                    if lines:
-                                        pages_content.append(f"### Sayfa {pno + 1} (Yerel OCR)\n\n" + "\n".join(lines))
+                                rgb = None
+                                succ = False
+                                lines: List[str] = []
+                                try:
+                                    if frame.mode.startswith("I"):
+                                        extrema = frame.getextrema()
+                                        arr_max = extrema[1] if isinstance(extrema, tuple) else 65535
+                                        scale = 255.0 / max(1, arr_max)
+                                        rgb = frame.point(lambda v: int(v * scale)).convert("RGB")
+                                    else:
+                                        rgb = frame.convert("RGB")
+                                    rgb.save(frame_path, "PNG")
+                                    succ, lines = cls._ocr_image_with_retry(
+                                        frame_path, tmpdir, tag=f"tiff_{pno}"
+                                    )
+                                except Exception:
+                                    succ, lines = False, []
+                                finally:
+                                    if rgb is not None:
+                                        try:
+                                            rgb.close()
+                                        except Exception:
+                                            pass
+                                        del rgb
+                                    try:
+                                        if os.path.isfile(frame_path):
+                                            os.remove(frame_path)
+                                    except OSError:
+                                        pass
+                                body = "\n".join(lines).strip() if succ else ""
+                                if body:
+                                    pages_content.append(f"### Sayfa {pno + 1} (Yerel OCR)\n\n{body}")
+                                else:
+                                    pages_content.append(
+                                        f"### Sayfa {pno + 1} (Yerel OCR)\n\n{cls._UNREADABLE_OCR_PAGE_NOTE}"
+                                    )
+                    else:
+                        handled_by_pil = True
+                        w, h = im.size
+                        with tempfile.TemporaryDirectory() as tmpdir:
+                            rgb_src = img_path
+                            tmp_rgb_path = None
+                            if im.mode not in ("RGB", "L", "RGBA"):
+                                tmp_rgb_path = os.path.join(tmpdir, "single_rgb.png")
+                                rgb = im.convert("RGB")
+                                try:
+                                    rgb.save(tmp_rgb_path, "PNG")
+                                finally:
+                                    rgb.close()
+                                rgb_src = tmp_rgb_path
+                            succ, lines = cls._ocr_image_with_retry(rgb_src, tmpdir, tag="single")
+                            if tmp_rgb_path and os.path.isfile(tmp_rgb_path):
+                                try:
+                                    os.remove(tmp_rgb_path)
+                                except OSError:
+                                    pass
+                            body = "\n".join(lines).strip() if succ else ""
+                            if body:
+                                pages_content.append(f"### Taranmış Belge (Yerel OCR)\n\n{body}")
+                            elif ext in (".tif", ".tiff") or (w >= 100 and h >= 100 and w * h >= 150_000):
+                                pages_content.append(
+                                    f"### Sayfa 1 (Yerel OCR)\n\n{cls._UNREADABLE_OCR_PAGE_NOTE}"
+                                )
             except Exception:
-                pass
+                handled_by_pil = False
 
-        # Tek sayfa (veya .heic) doğrudan Vision OCR
-        if not pages_content:
+        # Tek sayfa .heic veya PIL tarafından açılamayan görsel: doğrudan Vision OCR
+        if not handled_by_pil and not pages_content:
             try:
-                url = NSURL.fileURLWithPath_(img_path)
-                req_h = Vision.VNImageRequestHandler.alloc().initWithURL_options_(url, None)
-                req = Vision.VNRecognizeTextRequest.alloc().init()
-                req.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
-                req.setUsesLanguageCorrection_(True)
-                req.setRecognitionLanguages_(['tr-TR', 'en-US'])
-                succ, _ = req_h.performRequests_error_([req], None)
-                if succ:
-                    lines = [r.topCandidates_(1)[0].string() for r in req.results()]
-                    if lines:
-                        pages_content.append("### Taranmış Belge (Yerel OCR)\n\n" + "\n".join(lines))
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    succ, lines = cls._ocr_image_with_retry(img_path, tmpdir, tag="direct")
+                body = "\n".join(lines).strip() if succ else ""
+                if body:
+                    pages_content.append(f"### Taranmış Belge (Yerel OCR)\n\n{body}")
             except Exception:
                 pass
 
@@ -5274,6 +6169,11 @@ class UyapRedactor:
             return ""
 
         full_raw = f"# {os.path.basename(img_path)}\n\n" + "\n\n---\n\n".join(pages_content)
+        if total_pages > page_count:
+            full_raw += (
+                f"\n\n---\n\n> ⚠️ Bu belge {total_pages} sayfadır; "
+                f"yalnızca ilk {page_count} sayfa işlenmiştir.\n"
+            )
         return full_raw
 
     @classmethod
@@ -5282,12 +6182,13 @@ class UyapRedactor:
         img_path: str,
         known_tckns: Optional[Set[str]] = None,
         registry: Optional["MaskRegistry"] = None,
+        max_pages: int = 2000,
     ) -> Tuple[str, Dict[str, int]]:
         """
         TIFF, PNG, JPEG, HEIC formatındaki taranmış evrakları Apple Vision OCR ile
         yerel ve çevrimdışı olarak metne dönüştürür ve maskeler.
         """
-        full_raw = cls.extract_image_raw(img_path)
+        full_raw = cls.extract_image_raw(img_path, max_pages=max_pages)
         if not full_raw:
             return "", cls._empty_stats()
         return cls.redact_text(full_raw, known_tckns=known_tckns, registry=registry)
@@ -6185,6 +7086,26 @@ class UyapRedactor:
         türkiye cumhuriyeti adalet bakanlığı noterliği noter vekaletname adres adresi telefon kimlik
         nüfus doğum doğumlu oğlu kızı adı soyadı sanık şüpheli müşteki tanık bilirkişi rapor raporu
     """.split())
+    _TR_TEXT_CHECK_VOCAB = frozenset(_fold_tr(w) for w in (
+        set(_BASE_TR_VOCAB)
+        | _COMMON_TR_WORDS
+        | MaskRegistry._FORBIDDEN_DOC_WORDS
+        | {
+            "bir", "bu", "su", "ve", "ile", "icin", "olan", "olarak", "olup",
+            "edildi", "edilen", "yapildi", "yapilan", "verildi", "verilen",
+            "gore", "kadar", "sonra", "once", "uzere", "iliskin", "hakkinda",
+            "nedeniyle", "tarafindan", "gibi", "daha", "cok", "her", "tum",
+            "yok", "var", "ama", "fakat", "ancak", "veya", "hem", "ise",
+            "sayili", "madde", "fikra", "bent", "hukum", "hukmu", "kanun",
+            "asliye", "sulh", "ceza", "hukuk", "ticaret", "idare", "aile",
+            "mahkemesi", "mahkemesine", "dairesi", "mudurlugu", "baskanligi",
+            "geregince", "uyarinca", "kapsaminda", "cercevesinde", "huzurunda",
+            "bulunan", "bulunmaktadir", "tespit", "edilmistir", "edildigi",
+            "kabul", "reddi", "talebin", "davali", "davaci", "tanik", "sanik",
+            "supheli", "musteki", "katilan", "magdur", "alacakli", "borclu",
+        }
+    ))
+    _TR_TEXT_CHECK_STEMS5 = frozenset(w[:5] for w in _TR_TEXT_CHECK_VOCAB if len(w) >= 5)
 
     @staticmethod
     def _tr_lower(x: str) -> str:
@@ -6978,6 +7899,10 @@ class UyapRedactor:
                 rel_p = os.path.relpath(full_p, src_folder)
                 masked_base_rel = _masked_rel_path(base_rel)
                 try:
+                    if ext in cls.SMALL_IMAGE_EXTS and cls._is_small_image(full_p):
+                        grand_stats["processed_items"] += 1
+                        grand_stats["small_images_skipped"] += 1
+                        continue
                     if ext in cls.TEXT_DOC_EXTS:
                         raw = cls._extract_non_ocr_text(full_p, ext)
                         if raw:

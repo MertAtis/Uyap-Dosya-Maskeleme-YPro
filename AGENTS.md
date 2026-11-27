@@ -1,6 +1,6 @@
 # AGENTS.md — UYAP Dosya Maskeleme (YPro) Ajan Çalışma Kuralları
 
-Bu depo **UYAP Maskeleme (`v1.5.4`)** uygulamasının ana kod tabanıdır. Bu projede değişiklik yapan her ajan (Antigravity, Claude Code, Codex, Cursor vb.) [`CLAUDE.md`](file:///Users/avmertatis/Desktop/uyap-dosya-maskeleme-ypro/CLAUDE.md) ile birlikte aşağıdaki özeti esas almalıdır:
+Bu depo **UYAP Maskeleme (`v1.5.5`)** uygulamasının ana kod tabanıdır. Bu projede değişiklik yapan her ajan (Antigravity, Claude Code, Codex, Cursor vb.) [`CLAUDE.md`](file:///Users/avmertatis/Desktop/uyap-dosya-maskeleme-ypro/CLAUDE.md) ile birlikte aşağıdaki özeti esas almalıdır:
 
 1. **Çekirdek İlkeler:**
    - **Sıfır Dış Bağımlılık:** `uyap_redactor.py` ve `gui.py` yalnızca Python standart kütüphanesi + macOS yerleşik ikilileriyle (`Vision` OCR, `qlmanage`, `textutil`, `sips`) çalışır. `pip install` gerektiren yeni bağımlılık eklenmez.
