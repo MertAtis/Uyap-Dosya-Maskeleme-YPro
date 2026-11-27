@@ -3,7 +3,7 @@
 Bu dosya, projede çalışacak tüm yapay zekâ ajanları ve geliştiriciler için bağlayıcı mimari kuralları içerir. Yeni bir özellik eklerken veya hata düzeltirken aşağıdaki ilkeler **kesinlikle bozulamaz**.
 
 ## Güncel Sürüm ve Ortam
-- **Sürüm:** `v1.5.5` (Build `25`, `bundle/Info.plist`, `gui.py` `APP_VERSION = "1.5.5"`)
+- **Sürüm:** `v1.5.6` (Build `26`, `bundle/Info.plist`, `gui.py` `APP_VERSION = "1.5.6"`)
 - **Bağımlılık İlkesi:** Sıfır üçüncü parti Python paketi (`Zero-Dependency`). Motor yalnızca Python 3 standart kütüphanesi + macOS yerel araçları (`Vision` OCR, `QuickLook`/`qlmanage`, `textutil`, `sips`) ile çalışır (`requirements.txt` boş/sıfır-bağımlılıktır; `tkinterdnd2` yalnızca masaüstü sürükle-bırak için opsiyoneldir).
 - **Kapsam:** %100 çevrimdışı (offline) yerel çalışma. AutoUpdater dışında hiçbir ağ çağrısı yapılmaz; dava verisi hiçbir API'ye gönderilmez.
 

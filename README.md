@@ -145,7 +145,7 @@ chmod +x build_dmg.sh
 uyap-dosya-maskeleme-ypro/
 ├── CLAUDE.md                        # Kalıcı mimari kurallar ve değişmez tasarım ilkeleri
 ├── AGENTS.md                        # Çoklu-ajan (Antigravity/Codex/Cursor) çalışma kuralları
-├── gui.py                           # v1.5.5 Editorial LegalTech Tkinter arayüzü (2x4 İstatistik Paneli & AutoUpdater)
+├── gui.py                           # v1.5.6 Editorial LegalTech Tkinter arayüzü (2x4 İstatistik Paneli & AutoUpdater)
 ├── uyap_redactor.py                 # Katmanlı maskeleme (MaskRegistry: tutarlı numaralı etiket) ve INDEX.md senkronizasyon motoru
 ├── audit_output.py                  # Geliştirici denetimi: sızıntı / fazla maskeleme / tutarlılık / yapı / koruma ölçümü
 ├── test_uyap_redactor.py            # Çekirdek motor test paketi
@@ -166,7 +166,7 @@ uyap-dosya-maskeleme-ypro/
 ├── UYAP Maskeleme.spec              # PyInstaller bağımsız derleme spesifikasyonu
 ├── requirements.txt                 # Sistem gereksinimleri (Zero-Dependency)
 ├── bundle/                          # macOS uygulama kaynakları
-│   ├── Info.plist                   # Paket meta verileri (v1.5.5)
+│   ├── Info.plist                   # Paket meta verileri (v1.5.6)
 │   ├── app.icns                     # Uygulama simgesi
 │   └── launcher.sh                  # macOS yerel geliştirici başlatıcı betiği
 ├── README.md                        # Dokümantasyon

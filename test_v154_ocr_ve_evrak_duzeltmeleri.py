@@ -446,5 +446,74 @@ class Test6_EntegrasyonVeGercekKontrast(unittest.TestCase):
             self.assertEqual(audit_res["mapping_leak"], [])
 
 
+class Test7_HukukOSMotorSenkronizasyonDuzeltmeleri(unittest.TestCase):
+    """HukukOS motorundan aktarılan 5 iyileştirmenin regresyon testleri."""
+
+    def test_iban_ocr_colon_noise_is_redacted(self):
+        reg = MaskRegistry()
+        sample = "Alacaklı IBAN: TR33:0006:1005:1978:6457:8413:26 hesabına ödeme yapılacaktır."
+        out, _ = UyapRedactor.redact_text(sample, registry=reg)
+        self.assertIn("[IBAN_1]", out)
+        self.assertNotIn("6457", out)
+        self.assertNotIn("8413", out)
+
+    def test_judicial_side_by_side_columns_and_single_cell_ocr_signature(self):
+        reg = MaskRegistry()
+        doc = (
+            "### Sayfa 1 (Yerel OCR)\n\n"
+            "Hâkim Ahmet Yılmaz     Zabıt Kâtibi Ayşe Demir\n"
+        )
+        UyapRedactor.collect_persons_from_text(doc, reg, ocr=True)
+        reg.freeze_persons()
+        out, _ = UyapRedactor.redact_text(doc, registry=reg)
+        self.assertNotIn("Ahmet Yılmaz", out)
+        self.assertNotIn("Ayşe Demir", out)
+        self.assertIn("[HAKİM_1]", out)
+        self.assertIn("[KÂTİP_1]", out)
+
+    def test_single_cell_hakim_signature_without_sicil_masked_in_ocr(self):
+        reg = MaskRegistry()
+        doc = (
+            "### Sayfa 1 (Yerel OCR)\n\n"
+            "Yukarıda yazılı gerekçelerle karar verildi.\n"
+            "Hâkim Mehmet Kaya\n"
+        )
+        UyapRedactor.collect_persons_from_text(doc, reg, ocr=True)
+        reg.freeze_persons()
+        out, _ = UyapRedactor.redact_text(doc, registry=reg)
+        self.assertNotIn("Mehmet Kaya", out)
+        self.assertIn("Hâkim [HAKİM_1]", out)
+
+    def test_file_heading_line_masks_underscored_name_and_tckn(self):
+        reg = MaskRegistry()
+        doc = (
+            "# Ahmet_Yilmaz_10000000146_Dilekce.pdf\n\n"
+            "DAVACI : Ahmet Yılmaz (T.C. Kimlik No: 10000000146)\n"
+        )
+        UyapRedactor.collect_persons_from_text(doc, reg)
+        reg.freeze_persons()
+        out, _ = UyapRedactor.redact_text(doc, registry=reg)
+        first_line = out.splitlines()[0]
+        self.assertNotIn("Ahmet", first_line)
+        self.assertNotIn("Yilmaz", first_line)
+        self.assertNotIn("10000000146", first_line)
+        self.assertTrue(first_line.startswith("# "))
+        self.assertTrue(first_line.endswith(".pdf"))
+
+    def test_empty_pdf_returns_empty_string_not_bare_heading(self):
+        import fitz
+
+        with tempfile.TemporaryDirectory() as tmp:
+            empty_pdf = os.path.join(tmp, "bos_sayfa.pdf")
+            doc = fitz.open()
+            doc.new_page()
+            doc.save(empty_pdf)
+            doc.close()
+
+            with patch.object(UyapRedactor, "_vision_ocr_image", return_value=(True, [])):
+                raw = UyapRedactor.extract_pdf_raw(empty_pdf)
+            self.assertEqual(raw, "")
+
+
 if __name__ == "__main__":
     unittest.main()

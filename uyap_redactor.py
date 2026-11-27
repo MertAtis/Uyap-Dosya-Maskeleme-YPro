@@ -1547,7 +1547,7 @@ class UyapRedactor:
         """
         count = 0
         pattern = re.compile(
-            r'(?im)(?:^|(?<=[\s\*\_\(\[\"\'\:\-\^\|])|(?<=^[Il1\|])|(?<=[\s\(\:][Il1\|]))[Tİ][RA][ \t\^\.\-]*(?:[0-9lIOoSB][ \t\^\.\-]*){23}[0-9lIOoSB](?:[0-9]{1,2})?(?:[A-Za-z](?![A-Za-z0-9]))?(?![0-9])'
+            r'(?im)(?:^|(?<=[\s\*\_\(\[\"\'\:\-\^\|])|(?<=^[Il1\|])|(?<=[\s\(\:][Il1\|]))[Tİ][RA][ \t\^\.\-:]*(?:[0-9lIOoSB][ \t\^\.\-:]*){23}[0-9lIOoSB](?:[0-9]{1,2})?(?:[A-Za-z](?![A-Za-z0-9]))?(?![0-9])'
         )
 
         def repl(m: re.Match) -> str:
@@ -3808,7 +3808,8 @@ class UyapRedactor:
         r'(?:(?:zab[ıi]t|duru[şs]ma)[ \t]+|z\.[ \t]*)?k[aâ]t[iı][bp][iı]?'
         r'))'
         r'(?:[ \t\*_]*:[ \t\*_]*|[ \t]+)'
-        r'(?P<name>' + _CAP_TOK_RE_STR + r'(?:[ \t]+' + _CAP_TOK_RE_STR + r'){1,3})'
+        # Ad belirteçleri en çok 2 boşlukla ayrılır; 3+ boşluk yan sütundur ("Hâkim X Y     Kâtip Z W")
+        r'(?P<name>' + _CAP_TOK_RE_STR + r'(?:[ \t]{1,2}' + _CAP_TOK_RE_STR + r'){1,3})'
         r'(?P<after>(?:[ \t]*\((?:(?i:sicil)[ \t]*[:=]?\s*)?\d{4,7}\)|[ \t]+\d{4,7}(?![\d/\.])|[ \t]*\[SİCİL_(?:\d+|GİZLENDİ)\])?)',
     )
     _JUDICIAL_LEADING_STRIP_RE = re.compile(
@@ -3910,6 +3911,8 @@ class UyapRedactor:
                 if allow_judicial_pre_title:
                     ignored_after_titles |= {
                         "hakim", "hakimi", "savci", "savcisi", "katip", "katibi", "baskan", "uye",
+                        # Yan sütundaki "Zabıt Kâtibi" / "Duruşma Kâtibi" de yargı unvanıdır
+                        "zabit", "durusma",
                     }
                 if aw in cls._MASK_AFTER_PLACE_CORP_WORDS or (
                     aw in cls._PERSON_CORP_TITLE_WORDS and aw not in ignored_after_titles
@@ -4746,13 +4749,21 @@ class UyapRedactor:
                     j_role = MaskRegistry.normalize_person_role(m_j.group("role"), include_judicial_headers=False)
                     j_after = m_j.group("after") or ""
                     _s_j, _e_j = m_j.start("name"), m_j.end("after")
+                    # Satırı (veya 3+ boşlukla ayrılmış sütunu) tek başına dolduran "Hâkim Ad Soyad" imza
+                    # kalıbıdır: OCR'da tek geçse de güçlü aday sayılır (yoksa 2 satır şartında sızar).
+                    _j_once = raw_line[:m_j.start()]
+                    _j_sonra = raw_line[_e_j:]
+                    j_tek_hucre = (
+                        (not _j_once.strip(" \t*_-") or bool(re.search(r'[ \t]{3,}$', _j_once)))
+                        and (not _j_sonra.strip(" \t*_.,;") or bool(re.match(r'[ \t]{3,}', _j_sonra)))
+                    )
                     _register_prose_match(
                         m_j.group("name"),
                         j_role,
                         raw_line[max(0, _s_j - 80):_s_j],
                         (j_after + raw_line[_e_j:_e_j + 80])[:80],
                         allow_judicial=True,
-                        strong=bool(j_after.strip()),
+                        strong=bool(j_after.strip()) or j_tek_hucre,
                     )
 
             # C. TCKN'ye bitişik ad ("Ahmet Yılmaz (T.C. Kimlik No: ...)")
@@ -5541,9 +5552,49 @@ class UyapRedactor:
         t, stats["kisi"] = cls.redact_names(t, registry=registry)
         t, link_kisi = cls._redact_md_link_targets(t, registry=registry)
         stats["kisi"] += link_kisi
+        t = cls._redact_file_heading_lines(t, known_tckns=known_tckns, registry=registry)
 
         stats["total"] = sum(v for k, v in stats.items() if k != "total")
         return t, stats
+
+    _FILE_HEADING_EXTS = frozenset({
+        ".pdf", ".udf", ".tif", ".tiff", ".png", ".jpg", ".jpeg", ".heic",
+        ".xlsx", ".docx", ".doc", ".pages", ".txt", ".md", ".eyp", ".zip",
+    })
+
+    @classmethod
+    def _redact_file_heading_lines(
+        cls,
+        text: str,
+        known_tckns: Optional[Set[str]] = None,
+        registry: Optional[MaskRegistry] = None,
+    ) -> str:
+        """`# dosya_adi.pdf` / `## klasor/dosya.jpg` başlık satırlarında alt tireli/tireli ad ve kimlikleri maskeler."""
+        if not text or "#" not in text:
+            return text
+
+        def _repl_heading(m: re.Match) -> str:
+            prefix, body = m.group(1), m.group(2)
+            stripped = body.strip()
+            _, ext = os.path.splitext(stripped)
+            if ext.lower() not in cls._FILE_HEADING_EXTS:
+                return m.group(0)
+            parts = stripped.split("/")
+            last_idx = len(parts) - 1
+            masked_parts = [
+                cls.redact_path_segment(
+                    part,
+                    known_tckns=known_tckns,
+                    registry=registry,
+                    is_file=(idx == last_idx),
+                )
+                if part and part not in (".", "..")
+                else part
+                for idx, part in enumerate(parts)
+            ]
+            return f"{prefix}{'/'.join(masked_parts)}"
+
+        return re.sub(r'^(#{1,2}[ \t]+)(.+)$', _repl_heading, text, flags=re.MULTILINE)
 
     @classmethod
     def redact_path_segment(
@@ -6029,6 +6080,9 @@ class UyapRedactor:
                             pass
         finally:
             doc.close()
+
+        if not pages_content:
+            return ""
 
         full_raw = f"# {os.path.basename(pdf_path)}\n\n" + "\n\n---\n\n".join(pages_content)
         # Sayfa sınırı aşıldıysa kalan sayfaların sessizce atılmaması için görünür uyarı ekle

@@ -2023,12 +2023,11 @@ UYAP Belge Kodu: MUZ-2025-904
             "Aydınlıkevler Sokak No: 12/8",
             "İsmet Karabulut", "Ahmet Karabulut", "Mehmet Karabulut",
             "Ayşe Karabulut", "Fatma Karabulut", "Hasan Karabulut",
-            "Seda Kaya",
+            "Kemal Güner", "Seda Kaya",
         ],
         korunan=[
             "Baba adı: İsmet", "Anne adı: Hatice", "03.07.1965", "Sivas / Merkez",
             "Ankara 5. Sulh Hukuk Mahkemesi", "Av. Leyla Doğan", "TMK m. 495",
-            "Hâkim Kemal Güner",
         ],
         kisiler={
             "Ahmet Karabulut": "DAVACI",
@@ -2037,6 +2036,7 @@ UYAP Belge Kodu: MUZ-2025-904
             "Fatma Karabulut": "DAVALI",
             "Hasan Karabulut": "DAVALI",
             "İsmet Karabulut": "KİŞİ",
+            "Kemal Güner": "HAKİM",
             "Seda Kaya": "KÂTİP",
         },
         ayni_etiket=[
